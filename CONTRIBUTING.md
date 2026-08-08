@@ -53,7 +53,7 @@ Other checks:
 zsh -n install.sh scripts/watchdog-cron.sh
 plutil -lint config/launchd.watchdog.template.plist
 python3 -m json.tool config/labels.config.json >/dev/null
-shasum -a 256 -c manifest.sha256
+./tools/generate-manifest.sh --check
 git diff --check
 ```
 
@@ -61,7 +61,7 @@ git diff --check
 
 1. Fork the repository and create a descriptive branch.
 2. Add tests and documentation with the implementation.
-3. Regenerate `manifest.sha256` from trackable files, excluding the manifest itself.
+3. Regenerate `manifest.sha256` for the distributable protocol payload.
 4. Run the full validation suite.
 5. Review the sensitive-data checklist in `SECURITY.md`.
 6. Open a pull request using the template.
@@ -71,12 +71,11 @@ git diff --check
 ### Regenerate the manifest
 
 ```bash
-: > manifest.sha256
-while IFS= read -r file; do
-  [ "$file" = manifest.sha256 ] && continue
-  shasum -a 256 "$file" >> manifest.sha256
-done < <(git ls-files --cached --others --exclude-standard | LC_ALL=C sort)
+./tools/generate-manifest.sh --write
+./tools/generate-manifest.sh --check
 ```
+
+The manifest intentionally excludes `.github` and community-only repository metadata; CI validates those files separately. This keeps Dependabot workflow updates compatible with package integrity checks.
 
 ## Commit and PR guidance
 

@@ -12,8 +12,8 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Verify manifest
-        run: shasum -a 256 -c manifest.sha256
+      - name: Verify package manifest
+        run: ./tools/generate-manifest.sh --check
       - name: Reject local/session data
         shell: bash
         run: |
@@ -25,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for file in install.sh scripts/*.py scripts/*.sh; do
+          for file in install.sh scripts/*.py scripts/*.sh tools/*.sh; do
             head -n 3 "$file" | grep -q 'SPDX-License-Identifier: Apache-2.0'
           done
       - name: Install scripts into isolated home path
