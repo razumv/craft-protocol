@@ -160,6 +160,8 @@ tests/
 docs/
   PROTOCOL-v3.1.md
   CURRENT-DEFAULTS.md
+tools/
+  generate-manifest.sh
 .github/
   CODEOWNERS
   dependabot.yml
@@ -173,7 +175,7 @@ docs/
     test.yml
 ```
 
-`manifest.sha256` authenticates every packaged file.
+`manifest.sha256` authenticates the distributable protocol payload (`README`, license/notice, installer, scripts, config, skills, tests, docs, and tools). Repository-only community/CI metadata is validated separately so Dependabot can update workflows without rewriting package hashes.
 
 ---
 
@@ -891,7 +893,7 @@ Current packaged suite covers:
 Validate packaged hashes:
 
 ```bash
-shasum -a 256 -c manifest.sha256
+./tools/generate-manifest.sh --check
 ```
 
 ---
