@@ -1,4 +1,5 @@
 #!/bin/zsh
+# SPDX-License-Identifier: Apache-2.0
 # Deterministic worker watchdog: no prompts, no model calls, no session creation.
 set -u
 LOG="$HOME/.craft-agent/logs/worker-watchdog.log"

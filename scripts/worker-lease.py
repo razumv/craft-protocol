@@ -1,4 +1,5 @@
 #!/opt/homebrew/bin/python3
+# SPDX-License-Identifier: Apache-2.0
 """Deterministic worker/auditor lease registry and stall classifier.
 
 No LLM calls and no session mutation. Active leases are disposable runtime state.

@@ -1,4 +1,5 @@
 #!/opt/homebrew/bin/python3
+# SPDX-License-Identifier: Apache-2.0
 """
 Find worker sessions safe to terminate; optionally kill their leaked processes.
 PROVIDER-INDEPENDENT and needs NO agent cooperation: a worker's OS harness is

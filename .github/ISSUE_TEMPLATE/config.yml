@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Design discussions
+    url: https://github.com/razumv/craft-protocol/discussions
+    about: Ask questions or discuss broad protocol ideas before opening an actionable issue.
+  - name: Private security advisory
+    url: https://github.com/razumv/craft-protocol/security/advisories/new
+    about: Report vulnerabilities or sensitive-data exposure privately.

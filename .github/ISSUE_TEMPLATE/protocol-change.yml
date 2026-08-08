@@ -1,0 +1,51 @@
+name: Protocol design change
+description: Propose a change to lifecycle, authority, evidence, or safety semantics
+title: "protocol: "
+labels: ["protocol-design"]
+body:
+  - type: markdown
+    attributes:
+      value: Major safety-boundary changes require public design review and may require a major version.
+  - type: textarea
+    id: failure
+    attributes:
+      label: Failure model
+      description: What concrete failure does the current protocol permit or mishandle?
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current semantics
+    validations:
+      required: true
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed semantics and state transitions
+    validations:
+      required: true
+  - type: textarea
+    id: authority
+    attributes:
+      label: Authority and irreversibility analysis
+    validations:
+      required: true
+  - type: textarea
+    id: preservation
+    attributes:
+      label: Preservation and process-safety analysis
+    validations:
+      required: true
+  - type: textarea
+    id: migration
+    attributes:
+      label: Compatibility, migration, and rollback
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Required adversarial tests
+    validations:
+      required: true

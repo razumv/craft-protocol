@@ -1,4 +1,5 @@
 #!/bin/zsh
+# SPDX-License-Identifier: Apache-2.0
 # Safe installer for Craft Agents orchestration protocol v3.1.
 # Dry-run by default. Use --apply only after reviewing README.md.
 set -eu

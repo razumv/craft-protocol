@@ -1,10 +1,26 @@
 # Craft Agents Multi-Agent Orchestration Protocol v3.1 — Complete Standalone Guide
 
+[![Protocol tests](https://github.com/razumv/craft-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/razumv/craft-protocol/actions/workflows/test.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 **Snapshot:** 2026-08-08 23:05 Europe/Warsaw
-**Audience:** a trusted operator installing the same coordinator/worker/auditor control plane on macOS with Craft Agents.
+**Audience:** operators and contributors building safer coordinator/worker/auditor control planes with Craft Agents.
 **Purpose:** preserve work, prevent split-brain, detect stalls deterministically, rotate coordinators safely, gate irreversible actions, and accept completion only from immutable evidence.
 
-> This package is self-contained: it includes the guide, executable scripts, launchd configuration, canonical skills/prompts, labels configuration, regression tests, and SHA-256 manifest. It contains no API keys, credentials, project repositories, private runtime receipts, or session transcripts.
+> This repository is self-contained: it includes the guide, executable scripts, launchd configuration, canonical skills/prompts, labels configuration, regression tests, and SHA-256 manifest. It contains no API keys, credentials, project repositories, private runtime receipts, or session transcripts.
+
+Craft Protocol is open source under the [Apache License 2.0](LICENSE). Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), discuss broad designs in [GitHub Discussions](https://github.com/razumv/craft-protocol/discussions), and follow [GOVERNANCE.md](GOVERNANCE.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). See [SUPPORT.md](SUPPORT.md) for help channels and report vulnerabilities privately according to [SECURITY.md](SECURITY.md).
+
+### Quick start
+
+```bash
+git clone https://github.com/razumv/craft-protocol.git
+cd craft-protocol
+./install.sh          # dry-run; no files changed
+```
+
+Review the plan, then use `./install.sh --apply`. Merge `config/labels.config.json` manually rather than replacing an existing label configuration.
 
 ---
 
@@ -106,8 +122,16 @@ These are recommendations with cooldown/hysteresis, not authority to discard wor
 
 ```text
 README.md
+LICENSE
+NOTICE
 SECURITY.md
+SUPPORT.md
 CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+GOVERNANCE.md
+ROADMAP.md
+CHANGELOG.md
+.editorconfig
 install.sh
 manifest.sha256
 scripts/
@@ -136,8 +160,17 @@ tests/
 docs/
   PROTOCOL-v3.1.md
   CURRENT-DEFAULTS.md
-.github/workflows/
-  test.yml
+.github/
+  CODEOWNERS
+  dependabot.yml
+  pull_request_template.md
+  ISSUE_TEMPLATE/
+    bug.yml
+    feature.yml
+    protocol-change.yml
+    config.yml
+  workflows/
+    test.yml
 ```
 
 `manifest.sha256` authenticates every packaged file.

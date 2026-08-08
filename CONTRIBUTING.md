@@ -1,21 +1,96 @@
-# Contributing
+# Contributing to Craft Protocol
 
-1. Preserve fail-closed behavior. Do not weaken app/PID, dirty-worktree, shared-cwd, owner-gate, or split-brain guards.
+Thank you for helping make multi-agent orchestration safer and more reliable.
+
+By submitting a contribution, you agree that it is licensed under the Apache License 2.0.
+
+## Ways to contribute
+
+- report a reproducible bug;
+- propose a protocol invariant or failure mode;
+- improve portability beyond macOS;
+- add adversarial regression tests;
+- improve docs, installation, observability, or security;
+- contribute integrations without bundling credentials or private data.
+
+Use GitHub Discussions for open-ended design questions and Issues for actionable defects/features.
+
+## Ground rules
+
+1. Preserve fail-closed behavior. Do not weaken app/PID, dirty-worktree, shared-cwd, owner-gate, split-brain, exact-SHA, or archive-first guards.
 2. Add a regression test for every behavior change.
-3. Keep scripts deterministic; watchdog code must not call an LLM or create sessions.
-4. Never add live workspace runtime/session data or machine-specific identities.
-5. Run:
+3. Keep watchdog/runtime tools deterministic. They must not call an LLM, create sessions, or decide owner questions.
+4. Never add live workspace runtime/session data, credentials, customer/provider data, or machine-specific identities.
+5. Keep changes focused. Protocol redesigns should begin as a Discussion or design Issue.
+6. Be respectful and follow `CODE_OF_CONDUCT.md`.
+
+## Development setup
+
+Requirements: macOS, Python 3, Git, zsh, and standard macOS process tools.
 
 ```bash
+git clone https://github.com/razumv/craft-protocol.git
+cd craft-protocol
+./install.sh                 # dry-run only
 python3 -m py_compile scripts/*.py
-mkdir -p "$HOME/.craft-agent/scripts"
-cp scripts/* "$HOME/.craft-agent/scripts/"
-chmod 700 "$HOME/.craft-agent/scripts/"*.py "$HOME/.craft-agent/scripts/"*.sh
-(cd tests && python3 -m unittest -v test_worker_reliability.py test_orchestration_v31.py)
-shasum -a 256 -c manifest.sha256
 ```
 
-6. Review the staged file list and sensitive-data scan described in `SECURITY.md`.
-7. Explain safety invariants and rollback in the pull request.
+Run tests against an isolated home:
 
-Do not add a license or change redistribution terms without repository-owner approval.
+```bash
+TMPHOME=$(mktemp -d)
+mkdir -p "$TMPHOME/.craft-agent/scripts"
+find scripts -maxdepth 1 -type f -exec cp -p {} "$TMPHOME/.craft-agent/scripts/" \;
+chmod 700 "$TMPHOME/.craft-agent/scripts/"*.py "$TMPHOME/.craft-agent/scripts/"*.sh
+(cd tests && HOME="$TMPHOME" python3 -m unittest -v \
+  test_worker_reliability.py test_orchestration_v31.py)
+rm -rf "$TMPHOME"
+```
+
+Other checks:
+
+```bash
+zsh -n install.sh scripts/watchdog-cron.sh
+plutil -lint config/launchd.watchdog.template.plist
+python3 -m json.tool config/labels.config.json >/dev/null
+shasum -a 256 -c manifest.sha256
+git diff --check
+```
+
+## Pull request process
+
+1. Fork the repository and create a descriptive branch.
+2. Add tests and documentation with the implementation.
+3. Regenerate `manifest.sha256` from trackable files, excluding the manifest itself.
+4. Run the full validation suite.
+5. Review the sensitive-data checklist in `SECURITY.md`.
+6. Open a pull request using the template.
+7. Resolve review and CI findings without force-pushing over other contributors’ work.
+8. A maintainer merges after required CI and review pass.
+
+### Regenerate the manifest
+
+```bash
+: > manifest.sha256
+while IFS= read -r file; do
+  [ "$file" = manifest.sha256 ] && continue
+  shasum -a 256 "$file" >> manifest.sha256
+done < <(git ls-files --cached --others --exclude-standard | LC_ALL=C sort)
+```
+
+## Commit and PR guidance
+
+- Explain the observed failure, not just the proposed implementation.
+- State which invariant changes or remains preserved.
+- Include rollback and migration implications.
+- Cite exact tests and results.
+- Avoid generated bulk formatting unrelated to the change.
+- Prefer squash merge for a clean public history.
+
+## Security reports
+
+Do not file public issues containing vulnerabilities, credentials, or sensitive data. Follow `SECURITY.md` and use a private GitHub security advisory.
+
+## Maintainer expectations
+
+Maintainers may decline changes that increase automation while weakening evidence, preservation, or owner authority. A smaller fail-closed change is preferred over a broad optimistic one.

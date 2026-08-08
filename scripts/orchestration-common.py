@@ -1,4 +1,5 @@
 #!/opt/homebrew/bin/python3
+# SPDX-License-Identifier: Apache-2.0
 """Shared deterministic primitives for orchestration runtime tools."""
 from __future__ import annotations
 import contextlib
