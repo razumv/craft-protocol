@@ -1,4 +1,5 @@
 #!/opt/homebrew/bin/python3
+# SPDX-License-Identifier: Apache-2.0
 """Atomic authoritative-coordinator ownership registry.
 
 The registry is append-independent runtime truth. It never mutates session JSONL.

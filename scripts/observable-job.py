@@ -1,4 +1,5 @@
 #!/opt/homebrew/bin/python3
+# SPDX-License-Identifier: Apache-2.0
 """Launch and observe long-running worker commands through durable job receipts."""
 from __future__ import annotations
 

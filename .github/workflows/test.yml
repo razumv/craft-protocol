@@ -11,7 +11,7 @@ jobs:
   test:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Verify manifest
         run: shasum -a 256 -c manifest.sha256
       - name: Reject local/session data
@@ -21,6 +21,13 @@ jobs:
           ! git ls-files | grep -E '(^|/)(sessions?|runtime|logs?|pids?|backups?)/|session\.jsonl$'
           ! rg -n '/Users/[^/$ ]+|proj_[a-z0-9]+|2608[0-9]{2}-[a-z]+-[a-z]+' . \
             -g '!.git/**' -g '!SECURITY.md' -g '!.github/workflows/test.yml'
+      - name: Verify source license headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in install.sh scripts/*.py scripts/*.sh; do
+            head -n 3 "$file" | grep -q 'SPDX-License-Identifier: Apache-2.0'
+          done
       - name: Install scripts into isolated home path
         run: |
           mkdir -p "$HOME/.craft-agent/scripts"

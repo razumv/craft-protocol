@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a reproducible protocol, script, installer, or watchdog defect
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never include credentials, session transcripts, private runtime files, or customer/provider data. Use a private security advisory for vulnerabilities.
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: What happened? Include sanitized command output and exit codes.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Use synthetic/temp fixtures and redact local identities.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Coordinator registry/rotation
+        - Owner gates/HOLD
+        - Recovery ledger
+        - Completion certificates
+        - Worker leases/observable jobs
+        - Watchdog/reaper
+        - Installer/configuration
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: macOS/Python/Craft Agents versions; do not include account names or private paths.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checklist
+      options:
+        - label: I removed credentials, private data, session IDs, project IDs, and personal paths.
+          required: true
+        - label: I reproduced this without weakening preservation or PID/app guards.
+          required: true

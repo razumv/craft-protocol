@@ -1,0 +1,45 @@
+name: Feature request
+description: Propose a compatible capability or portability improvement
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the operational failure or limitation, not only a desired implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Safety invariants
+      description: Which invariants remain unchanged? Could the proposal affect preservation, authority, split-brain, exact evidence, or process safety?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification strategy
+      description: Adversarial tests and migration/rollback approach.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: This proposal contains no credentials, private runtime data, or session transcripts.
+          required: true

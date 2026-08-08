@@ -1,4 +1,5 @@
 #!/opt/homebrew/bin/python3
+# SPDX-License-Identifier: Apache-2.0
 """Synthesize an external cold-takeover ledger from manifests, leases, jobs and gates."""
 from __future__ import annotations
 import argparse

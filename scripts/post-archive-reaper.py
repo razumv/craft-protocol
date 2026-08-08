@@ -1,4 +1,5 @@
 #!/opt/homebrew/bin/python3
+# SPDX-License-Identifier: Apache-2.0
 """Reap harnesses left behind by archived worker/auditor sessions.
 
 Safety gates: archived manifest, role worker/auditor, no live session sharing cwd,
