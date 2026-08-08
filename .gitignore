@@ -1,0 +1,135 @@
+# macOS / editors
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python / test output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.venv/
+venv/
+
+# Node / generic build output
+node_modules/
+dist/
+build/
+out/
+coverage/
+*.tmp
+*.temp
+
+# Environment, authentication, credentials, tokens
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+*.crt
+*.cer
+*.der
+*.token
+*.secret
+*credentials*
+*oauth*
+*auth-state*
+*cookies*
+*.netrc
+.npmrc
+.pypirc
+
+# Databases, private datasets, captures, generated evidence
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.dump
+*.dmp
+*.pcap
+*.pcapng
+*.har
+*.trace
+*.profraw
+*.profdata
+*.coverage-data
+*.receipt.json
+*-receipt*.json
+*.attestation.json
+*-attestation*.json
+*.evidence.json
+*-evidence*.json
+captures/
+artifacts/
+evidence/
+private/
+secrets/
+
+# Logs, processes, runtime locks
+*.log
+*.pid
+*.lock
+logs/
+pids/
+runtime/
+worker-leases/
+worker-jobs/
+coordinators/
+owner-gates/
+recovery-ledger/
+completion-certificates/
+heavy-job-owner.json
+
+# Craft Agents local state — never commit
+.craft-agent/
+.copilot-config/
+session-state/
+sessions/
+**/sessions/**
+**/session.jsonl
+**/session-*.jsonl
+**/conversation*.json*
+**/messages*.json*
+long_responses/
+attachments/
+plans/
+backups/
+
+# Agent/project private context and local worktrees
+.claude/
+.agents/local/
+worktrees/
+.worktrees/
+
+# Local installer render/output
+.local-install/
+rendered/
+com.*.worker-watchdog.plist.local
+
+# Archives generated for distribution (GitHub releases may attach them separately)
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Protocol source directories are trackable by default. Do not add broad
+# negation rules here: they can accidentally re-include secrets or caches
+# beneath otherwise ignored paths.

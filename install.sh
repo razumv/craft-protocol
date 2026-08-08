@@ -1,0 +1,113 @@
+#!/bin/zsh
+# Safe installer for Craft Agents orchestration protocol v3.1.
+# Dry-run by default. Use --apply only after reviewing README.md.
+set -eu
+
+APPLY=0
+WORKSPACE="${CRAFT_WORKSPACE:-$HOME/.craft-agent/workspaces/general}"
+while (( $# )); do
+  case "$1" in
+    --apply) APPLY=1 ;;
+    --workspace) shift; WORKSPACE="$1" ;;
+    -h|--help) echo "Usage: ./install.sh [--apply] [--workspace PATH]"; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+ROOT="${0:A:h}"
+CRAFT="$HOME/.craft-agent"
+SCRIPTS="$CRAFT/scripts"
+SKILLS="$WORKSPACE/skills"
+RUNTIME="$CRAFT/runtime"
+LOGS="$CRAFT/logs"
+STAMP=$(date '+%Y%m%d-%H%M%S')
+BACKUP="$CRAFT/backups/orchestration-v3.1-$STAMP"
+PYTHON="${CRAFT_PYTHON:-/opt/homebrew/bin/python3}"
+[[ -x "$PYTHON" ]] || PYTHON=$(command -v python3)
+PLIST_NAME="com.craft-protocol.worker-watchdog.plist"
+
+files=(
+  orchestration-common.py coordinator-registry.py coordinator-reconcile.py
+  owner-gate.py recovery-ledger.py completion-certificate.py worker-lease.py
+  observable-job.py worker-watchdog.py post-archive-reaper.py
+  scan-reapable-workers.py watchdog-cron.sh coordinator-kickoff.md
+)
+
+echo "Mode: $([[ $APPLY == 1 ]] && echo APPLY || echo DRY-RUN)"
+echo "Bundle: $ROOT"
+echo "Workspace: $WORKSPACE"
+echo "Scripts: $SCRIPTS"
+echo "Backup: $BACKUP"
+echo "Python: $PYTHON"
+echo
+
+backup_existing() {
+  local dst="$1" rel backup_dst
+  [[ -e "$dst" ]] || return 0
+  rel="${dst#$HOME/}"
+  backup_dst="$BACKUP/$rel"
+  mkdir -p "${backup_dst:h}"
+  cp -p "$dst" "$backup_dst"
+}
+
+install_file() {
+  local src="$1" dst="$2"
+  echo "INSTALL $src -> $dst"
+  if (( APPLY )); then
+    mkdir -p "${dst:h}"
+    backup_existing "$dst"
+    cp -p "$src" "$dst"
+  fi
+}
+
+for name in $files; do
+  install_file "$ROOT/scripts/$name" "$SCRIPTS/$name"
+done
+
+install_file "$ROOT/skills/coordinator-lifecycle-protocol/SKILL.md" \
+  "$SKILLS/coordinator-lifecycle-protocol/SKILL.md"
+install_file "$ROOT/skills/worker-completion-protocol/SKILL.md" \
+  "$SKILLS/worker-completion-protocol/SKILL.md"
+
+PLIST_DST="$SCRIPTS/$PLIST_NAME"
+echo "RENDER $ROOT/config/launchd.watchdog.template.plist -> $PLIST_DST"
+if (( APPLY )); then
+  mkdir -p "$SCRIPTS" "$RUNTIME/worker-leases" "$RUNTIME/worker-jobs" \
+    "$RUNTIME/coordinators" "$RUNTIME/owner-gates" \
+    "$RUNTIME/recovery-ledger" "$RUNTIME/completion-certificates" "$LOGS"
+  chmod 700 "$RUNTIME" "$LOGS" 2>/dev/null || true
+  backup_existing "$PLIST_DST"
+  sed "s|__HOME__|$HOME|g; s|__PYTHON__|$PYTHON|g" \
+    "$ROOT/config/launchd.watchdog.template.plist" > "$PLIST_DST"
+  chmod 700 "$SCRIPTS"/*.py "$SCRIPTS"/*.sh
+  chmod 600 "$PLIST_DST"
+fi
+
+echo
+echo "LABELS ARE NOT AUTOMATICALLY INSTALLED. Review and merge:"
+echo "  $ROOT/config/labels.config.json"
+echo "into:"
+echo "  $WORKSPACE/labels/config.json"
+
+echo
+if (( APPLY )); then
+  echo "Verifying package hashes..."
+  (cd "$ROOT" && shasum -a 256 -c manifest.sha256)
+  echo "Compiling Python scripts..."
+  "$PYTHON" -m py_compile "$SCRIPTS"/*.py
+  echo "Running regression tests against installed scripts..."
+  (cd "$ROOT/tests" && "$PYTHON" -m unittest -v \
+    test_worker_reliability.py test_orchestration_v31.py)
+  echo "Running watchdog dry-run..."
+  "$PYTHON" "$SCRIPTS/worker-watchdog.py"
+  echo "Install complete. Review output before enabling launchd."
+else
+  echo "No files changed. Re-run with --apply after review."
+fi
+
+echo
+echo "Optional launchd activation (manual review required):"
+echo "  mkdir -p ~/Library/LaunchAgents"
+echo "  cp '$PLIST_DST' ~/Library/LaunchAgents/$PLIST_NAME"
+echo "  launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/$PLIST_NAME"

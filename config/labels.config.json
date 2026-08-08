@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "labels": [
+    {
+      "id": "project",
+      "name": "Project",
+      "color": "foreground/50",
+      "valueType": "string"
+    },
+    {
+      "id": "agent-sessions",
+      "name": "Agent Sessions",
+      "color": "accent",
+      "children": [
+        {
+          "id": "execution-agents",
+          "name": "Execution Agents",
+          "color": { "light": "#2563EB", "dark": "#60A5FA" },
+          "children": [
+            {
+              "id": "coordinators",
+              "name": "Coordinators",
+              "color": { "light": "#7C3AED", "dark": "#C4B5FD" }
+            },
+            {
+              "id": "workers",
+              "name": "Workers",
+              "color": { "light": "#0891B2", "dark": "#67E8F9" }
+            }
+          ]
+        },
+        {
+          "id": "auditors",
+          "name": "Auditors",
+          "color": { "light": "#D97706", "dark": "#FCD34D" }
+        }
+      ]
+    },
+    {
+      "id": "agent-role",
+      "name": "Agent Role",
+      "color": { "light": "#0F766E", "dark": "#5EEAD4" },
+      "valueType": "string"
+    },
+    {
+      "id": "parent-session",
+      "name": "Parent Session",
+      "color": { "light": "#0369A1", "dark": "#7DD3FC" },
+      "valueType": "string"
+    },
+    {
+      "id": "work-unit",
+      "name": "Work Unit",
+      "color": { "light": "#4338CA", "dark": "#A5B4FC" },
+      "valueType": "string"
+    },
+    {
+      "id": "attempt",
+      "name": "Attempt",
+      "color": { "light": "#0E7490", "dark": "#67E8F9" },
+      "valueType": "number"
+    },
+    {
+      "id": "protocol-version",
+      "name": "Protocol Version",
+      "color": { "light": "#A16207", "dark": "#FACC15" },
+      "valueType": "string"
+    },
+    {
+      "id": "github-issue",
+      "name": "GitHub Issue",
+      "color": { "light": "#374151", "dark": "#D1D5DB" },
+      "valueType": "link"
+    },
+    {
+      "id": "github-project",
+      "name": "GitHub Project",
+      "color": { "light": "#111827", "dark": "#F3F4F6" },
+      "valueType": "link"
+    },
+    {
+      "id": "review-notice",
+      "name": "Review Notice",
+      "color": "foreground/50"
+    }
+  ]
+}

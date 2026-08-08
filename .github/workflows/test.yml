@@ -1,0 +1,35 @@
+name: protocol-tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify manifest
+        run: shasum -a 256 -c manifest.sha256
+      - name: Reject local/session data
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! git ls-files | grep -E '(^|/)(sessions?|runtime|logs?|pids?|backups?)/|session\.jsonl$'
+          ! rg -n '/Users/[^/$ ]+|proj_[a-z0-9]+|2608[0-9]{2}-[a-z]+-[a-z]+' . \
+            -g '!.git/**' -g '!SECURITY.md' -g '!.github/workflows/test.yml'
+      - name: Install scripts into isolated home path
+        run: |
+          mkdir -p "$HOME/.craft-agent/scripts"
+          cp scripts/* "$HOME/.craft-agent/scripts/"
+          chmod 700 "$HOME/.craft-agent/scripts/"*.py "$HOME/.craft-agent/scripts/"*.sh
+      - name: Compile
+        run: python3 -m py_compile scripts/*.py
+      - name: Run regression suite
+        working-directory: tests
+        run: python3 -m unittest -v test_worker_reliability.py test_orchestration_v31.py
+      - name: Installer dry run
+        run: ./install.sh
