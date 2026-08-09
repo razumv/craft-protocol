@@ -104,7 +104,7 @@ Hard refusal. Do not archive, reap, or replace until ownership is unambiguous. E
 - `resolve --controller <self>`: only when the underlying condition is objectively cleared and evidence is recorded.
 - `escalate --controller <self>`: after retry budget, unsafe evidence, missing project-bound bridge, HOLD, collision, or owner decision.
 
-All incident mutations/heartbeats and controller heartbeats require unexpired matching ownership and fail while the kill switch is active. `controller-release` is the sole fail-safe exception so a disabled controller can relinquish its lock. For coordinator incidents, deterministic stages are `wake-1`, `wake-2`, then `rotation`; never rotate from a wake stage.
+All incident mutations/heartbeats and controller heartbeats require unexpired matching ownership and fail while the kill switch is active. Live owners heartbeat instead of reclaiming. An expired incident must pass deterministic `detect --apply` before a new claim; an expired controller session releases and stops rather than reclaiming itself. `controller-release` is the sole fail-safe exception under the kill switch. For coordinator incidents, deterministic stages are `wake-1`, `wake-2`, then `rotation`; never rotate from a wake stage.
 
 Never resolve merely because a message was delivered.
 

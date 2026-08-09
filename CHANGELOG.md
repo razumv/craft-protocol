@@ -19,7 +19,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - owner gates/HOLD remain report-only for autonomous recovery;
 - dirty, unpushed, shared-cwd, collision, ambiguous-PID, and preservation-unknown cleanup fails closed;
 - coordinator rotation requires a verified project-bound bridge, two failed wake cycles, exact preservation snapshot, and adoption of all live children;
-- expired incident/controller owners cannot revive heartbeats; kill-switched claims/heartbeats/mutations fail closed, with controller release retained as the sole safe lock-relinquish exception;
+- live owners must heartbeat rather than reclaim; expired incident claims require deterministic reconciliation and expired controller sessions cannot self-reclaim;
+- kill-switched claims/heartbeats/mutations fail closed, with controller release retained as the sole safe lock-relinquish exception;
 - authoritative parent project mapping overrides conflicting child labels and emits a critical drift incident;
 - single-controller lease, deterministic wake/wake/rotation stages, action budgets, and cooldown prevent runaway loops;
 - runtime schemas remain version 1 and existing v3/v3.1 attempts remain compatible.

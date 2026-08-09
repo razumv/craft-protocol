@@ -99,14 +99,18 @@ class SelfHealingV311Test(unittest.TestCase):
         self.manifest("coord"); self.registry(leaseExpiresAt=self.now-1); self.cli("detect","--apply")
         _,rows=self.cli("list","--state","open"); iid=rows["incidents"][0]["incidentId"]
         self.cli("claim","--incident",iid,"--controller","c1")
-        cp,_=self.cli("claim","--incident",iid,"--controller","c2",ok=False); self.assertNotEqual(cp.returncode,0)
+        for controller in ("c1","c2"):
+            cp,_=self.cli("claim","--incident",iid,"--controller",controller,ok=False); self.assertNotEqual(cp.returncode,0)
     def test_expired_claim_cannot_mutate_or_revive(self):
         self.manifest("coord"); self.registry(leaseExpiresAt=self.now-1); self.cli("detect","--apply")
         _,rows=self.cli("list","--state","open"); iid=rows["incidents"][0]["incidentId"]
         self.cli("claim","--incident",iid,"--controller","c1","--ttl","0")
-        for command in (("heartbeat","--ttl","900"),("resolve","--evidence-kind","test","--evidence","no"),("defer","--reason","no"),("escalate","--reason","no")):
+        for command in (("heartbeat","--ttl","900"),("resolve","--evidence-kind","test","--evidence","no"),("defer","--reason","no"),("escalate","--reason","no"),("claim","--ttl","900")):
             cp,_=self.cli(command[0],"--incident",iid,"--controller","c1",*command[1:],ok=False)
             self.assertNotEqual(cp.returncode,0)
+        self.cli("detect","--apply")
+        _,row=self.cli("claim","--incident",iid,"--controller","c2")
+        self.assertEqual(row["state"],"claimed")
     def test_kill_switch_blocks_incident_heartbeat_and_mutation(self):
         self.manifest("coord"); self.registry(leaseExpiresAt=self.now-1); self.cli("detect","--apply")
         _,rows=self.cli("list","--state","open"); iid=rows["incidents"][0]["incidentId"]
@@ -153,8 +157,11 @@ class SelfHealingV311Test(unittest.TestCase):
         cp,_=self.cli("controller-claim","--session","c2",ok=False); self.assertNotEqual(cp.returncode,0)
     def test_expired_controller_cannot_revive_but_can_release(self):
         self.cli("controller-claim","--session","c1","--ttl","0")
-        cp,_=self.cli("controller-heartbeat","--session","c1",ok=False); self.assertNotEqual(cp.returncode,0)
+        for command in ("controller-heartbeat","controller-claim"):
+            cp,_=self.cli(command,"--session","c1",ok=False); self.assertNotEqual(cp.returncode,0)
         self.cli("controller-release","--session","c1")
+        _,row=self.cli("controller-claim","--session","c1")
+        self.assertEqual(row["sessionId"],"c1")
     def test_cwd_collision_is_critical(self):
         self.base(); self.manifest("worker"); self.lease(cwdCollision={"with":"w2"})
         _,d=self.cli("detect"); row=[x for x in d["observations"] if x["kind"]=="cwd-collision"][0]

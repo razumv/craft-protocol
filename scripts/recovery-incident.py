@@ -250,9 +250,11 @@ def claim(args):
     now = now_ms()
     def action(row):
         if DISABLED.exists(): fail("self-healing kill switch is active")
-        if row.get("state") == "claimed" and int(row.get("claimExpiresAt") or 0) > now and row.get("claimOwner") != args.controller:
-            fail(f"incident already claimed by {row.get('claimOwner')}")
-        if row.get("state") not in {"open", "deferred", "claimed"}: fail(f"incident is not claimable: {row.get('state')}")
+        if row.get("state") == "claimed":
+            if int(row.get("claimExpiresAt") or 0) <= now:
+                fail("incident claim expired; run deterministic detect --apply before reclaim")
+            fail(f"incident already claimed by {row.get('claimOwner')}; use heartbeat, not reclaim")
+        if row.get("state") not in {"open", "deferred"}: fail(f"incident is not claimable: {row.get('state')}")
         if int(row.get("cooldownUntil") or 0) > now: fail("incident cooldown is active")
         if int(row.get("recoveryAttempts") or 0) >= claim_limit(row):
             row.update(state="escalated", claimOwner=None, claimExpiresAt=None,
@@ -307,7 +309,11 @@ def controller_claim(args):
     with common.file_lock(LOCK):
         if DISABLED.exists(): fail("self-healing kill switch is active")
         row = common.read_json(CONTROLLER) or {}
-        if row.get("sessionId") != args.session and int(row.get("leaseExpiresAt") or 0) > now:
+        expiry = int(row.get("leaseExpiresAt") or 0)
+        if row.get("sessionId") == args.session:
+            if expiry <= now: fail("expired controller cannot reclaim; release first")
+            fail("controller already active; use controller-heartbeat, not reclaim")
+        if row.get("sessionId") and expiry > now:
             fail(f"controller already active: {row.get('sessionId')}")
         row = {"schemaVersion": SCHEMA, "sessionId": args.session, "claimedAt": now,
                "lastHeartbeatAt": now, "leaseExpiresAt": now+args.ttl*1000}
