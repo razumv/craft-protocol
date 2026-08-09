@@ -23,7 +23,7 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - kill-switched claims/heartbeats/mutations fail closed, with controller release retained as the sole safe lock-relinquish exception;
 - one coordinator session can own only one project scope globally; claims/transfers/validation reject duplicates and legacy ambiguous parents become global hard refusals;
 - authoritative parent project mapping overrides conflicting child labels, emits a critical drift incident, and makes recovery-ledger membership exclusive to prevent dual-project adoption;
-- single-controller lease, non-extendable 15-minute wall-time, deterministic wake/wake/rotation stages, action budgets, and cooldown prevent runaway loops;
+- single-controller lease, non-extendable 15-minute wall-time (including derived deadlines for legacy rows), deterministic wake/wake/rotation stages, action budgets, and cooldown prevent runaway loops;
 - canonical `cwdCollisionSessions` from lease reconciliation emits critical hard-refusal incidents for every shared-cwd lane;
 - runtime schemas remain version 1 and existing v3/v3.1 attempts remain compatible.
 

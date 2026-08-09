@@ -343,11 +343,13 @@ def controller_claim(args):
     with common.file_lock(LOCK):
         if DISABLED.exists(): fail("self-healing kill switch is active")
         row = common.read_json(CONTROLLER) or {}
-        expiry = int(row.get("leaseExpiresAt") or 0)
+        lease_expiry = int(row.get("leaseExpiresAt") or 0)
+        deadline = int(row.get("maxRuntimeExpiresAt") or (int(row.get("claimedAt") or 0) + MAX_CONTROLLER_RUNTIME_SECONDS*1000))
+        effective_expiry = min(lease_expiry, deadline) if lease_expiry and deadline else max(lease_expiry, deadline)
         if row.get("sessionId") == args.session:
-            if expiry <= now: fail("expired controller cannot reclaim; release first")
+            if effective_expiry <= now: fail("expired controller cannot reclaim; release first")
             fail("controller already active; use controller-heartbeat, not reclaim")
-        if row.get("sessionId") and expiry > now:
+        if row.get("sessionId") and effective_expiry > now:
             fail(f"controller already active: {row.get('sessionId')}")
         deadline = now + MAX_CONTROLLER_RUNTIME_SECONDS*1000
         row = {"schemaVersion": SCHEMA, "sessionId": args.session, "claimedAt": now,

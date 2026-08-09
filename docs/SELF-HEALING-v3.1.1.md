@@ -25,7 +25,7 @@ Defaults:
 
 - one scheduled sweep every 15 minutes;
 - one controller lease at a time;
-- 15-minute non-extendable controller wall-time cap; expired/over-budget controllers cannot claim or mutate incidents;
+- 15-minute non-extendable controller wall-time cap; expired/over-budget controllers cannot claim or mutate incidents, and legacy controller rows use the same derived deadline for immediate safe takeover;
 - at most 3 incidents, 2 archive/reaps, and 1 rotation per turn;
 - 15-minute claim/cooldown;
 - worker incidents: 2 automatic attempts before owner escalation;

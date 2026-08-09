@@ -168,6 +168,11 @@ class SelfHealingV311Test(unittest.TestCase):
         for command,args in (("controller-heartbeat",("--session","c1")),("claim",("--incident",iid,"--controller","c1"))):
             cp,_=self.cli(command,*args,ok=False); self.assertNotEqual(cp.returncode,0)
         self.cli("controller-release","--session","c1")
+    def test_legacy_controller_future_lease_does_not_block_after_max_runtime(self):
+        self.put(self.runtime/"self-healing/controller.json",{"schemaVersion":1,"sessionId":"old",
+            "claimedAt":self.now-1000000,"lastHeartbeatAt":self.now-1000,"leaseExpiresAt":self.now+60000})
+        _,row=self.cli("controller-claim","--session","replacement")
+        self.assertEqual(row["sessionId"],"replacement"); self.assertIn("maxRuntimeExpiresAt",row)
     def test_expired_controller_cannot_revive_but_can_release(self):
         self.cli("controller-claim","--session","c1","--ttl","0")
         for command in ("controller-heartbeat","controller-claim"):
