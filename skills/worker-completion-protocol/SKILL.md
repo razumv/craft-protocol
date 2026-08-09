@@ -3,7 +3,7 @@ name: worker-completion-protocol
 description: "Mandatory worker/auditor lifecycle: startup lease heartbeat, observable long jobs, git preservation, structured handoff, needs-review, and safe stop."
 ---
 
-# Worker Completion Protocol v3
+# Worker Completion Protocol v3.1.1
 
 You are a disposable worker or auditor. Your session owns exactly one work-unit attempt in a unique worktree. Silent stops are protocol failures. You run in `permissionMode: allow-all` even when your task is a read-only audit, because reporting/status updates require session tools.
 
@@ -45,7 +45,7 @@ For a command expected to exceed 10 minutes, do not leave an opaque blocking she
 ~/.craft-agent/scripts/observable-job.py status --session <id>
 ```
 
-Report its receipt/log result. If its PID disappears without a successful receipt, treat it as failed, not “still running.”
+Report its receipt/log result. If its PID disappears without a successful receipt, treat it as failed, not “still running.” If a heavy observable job exits `75`, classify it exactly as `waiting-heavy-lane` lock contention, acknowledge the receipt, heartbeat that phase, and let the coordinator retry after lock release in this same unique attempt. Do not call it an implementation failure and do not create a duplicate attempt.
 
 ## Iron rule
 
@@ -96,6 +96,8 @@ No “should work.” Report evidence only.
 
 4. Set session status to `needs-review`.
 5. Stop. Do not resume or accept rework in this session.
+
+The status change may trigger a bounded v3.1.1 recovery controller. It may verify preservation and archive/reap the terminal lane if the coordinator missed the handoff. This does not change your authority or permit further work.
 
 The coordinator archives the session first; the deterministic watchdog then removes your lease, PID fallback, and job receipt and safely terminates any leftover harness. A fresh attempt gets a fresh session and worktree.
 

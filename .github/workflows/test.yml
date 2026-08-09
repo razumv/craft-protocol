@@ -35,8 +35,13 @@ jobs:
           chmod 700 "$HOME/.craft-agent/scripts/"*.py "$HOME/.craft-agent/scripts/"*.sh
       - name: Compile
         run: python3 -m py_compile scripts/*.py
+      - name: Verify deterministic watchdog boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! rg -n 'spawn_session|send_agent_message|archive_session|call_llm' scripts/worker-watchdog.py scripts/recovery-incident.py
       - name: Run regression suite
         working-directory: tests
-        run: python3 -m unittest -v test_worker_reliability.py test_orchestration_v31.py
+        run: python3 -m unittest -v test_worker_reliability.py test_orchestration_v31.py test_self_healing_v311.py
       - name: Installer dry run
         run: ./install.sh

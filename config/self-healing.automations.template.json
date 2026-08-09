@@ -1,0 +1,61 @@
+{
+  "version": 2,
+  "automations": {
+    "SchedulerTick": [
+      {
+        "id": "a31101",
+        "name": "Protocol v3.1.1 self-healing sweep",
+        "enabled": false,
+        "cron": "*/15 * * * *",
+        "timezone": "Europe/Warsaw",
+        "permissionMode": "allow-all",
+        "labels": [
+          "auto",
+          "agent-role::recovery-controller",
+          "work-unit::self-healing-v3.1.1",
+          "protocol-version::3.1.1"
+        ],
+        "actions": [
+          {
+            "type": "prompt",
+            "llmConnection": "chatgpt-plus",
+            "model": "pi/gpt-5.6-sol",
+            "prompt": "[skill:self-healing-controller] Run one bounded v3.1.1 recovery sweep. Read the skill first, acquire the controller lease, detect incidents, process at most three allowed incidents, record exact evidence, release the lease, set needs-review, and stop. Never resolve owner gates or kill/restart Craft Agents."
+          }
+        ]
+      }
+    ],
+    "SessionStatusChange": [
+      {
+        "id": "a31102",
+        "name": "Protocol v3.1.1 terminal handoff recovery",
+        "enabled": false,
+        "matcher": "^needs-review$",
+        "permissionMode": "allow-all",
+        "conditions": [
+          {
+            "condition": "or",
+            "conditions": [
+              { "condition": "state", "field": "labels", "contains": "agent-role::worker" },
+              { "condition": "state", "field": "labels", "contains": "agent-role::auditor" }
+            ]
+          }
+        ],
+        "labels": [
+          "auto",
+          "agent-role::recovery-controller",
+          "work-unit::self-healing-v3.1.1",
+          "protocol-version::3.1.1"
+        ],
+        "actions": [
+          {
+            "type": "prompt",
+            "llmConnection": "chatgpt-plus",
+            "model": "pi/gpt-5.6-sol",
+            "prompt": "[skill:self-healing-controller] Reconcile the exact terminal handoff for triggering session $CRAFT_SESSION_ID ($CRAFT_SESSION_NAME), event $CRAFT_EVENT_DATA. Acquire the controller lease and apply only preservation-proven archive/reap and coordinator slot-release rules. If evidence is incomplete, defer/escalate without cleanup. Release the lease, set needs-review, and stop."
+          }
+        ]
+      }
+    ]
+  }
+}

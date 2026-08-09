@@ -4,7 +4,23 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
-- Open-source community and governance baseline.
+## [3.1.1] — 2026-08-09
+
+### Added
+
+- deterministic, idempotent recovery incident registry with CAS claims, cooldowns, retry budget, controller lease, and unresolved repeated Pi SIGTERM classification;
+- bounded self-healing controller skill for coordinator wake/reconciliation, terminal slot release, heavy-lock retry, and preservation-first recovery;
+- disabled-by-default scheduled and terminal-handoff Craft Automation template;
+- v3.1.1 coordinator/worker incident-consumption and exit-75 semantics;
+- synthetic adversarial self-healing regressions and CI enforcement of the non-agentic watchdog boundary.
+
+### Safety
+
+- owner gates/HOLD remain report-only for autonomous recovery;
+- dirty, unpushed, shared-cwd, collision, ambiguous-PID, and preservation-unknown cleanup fails closed;
+- coordinator rotation requires a verified project-bound bridge, two failed wake cycles, exact preservation snapshot, and adoption of all live children;
+- kill switch, single-controller lease, action budgets, cooldown, and two-attempt escalation prevent runaway loops;
+- runtime schemas remain version 1 and existing v3/v3.1 attempts remain compatible.
 
 ## [3.1.0] — 2026-08-08
 
@@ -31,5 +47,6 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.1.0...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.1.1...HEAD
+[3.1.1]: https://github.com/razumv/craft-protocol/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/razumv/craft-protocol/releases/tag/v3.1.0
