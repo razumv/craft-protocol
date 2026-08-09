@@ -307,12 +307,12 @@ Audit PASS → item может перейти в `In review`; не закрыв�
 5. lease reconciliation.
 
 ```bash
-/opt/homebrew/bin/python3 ~/.craft-agent/scripts/scan-reapable-workers.py \
+python3 ~/.craft-agent/scripts/scan-reapable-workers.py \
   --parent <COORDINATOR_ID>
 
 # archive_session(<CHILD_ID>) — Craft session tool, FIRST
 
-/opt/homebrew/bin/python3 ~/.craft-agent/scripts/post-archive-reaper.py \
+python3 ~/.craft-agent/scripts/post-archive-reaper.py \
   --session <CHILD_ID> --apply
 
 ~/.craft-agent/scripts/worker-lease.py reconcile --apply

@@ -58,7 +58,7 @@ Safety boundaries remain unchanged: owner HOLD/gates, preservation-before-termin
 ```bash
 ~/.craft-agent/scripts/worker-lease.py reconcile --apply
 ~/.craft-agent/scripts/worker-lease.py report
-/opt/homebrew/bin/python3 ~/.craft-agent/scripts/scan-reapable-workers.py --parent <your-session-id>
+python3 ~/.craft-agent/scripts/scan-reapable-workers.py --parent <your-session-id>
 ~/.craft-agent/scripts/recovery-ledger.py snapshot --project <project-slug>
 ```
 
@@ -201,12 +201,12 @@ Replacement gate:
 
 ```bash
 # Before archive: report only, scoped to your children
-/opt/homebrew/bin/python3 ~/.craft-agent/scripts/scan-reapable-workers.py --parent <your-session-id>
+python3 ~/.craft-agent/scripts/scan-reapable-workers.py --parent <your-session-id>
 
 # Then archive_session(<id>) via session tool, FIRST
 
 # After archive: guarded harness cleanup + lease deletion
-/opt/homebrew/bin/python3 ~/.craft-agent/scripts/post-archive-reaper.py --session <id> --apply
+python3 ~/.craft-agent/scripts/post-archive-reaper.py --session <id> --apply
 ~/.craft-agent/scripts/worker-lease.py reconcile --apply
 ```
 

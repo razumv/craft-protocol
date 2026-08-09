@@ -1,0 +1,6 @@
+[Unit]
+Description=Craft Protocol worker watchdog
+
+[Service]
+Type=oneshot
+ExecStart=__HOME__/.craft-agent/scripts/watchdog-cron.sh

@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/python3
+#!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 """Create and validate immutable evidence certificates for simple merge/closure."""
 from __future__ import annotations

@@ -164,11 +164,14 @@ config/
   labels.config.json
   self-healing.automations.template.json
   launchd.watchdog.template.plist
+  systemd.worker-watchdog.service.template
+  systemd.worker-watchdog.timer.template
 tests/
   test_worker_reliability.py
   test_orchestration_v320.py
   test_self_healing_v311.py
   test_delivery_mode_v320.py
+  test_installer_portability.py
 docs/
   PROTOCOL-v3.1.md
   SELF-HEALING-v3.1.1.md
@@ -195,14 +198,15 @@ tools/
 
 ## 5. Requirements
 
-- macOS with Craft Agents installed.
-- Python 3 with `fcntl` support. Current machine uses `/opt/homebrew/bin/python3`.
-- `git`, `lsof`, `ps`, `zsh`, `launchctl`.
+- macOS or Linux with Craft Agents installed.
+- Python 3 with `fcntl` support, discovered through `python3` (or `CRAFT_PYTHON`).
+- `git`, `ps`, and either Linux `/proc` or `lsof` for guarded cwd discovery.
+- macOS watchdog scheduling uses `launchctl`; Linux user scheduling uses `systemctl --user`.
 - A configured Craft workspace, normally `~/.craft-agent/workspaces/general`.
 - A model connection exposing coordinator/worker models. Connection slugs may differ on another machine.
 - Git remotes/auth configured separately. This package contains no GitHub token.
 
-The scripts are macOS-oriented because they use `launchd`, `lsof`, `fcntl`, and process command inspection.
+The package supports macOS launchd and Linux systemd user timers. On Linux, guarded reaping discovers harness cwd mappings through `/proc`; inaccessible or incomplete discovery is a hard cleanup refusal, with `lsof` used only when procfs is unavailable.
 
 ---
 
@@ -228,7 +232,7 @@ The installer:
 2. installs scripts under `~/.craft-agent/scripts`;
 3. installs canonical skills under the selected workspace;
 4. creates runtime/log directories with owner-only permissions;
-5. renders a user-specific launchd plist from the portable template;
+5. renders user-specific launchd and systemd user-unit templates without enabling either scheduler;
 6. does **not** overwrite labels automatically;
 7. runs syntax checks and tests;
 8. prints, but does not silently run, the final `launchctl` commands.
@@ -237,7 +241,11 @@ The installer:
 
 `config/labels.config.json` is a minimal orchestration-only label set, not a blind merge patch. Back up the target labels configuration and merge only missing IDs/value types. Validate through the Craft configuration validator before relying on it.
 
-### Launchd
+### Watchdog scheduling
+
+The installer renders both scheduler configurations but **never activates either one**. Use the platform-specific manual activation instructions only after review.
+
+### Launchd (macOS)
 
 After reviewing the rendered plist:
 
@@ -255,6 +263,18 @@ launchctl print gui/$(id -u)/com.craft-protocol.worker-watchdog
 ```
 
 Expected: interval 300 seconds and last exit code 0 after a completed run. `state = not running` between interval executions is normal.
+
+### systemd user timer (Linux)
+
+After reviewing `~/.config/systemd/user/craft-protocol-worker-watchdog.service` and `.timer`:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now craft-protocol-worker-watchdog.timer
+systemctl --user status craft-protocol-worker-watchdog.timer
+```
+
+The timer runs every 300 seconds. It is not enabled during installation.
 
 ---
 
@@ -999,7 +1019,7 @@ Automation is strongest when it refuses ambiguous actions.
 11. Test independent audit.
 12. Test HOLD/RESUME on a nonproduction fixture.
 13. Test two-phase coordinator rotation.
-14. Enable launchd.
+14. Enable the reviewed platform scheduler (launchd on macOS or systemd user timer on Linux).
 15. Canary completion certificate on one already-proved merge.
 16. Migrate remaining projects sequentially.
 

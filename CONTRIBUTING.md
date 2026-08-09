@@ -26,7 +26,7 @@ Use GitHub Discussions for open-ended design questions and Issues for actionable
 
 ## Development setup
 
-Requirements: macOS, Python 3, Git, zsh, and standard macOS process tools.
+Requirements: macOS or Linux, Python 3, Git, Bash/POSIX `sh`, and `ps`. Linux uses `/proc` for guarded cwd discovery (with `lsof` fallback when procfs is unavailable); macOS uses `lsof`.
 
 ```bash
 git clone https://github.com/razumv/craft-protocol.git
@@ -44,15 +44,18 @@ find scripts -maxdepth 1 -type f -exec cp -p {} "$TMPHOME/.craft-agent/scripts/"
 chmod 700 "$TMPHOME/.craft-agent/scripts/"*.py "$TMPHOME/.craft-agent/scripts/"*.sh
 (cd tests && HOME="$TMPHOME" python3 -m unittest -v \
   test_worker_reliability.py test_orchestration_v320.py \
-  test_self_healing_v311.py test_delivery_mode_v320.py)
+  test_self_healing_v311.py test_delivery_mode_v320.py \
+  test_installer_portability.py)
 rm -rf "$TMPHOME"
 ```
 
 Other checks:
 
 ```bash
-zsh -n install.sh scripts/watchdog-cron.sh
-plutil -lint config/launchd.watchdog.template.plist
+bash -n install.sh
+sh -n scripts/watchdog-cron.sh tools/generate-manifest.sh
+plutil -lint config/launchd.watchdog.template.plist  # macOS
+systemd-analyze verify config/systemd.worker-watchdog.service.template config/systemd.worker-watchdog.timer.template  # Linux, if available
 python3 -m json.tool config/labels.config.json >/dev/null
 ./tools/generate-manifest.sh --check
 git diff --check

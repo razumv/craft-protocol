@@ -14,7 +14,8 @@ PID fallback:        $HOME/.craft-agent/pids
 Logs:                $HOME/.craft-agent/logs
 Workspace skills:    $HOME/.craft-agent/workspaces/general/skills
 Workspace labels:    $HOME/.craft-agent/workspaces/general/labels/config.json
-LaunchAgent:         $HOME/Library/LaunchAgents/com.craft-protocol.worker-watchdog.plist
+LaunchAgent (macOS): $HOME/Library/LaunchAgents/com.craft-protocol.worker-watchdog.plist
+systemd user units:  $XDG_CONFIG_HOME/systemd/user/ (or $HOME/.config/systemd/user/)
 ```
 
 ## Models and permissions
@@ -78,11 +79,12 @@ Provider trigger:              repeated connection/SIGTERM failure
 ## Watchdog
 
 ```text
-Label:                         com.craft-protocol.worker-watchdog
-RunAtLoad:                     true
+macOS label:                   com.craft-protocol.worker-watchdog
+Linux timer:                   craft-protocol-worker-watchdog.timer
 Interval:                      300 seconds
-Process type:                  Background
-Python default:                /opt/homebrew/bin/python3
+Activation:                    manual; installer never enables a scheduler
+Process type:                  Background / systemd oneshot
+Python default:                python3 (or CRAFT_PYTHON)
 ```
 
 ## Self-healing controller

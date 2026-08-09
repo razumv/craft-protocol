@@ -1,7 +1,9 @@
+import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -171,6 +173,31 @@ class ReliabilityToolsTest(unittest.TestCase):
         )
         subprocess.run(["python3", "-c", code], env=self.env, check=True, timeout=20)
 
+    def test_worker_head_on_differently_named_origin_ref_is_preserved(self):
+        spec = importlib.util.spec_from_file_location("reaper", SCRIPTS / "post-archive-reaper.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        remote = self.root / "remote.git"
+        repo = self.root / "repo"
+        subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo, check=True)
+        (repo / "base").write_text("base")
+        subprocess.run(["git", "add", "base"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+        subprocess.run(["git", "branch", "-M", "main"], cwd=repo, check=True)
+        subprocess.run(["git", "push", "-qu", "origin", "main"], cwd=repo, check=True)
+        subprocess.run(["git", "checkout", "-qb", "worker-local"], cwd=repo, check=True)
+        (repo / "change").write_text("preserved")
+        subprocess.run(["git", "add", "change"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "worker"], cwd=repo, check=True)
+        subprocess.run(["git", "push", "-q", "origin", "HEAD:preserved-pr-head"], cwd=repo, check=True)
+        ok, detail = module.work_preserved(str(repo))
+        self.assertTrue(ok, detail)
+        self.assertIn("origin/preserved-pr-head", detail)
+
     def test_non_harness_process_is_never_accepted(self):
         code = (
             "import importlib.util,os;"
@@ -179,6 +206,31 @@ class ReliabilityToolsTest(unittest.TestCase):
             "raise SystemExit(0 if not m.harness_ok(str(os.getpid())) else 1)"
         )
         subprocess.run(["python3", "-c", code], env=self.env, check=True, timeout=20)
+
+    def test_linux_proc_cwd_discovery_and_incomplete_refusal(self):
+        if not sys.platform.startswith("linux"):
+            self.skipTest("Linux /proc regression")
+        proc = self.root / "proc"; pid = proc / "1234"; worktree = self.root / "worktree"
+        pid.mkdir(parents=True); worktree.mkdir()
+        (pid / "cmdline").write_bytes(b"pi-agent-server\\0")
+        (pid / "comm").write_text("bun\\n")
+        (pid / "cwd").symlink_to(worktree)
+        env = self.env
+        for script, function in (("post-archive-reaper.py", "cwd_pids"),
+                                 ("scan-reapable-workers.py", "cwd_pid_map")):
+            code = (
+                "import importlib.util,shutil,pathlib;"
+                f"p='{SCRIPTS / script}';"
+                "s=importlib.util.spec_from_file_location('r',p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+                f"m.PROC_ROOT=pathlib.Path(r'{proc}');shutil.rmtree(m.PROC_ROOT/'9999', ignore_errors=True);"
+                f"assert getattr(m, '{function}')() == {{r'{worktree}':['1234']}};"
+                "(m.PROC_ROOT/'9999').mkdir();"
+                "(m.PROC_ROOT/'9999'/'cmdline').write_bytes(b'pi-agent-server\\0');"
+                "(m.PROC_ROOT/'9999'/'comm').write_text('bun\\n');"
+                "(m.PROC_ROOT/'9999'/'cwd').write_text('not-a-link');"
+                f"assert getattr(m, '{function}')() is None"
+            )
+            subprocess.run(["python3", "-c", code], env=env, check=True, timeout=20)
 
 
 if __name__ == "__main__":
