@@ -38,9 +38,9 @@ MAX_INCIDENTS = int(os.environ.get("CRAFT_RECOVERY_ADMISSION_MAX_INCIDENTS", "3"
 ARM_TTL_SECONDS = int(os.environ.get("CRAFT_RECOVERY_ARM_TTL_SECONDS", "180"))
 COOLDOWN_SECONDS = int(os.environ.get("CRAFT_RECOVERY_ADMISSION_COOLDOWN_SECONDS", "900"))
 # No supported Craft pre-fire claim exists in the current public interface.
-# Synthetic support is test-only; production cannot be enabled by an env assertion.
-PREFIRE_CLAIM_SUPPORTED = (os.environ.get("CRAFT_TEST_MODE") == "1" and
-                           os.environ.get("CRAFT_SCHEDULER_PREFIRE_CLAIM_SUPPORTED") == "1")
+# This production module has no environment or CLI override. Unit tests inject
+# synthetic support in-process without exposing an installed-runtime bypass.
+PREFIRE_CLAIM_SUPPORTED = False
 NOW_MS = lambda: int(os.environ.get("CRAFT_TEST_NOW_MS", "0")) or int(time.time() * 1000)
 BLOCKED_KINDS = {"owner-gate-blocked", "cwd-collision", "project-mapping-conflict", "ambiguous-coordinator-owner", "preservation-unknown"}
 WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "job-exit-unreported", "heavy-lock-wait"}

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
-import json, os, subprocess, tempfile, unittest
+import json, os, subprocess, sys, tempfile, unittest
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -17,7 +17,7 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         self.harness.chmod(0o755)
         self.env={**os.environ,"CRAFT_WORKSPACE":str(self.workspace),"CRAFT_RUNTIME":str(self.runtime),
           "CRAFT_SESSIONS":str(self.sessions),"CRAFT_TEST_NOW_MS":str(NOW),"CRAFT_RECOVERY_ARM_TTL_SECONDS":"60",
-          "CRAFT_CONTROLLER_HARNESS":str(self.harness),"CRAFT_TEST_MODE":"1","CRAFT_SCHEDULER_PREFIRE_CLAIM_SUPPORTED":"1"}
+          "CRAFT_CONTROLLER_HARNESS":str(self.harness),"CRAFT_TEST_INJECT_PREFIRE":"1"}
         self.put(self.config,{"version":2,"automations":{"SchedulerTick":[{"id":"a321-notifier","enabled":False,"cron":"0 0 1 1 *","timezone":"UTC","labels":["agent-role::recovery-notifier"],"actions":[{"type":"prompt","prompt":"disabled"}]}]}})
         self.manifest("controller")
     def tearDown(self): self.tmp.cleanup()
@@ -29,7 +29,14 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
     def incident(self,iid="i1",kind="coordinator-lease-stale",state="open",session="coord"):
         self.put(self.runtime/"recovery-incidents"/f"{iid}.json",{"incidentId":iid,"kind":kind,"state":state,"sessionId":session,"severity":"high","firstSeenAt":1,"evidenceFingerprint":"ef"+iid})
     def cli(self,*args,ok=True,env=None):
-        cp=subprocess.run([str(TOOL),*args],env=env or self.env,text=True,capture_output=True)
+        run_env=env or self.env
+        if run_env.get("CRAFT_TEST_INJECT_PREFIRE")=="1":
+            wrapper=("import importlib.util,sys; p=sys.argv[1]; spec=importlib.util.spec_from_file_location('admission_under_test',p); "
+                     "m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); m.PREFIRE_CLAIM_SUPPORTED=True; "
+                     "sys.argv=[p]+sys.argv[2:]; raise SystemExit(m.main())")
+            command=[sys.executable,"-c",wrapper,str(TOOL),*args]
+        else: command=[str(TOOL),*args]
+        cp=subprocess.run(command,env=run_env,text=True,capture_output=True)
         if ok and cp.returncode:self.fail(cp.stdout+cp.stderr)
         return cp,json.loads(cp.stdout)
     def matcher(self): return json.loads(self.config.read_text())["automations"]["SchedulerTick"][0]
@@ -43,7 +50,7 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False)
         self.assertNotEqual(cp.returncode,0); self.assertEqual(row["reason"],"kill-switch-active"); self.assertFalse(self.matcher()["enabled"])
     def test_unsupported_scheduler_prefire_claim_blocks_apply(self):
-        self.incident(); env={k:v for k,v in self.env.items() if k not in {"CRAFT_TEST_MODE","CRAFT_SCHEDULER_PREFIRE_CLAIM_SUPPORTED"}}
+        self.incident(); env={k:v for k,v in self.env.items() if k!="CRAFT_TEST_INJECT_PREFIRE"}
         cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False,env=env)
         self.assertEqual(row["reason"],"scheduler-prefire-claim-unsupported"); self.assertFalse(self.matcher()["enabled"])
     def test_no_incident_creates_no_session_trigger(self):
