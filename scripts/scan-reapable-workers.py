@@ -90,13 +90,21 @@ def cwd_pid_map():
         if not entry.name.isdigit():
             continue
         try:
+            if entry.stat().st_uid != os.geteuid():
+                continue
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return None
+        if not harness_process(entry.name):
+            continue
+        try:
             cwd = os.readlink(entry / "cwd")
         except FileNotFoundError:
             continue
         except OSError:
             return None
-        if harness_process(entry.name):
-            m.setdefault(os.path.realpath(cwd), []).append(entry.name)
+        m.setdefault(os.path.realpath(cwd), []).append(entry.name)
     return m
 
 def pidfile_pid(sid):

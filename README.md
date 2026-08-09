@@ -171,6 +171,7 @@ tests/
   test_orchestration_v320.py
   test_self_healing_v311.py
   test_delivery_mode_v320.py
+  test_installer_portability.py
 docs/
   PROTOCOL-v3.1.md
   SELF-HEALING-v3.1.1.md

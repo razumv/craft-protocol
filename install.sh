@@ -94,14 +94,22 @@ if [ "$APPLY" -eq 1 ]; then
     "$RUNTIME/recovery-ledger" "$RUNTIME/completion-certificates" \
     "$RUNTIME/recovery-incidents" "$RUNTIME/self-healing" "$LOGS"
   chmod 700 "$RUNTIME" "$LOGS" 2>/dev/null || true
+  render_template() {
+    "$PYTHON" - "$1" "$2" "$HOME" "$PYTHON" <<'PY'
+from pathlib import Path
+import sys
+source, destination, home, python = sys.argv[1:]
+content = Path(source).read_text(encoding="utf-8")
+content = content.replace("__HOME__", home).replace("__PYTHON__", python)
+Path(destination).write_text(content, encoding="utf-8")
+PY
+  }
   backup_existing "$PLIST_DST"
-  sed "s|__HOME__|$HOME|g; s|__PYTHON__|$PYTHON|g" \
-    "$ROOT/config/launchd.watchdog.template.plist" > "$PLIST_DST"
+  render_template "$ROOT/config/launchd.watchdog.template.plist" "$PLIST_DST"
   mkdir -p "$SYSTEMD_USER_DIR"
   backup_existing "$SYSTEMD_SERVICE_DST"
   backup_existing "$SYSTEMD_TIMER_DST"
-  sed "s|__HOME__|$HOME|g; s|__PYTHON__|$PYTHON|g" \
-    "$ROOT/config/systemd.worker-watchdog.service.template" > "$SYSTEMD_SERVICE_DST"
+  render_template "$ROOT/config/systemd.worker-watchdog.service.template" "$SYSTEMD_SERVICE_DST"
   cp -p "$ROOT/config/systemd.worker-watchdog.timer.template" "$SYSTEMD_TIMER_DST"
   chmod 700 "$SCRIPTS"/*.py "$SCRIPTS"/*.sh
   chmod 600 "$PLIST_DST" "$SYSTEMD_SERVICE_DST" "$SYSTEMD_TIMER_DST"

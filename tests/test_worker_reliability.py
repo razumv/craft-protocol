@@ -198,7 +198,10 @@ class ReliabilityToolsTest(unittest.TestCase):
                 "s=importlib.util.spec_from_file_location('r',p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
                 f"m.PROC_ROOT=pathlib.Path(r'{proc}');shutil.rmtree(m.PROC_ROOT/'9999', ignore_errors=True);"
                 f"assert getattr(m, '{function}')() == {{r'{worktree}':['1234']}};"
-                "(m.PROC_ROOT/'9999').mkdir();(m.PROC_ROOT/'9999'/'cwd').write_text('not-a-link');"
+                "(m.PROC_ROOT/'9999').mkdir();"
+                "(m.PROC_ROOT/'9999'/'cmdline').write_bytes(b'pi-agent-server\\0');"
+                "(m.PROC_ROOT/'9999'/'comm').write_text('bun\\n');"
+                "(m.PROC_ROOT/'9999'/'cwd').write_text('not-a-link');"
                 f"assert getattr(m, '{function}')() is None"
             )
             subprocess.run(["python3", "-c", code], env=env, check=True, timeout=20)

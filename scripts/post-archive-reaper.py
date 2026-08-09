@@ -109,14 +109,22 @@ def cwd_pids() -> dict[str, list[str]] | None:
         if not entry.name.isdigit():
             continue
         try:
+            if entry.stat().st_uid != os.geteuid():
+                continue
+        except FileNotFoundError:  # Process exited during enumeration.
+            continue
+        except OSError:
+            return None
+        if not harness_process(entry.name):
+            continue
+        try:
             cwd = os.readlink(entry / "cwd")
         except FileNotFoundError:  # Process exited during enumeration.
             continue
         except OSError:
-            # hidepid/permission errors mean we cannot prove cwd uniqueness.
+            # A same-user harness with an unreadable cwd cannot be proved unique.
             return None
-        if harness_process(entry.name):
-            result.setdefault(str(Path(cwd).resolve()), []).append(entry.name)
+        result.setdefault(str(Path(cwd).resolve()), []).append(entry.name)
     return result
 
 
