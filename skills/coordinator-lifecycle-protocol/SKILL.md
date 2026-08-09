@@ -39,7 +39,7 @@ You are the persistent coordinator for one project/repository scope. Workers and
 ~/.craft-agent/scripts/recovery-ledger.py snapshot --project <project-slug>
 ```
 
-5. Enforce one authoritative coordinator per repository scope. Lineage client/server are independent despite a shared projectId.
+5. Enforce one authoritative coordinator per repository scope and one project scope per coordinator session ID globally. Lineage client/server are independent despite a shared projectId and require different coordinator sessions.
 6. Rotate with a recovery snapshot and two-phase ownership transfer (`begin-transfer`, then successor `accept-transfer`) at the first request-buffer/context error or complexity threshold. Thresholds include about 200k tokens, 500 messages, 3 active lanes, 8 open gates, or repeated provider failure. Do not open a second transfer while one is pending.
 
 ## 2. Source and plan work

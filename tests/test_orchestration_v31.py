@@ -90,5 +90,25 @@ class OrchestrationV31Test(unittest.TestCase):
         self.assertEqual(beta["activeChildren"],[])
         self.assertEqual(alpha["projectMappingConflicts"][0]["childLabelProject"],"beta")
         self.assertIn("project-mapping:worker",alpha["unknowns"])
+    def test_20_duplicate_coordinator_session_is_global_hard_refusal(self):
+        self.manifest("shared",project="alpha"); self.claim("shared","alpha")
+        rejected=self.exec_tool("coordinator-registry.py","claim","--project","beta","--session","shared","--project-id","pid-beta",ok=False)
+        self.assertEqual(rejected.returncode,3); self.assertIn("cross-project-owner-refused",rejected.stdout)
+        alpha=json.loads((self.runtime/"coordinators/alpha.json").read_text())
+        beta={**alpha,"project":"beta","projectId":"pid-beta"}
+        (self.runtime/"coordinators/beta.json").write_text(json.dumps(beta))
+        self.manifest("worker",labels=["agent-role::worker","project::beta","parent-session::shared","work-unit::u"])
+        d=self.runtime/"worker-leases"; d.mkdir(parents=True,exist_ok=True)
+        (d/"worker.json").write_text(json.dumps({"sessionId":"worker","parentSessionId":"shared","role":"worker","workUnit":"u","state":"stalled","preservationState":"pushed"}))
+        for project in ("alpha","beta"):
+            ledger=json.loads(self.exec_tool("recovery-ledger.py","reconstruct","--project",project).stdout)["observed"]
+            self.assertEqual(ledger["activeChildren"],[])
+            self.assertIn("ambiguous-parent:shared",ledger["unknowns"])
+        validation=self.exec_tool("coordinator-registry.py","validate",ok=False)
+        self.assertEqual(validation.returncode,2); self.assertIn("cross-project-owner",validation.stdout)
+        incidents=json.loads(self.exec_tool("recovery-incident.py","detect").stdout)["observations"]
+        self.assertIn("ambiguous-coordinator-owner",[r["kind"] for r in incidents])
+        conflict=[r for r in incidents if r["kind"]=="project-mapping-conflict"][0]
+        self.assertIsNone(conflict["project"]); self.assertNotIn("worker-stalled",[r["kind"] for r in incidents])
 
 if __name__ == "__main__": unittest.main()

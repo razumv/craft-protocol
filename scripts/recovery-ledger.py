@@ -34,8 +34,15 @@ def synthesize(project: str) -> dict[str, Any]:
     manifests = common.all_manifests(); owner_manifest = manifests.get(str(owner)) or {}
     owner_cwd = owner_manifest.get("workingDirectory") or owner_manifest.get("sdkCwd")
     coordinator_rows = load_rows(common.RUNTIME / "coordinators")
-    authoritative_parents = {str(row.get("coordinatorSessionId")): row.get("project")
-                             for row in coordinator_rows if row.get("coordinatorSessionId")}
+    parent_projects: dict[str, set[str]] = {}
+    for row in coordinator_rows:
+        sid = str(row.get("coordinatorSessionId") or "")
+        if sid and row.get("state") in {"authoritative", "rotating", "hold", "needs-owner"}:
+            parent_projects.setdefault(sid, set()).add(str(row.get("project")))
+    authoritative_parents = {sid: next(iter(projects)) for sid, projects in parent_projects.items() if len(projects) == 1}
+    ambiguous_parents = {sid: sorted(projects) for sid, projects in parent_projects.items() if len(projects) > 1}
+    project_ambiguities = [{"sessionId": sid, "projects": projects} for sid, projects in sorted(ambiguous_parents.items())
+                           if project in projects]
     leases = load_rows(common.RUNTIME / "worker-leases")
     jobs = {p.stem: v for p in (common.RUNTIME / "worker-jobs").glob("*.json") if (v := common.read_json(p))}
     children: list[dict[str, Any]] = []
@@ -47,7 +54,11 @@ def synthesize(project: str) -> dict[str, Any]:
         parent_session = str(lease.get("parentSessionId") or "")
         parent_project = authoritative_parents.get(parent_session)
         child_cwd = lease.get("worktree") or manifest.get("workingDirectory") or manifest.get("sdkCwd")
-        if parent_project:
+        if parent_session in ambiguous_parents:
+            # A legacy duplicate authoritative parent is a global hard refusal.
+            # Do not adopt its children into any project until registry repair.
+            belongs = False
+        elif parent_project:
             # An authoritative parent mapping is exclusive. A conflicting child
             # label is drift evidence, never permission for dual-ledger adoption.
             belongs = parent_project == project
@@ -73,7 +84,9 @@ def synthesize(project: str) -> dict[str, Any]:
             "activeChildren": children, "openGates": [g for g in gates if g.get("state") == "open"],
             "resolvedGates": [g for g in gates if g.get("state") == "resolved"],
             "completionCertificates": certs, "projectMappingConflicts": mapping_conflicts,
+            "ambiguousAuthoritativeParents": project_ambiguities,
             "unknowns": (["authoritative-coordinator"] if coordinator.get("state") == "missing" else []) +
+                        [f"ambiguous-parent:{a['sessionId']}" for a in project_ambiguities] +
                         [f"preservation:{c['sessionId']}" for c in children if c.get("preservationState") == "unknown"] +
                         [f"project-mapping:{c['sessionId']}" for c in mapping_conflicts]}
 

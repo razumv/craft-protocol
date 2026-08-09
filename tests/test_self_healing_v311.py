@@ -24,7 +24,7 @@ class SelfHealingV311Test(unittest.TestCase):
         if error: m["lastError"]=error
         self.put(self.sessions/sid/"session.jsonl",m)
     def registry(self, project="alpha", sid="coord", **extra):
-        row={"schemaVersion":1,"project":project,"coordinatorSessionId":sid,"state":"active","generation":1,
+        row={"schemaVersion":1,"project":project,"coordinatorSessionId":sid,"state":"authoritative","generation":1,
              "leaseExpiresAt":self.now+60000,"lastHeartbeatAt":self.now, **extra}
         self.put(self.runtime/"coordinators"/f"{project}.json",row); return row
     def lease(self, sid="worker", **extra):

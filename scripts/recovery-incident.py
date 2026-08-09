@@ -40,6 +40,7 @@ ACTION_MATRIX = {
     "heavy-lock-wait": ["ack-receipt", "queue-after-lock", "wake-coordinator"],
     "cwd-collision": ["hard-refusal", "owner-escalation"],
     "project-mapping-conflict": ["hard-refusal", "owner-escalation"],
+    "ambiguous-coordinator-owner": ["hard-refusal", "owner-escalation"],
     "preservation-unknown": ["verify-preservation", "hard-refusal-until-proven"],
     "owner-gate-blocked": ["report-only"],
 }
@@ -79,16 +80,23 @@ def path_within(child, parent):
 
 def project_context():
     records = {p.stem: v for p in (RUNTIME / "coordinators").glob("*.json") if (v := common.read_json(p))}
-    owners = {str(v.get("coordinatorSessionId")): p for p, v in records.items()}
+    owner_projects = {}
+    for project, row in records.items():
+        if row.get("state") not in {"authoritative", "rotating", "hold", "needs-owner"}: continue
+        sid = str(row.get("coordinatorSessionId") or "")
+        if sid: owner_projects.setdefault(sid, set()).add(project)
+    owners = {sid: next(iter(projects)) for sid, projects in owner_projects.items() if len(projects) == 1}
+    ambiguous = {sid: sorted(projects) for sid, projects in owner_projects.items() if len(projects) > 1}
     roots = {}
-    for project, record in records.items():
-        manifest = common.read_manifest(str(record.get("coordinatorSessionId") or "")) or {}
+    for sid, project in owners.items():
+        manifest = common.read_manifest(sid) or {}
         cwd = common.expand_path(manifest.get("workingDirectory") or manifest.get("sdkCwd"))
         if cwd: roots[cwd] = project
-    return records, owners, roots
+    return records, owners, roots, ambiguous
 
-def project_for_child(lease, manifest, owners, roots):
+def project_for_child(lease, manifest, owners, roots, ambiguous):
     parent = str(lease.get("parentSessionId") or "")
+    if parent in ambiguous: return None
     if parent in owners: return owners[parent]
     explicit = common.label_value(manifest, "project::")
     if explicit: return explicit
@@ -105,9 +113,13 @@ def observation(kind, severity, project, session_id, evidence, **extra):
             "allowedActions": ACTION_MATRIX.get(kind, ["report-only"]), **extra}
 
 def collect_observations():
-    now = now_ms(); records, owners, roots = project_context(); manifests = common.all_manifests(); out = []
+    now = now_ms(); records, owners, roots, ambiguous = project_context(); manifests = common.all_manifests(); out = []
+    for sid, projects in sorted(ambiguous.items()):
+        out.append(observation("ambiguous-coordinator-owner", "critical", None, sid,
+            {"projects": projects, "errorClass": "cross-project-owner"}))
     for project, record in records.items():
         sid = str(record.get("coordinatorSessionId") or ""); manifest = manifests.get(sid)
+        if sid in ambiguous: continue
         if record.get("state") != "hold" and not common.session_live(manifest):
             out.append(observation("coordinator-not-live", "critical", project, sid,
                 {"registryState": record.get("state"), "manifestPresent": bool(manifest), "archived": (manifest or {}).get("isArchived")}))
@@ -136,30 +148,38 @@ def collect_observations():
 
     for p in (RUNTIME / "worker-leases").glob("*.json"):
         lease = common.read_json(p) or {}; sid = str(lease.get("sessionId") or p.stem)
-        manifest = manifests.get(sid, {}); project = project_for_child(lease, manifest, owners, roots)
+        manifest = manifests.get(sid, {}); project = project_for_child(lease, manifest, owners, roots, ambiguous)
         state = str(lease.get("state") or ""); role = lease.get("role") or common.label_value(manifest, "agent-role::")
         explicit_project = common.label_value(manifest, "project::")
-        parent_project = owners.get(str(lease.get("parentSessionId") or ""))
+        parent_session = str(lease.get("parentSessionId") or "")
+        parent_project = owners.get(parent_session)
+        ambiguous_parent = ambiguous.get(parent_session)
         evidence = {"state": state, "phase": lease.get("phase"), "lastHeartbeatAt": lease.get("lastHeartbeatAt"),
                     "preservationState": lease.get("preservationState"), "worktree": lease.get("worktree"), "role": role}
         kind = {"suspect": "worker-suspect", "stalled": "worker-stalled", "error": "worker-error",
                 "handoff-ready": "terminal-handoff-unconsumed"}.get(state)
-        if kind:
+        if kind and not ambiguous_parent:
             out.append(observation(kind, "high" if state in {"stalled", "error"} else "medium", project, sid, evidence,
                                    coordinatorSessionId=lease.get("parentSessionId"), workUnit=lease.get("workUnit")))
-        if explicit_project and parent_project and explicit_project != parent_project:
+        if ambiguous_parent:
+            out.append(observation("project-mapping-conflict", "critical", None, sid,
+                {"ambiguousParentProjects": ambiguous_parent, "childLabelProject": explicit_project,
+                 "parentSessionId": parent_session, "worktree": lease.get("worktree")}))
+        elif explicit_project and parent_project and explicit_project != parent_project:
             out.append(observation("project-mapping-conflict", "critical", parent_project, sid,
                 {"authoritativeParentProject": parent_project, "childLabelProject": explicit_project,
                  "parentSessionId": lease.get("parentSessionId"), "worktree": lease.get("worktree")}))
         if lease.get("cwdCollision"):
             out.append(observation("cwd-collision", "critical", project, sid, {**evidence, "cwdCollision": lease.get("cwdCollision")}))
-        if state == "handoff-ready" and role != "auditor" and lease.get("preservationState") not in {"pushed", "merged"}:
+        if not ambiguous_parent and state == "handoff-ready" and role != "auditor" and lease.get("preservationState") not in {"pushed", "merged"}:
             out.append(observation("preservation-unknown", "high", project, sid, evidence))
 
     for p in (RUNTIME / "worker-jobs").glob("*.json"):
         job = common.read_json(p) or {}; sid = str(job.get("sessionId") or p.stem)
         lease = common.read_json(RUNTIME / "worker-leases" / f"{sid}.json") or {}; manifest = manifests.get(sid, {})
-        project = project_for_child(lease, manifest, owners, roots); code = job.get("exitCode")
+        parent_session = str(lease.get("parentSessionId") or "")
+        project = project_for_child(lease, manifest, owners, roots, ambiguous); code = job.get("exitCode")
+        if parent_session in ambiguous: continue
         ev = {"exitCode": code, "jobId": job.get("jobId") or sid,
               "endedAt": job.get("finishedAt") or job.get("endedAt"),
               "reportedAt": job.get("reportedAt"), "logPath": job.get("logPath"), "heavy": job.get("heavy")}

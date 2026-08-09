@@ -21,6 +21,7 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - coordinator rotation requires a verified project-bound bridge, two failed wake cycles, exact preservation snapshot, and adoption of all live children;
 - live owners must heartbeat rather than reclaim; expired incident claims require deterministic reconciliation and expired controller sessions cannot self-reclaim;
 - kill-switched claims/heartbeats/mutations fail closed, with controller release retained as the sole safe lock-relinquish exception;
+- one coordinator session can own only one project scope globally; claims/transfers/validation reject duplicates and legacy ambiguous parents become global hard refusals;
 - authoritative parent project mapping overrides conflicting child labels, emits a critical drift incident, and makes recovery-ledger membership exclusive to prevent dual-project adoption;
 - single-controller lease, deterministic wake/wake/rotation stages, action budgets, and cooldown prevent runaway loops;
 - runtime schemas remain version 1 and existing v3/v3.1 attempts remain compatible.

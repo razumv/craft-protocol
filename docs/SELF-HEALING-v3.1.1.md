@@ -17,7 +17,7 @@ Detected classes include stale/error coordinators, unresolved exact Pi SIGTERM e
 
 The controller may wake coordinators, request renewal/reconciliation, acknowledge and queue exit-75 retries, archive/reap a terminal child only after complete preservation proof, release a coordinator slot, and rotate a coordinator only through a verified project-bound Codex bridge after two failed wake attempts.
 
-It may never decide owner gates/HOLD, merge/close/deploy/send, kill/restart Craft Agents, archive dirty/unpushed/shared-cwd work, infer completion from silence, or spawn an unbound coordinator. Authoritative parent-coordinator project mapping overrides a child's project label in both incident attribution and recovery-ledger synthesis. Conflicting labels emit a critical hard-refusal incident, remain visible in the authoritative parent's ledger, and cannot place the lane in a second project's ledger.
+It may never decide owner gates/HOLD, merge/close/deploy/send, kill/restart Craft Agents, archive dirty/unpushed/shared-cwd work, infer completion from silence, or spawn an unbound coordinator. One coordinator session ID may own only one project scope globally; claim/transfer/validation reject duplicates. Authoritative parent-coordinator project mapping overrides a child's project label in both incident attribution and recovery-ledger synthesis. Conflicting labels emit a critical hard-refusal incident, remain visible in the authoritative parent's ledger, and cannot place the lane in a second project's ledger. A legacy duplicate parent is globally ambiguous: its children are adopted into no project until registry repair, and only global hard-refusal incidents are emitted.
 
 ## Budgets
 
