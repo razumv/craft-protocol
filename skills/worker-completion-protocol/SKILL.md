@@ -3,11 +3,20 @@ name: worker-completion-protocol
 description: "Mandatory worker/auditor lifecycle: startup lease heartbeat, observable long jobs, git preservation, structured handoff, needs-review, and safe stop."
 ---
 
-# Worker Completion Protocol v3.1.1
+# Worker Completion Protocol v3.2.0
 
 You are a disposable worker or auditor. Your session owns exactly one work-unit attempt in a unique worktree. Silent stops are protocol failures. You run in `permissionMode: allow-all` even when your task is a read-only audit, because reporting/status updates require session tools.
 
 **Do not call `SubmitPlan` for routine assigned work.** Plan briefly inside your turn and execute immediately. Only use `SubmitPlan` if the owner explicitly requested plan review in this exact session; otherwise it pauses the worker indefinitely and is a protocol failure.
+
+## Delivery-first execution
+
+- Implement the exact owner/coordinator-frozen outcome. Do not replace it with a related parent spec, infrastructure project, audit framework, or personally preferred prerequisite.
+- Stay inside changed-path scope. Do not repair unrelated pre-existing debt unless it is an unavoidable dependency and the coordinator explicitly accepts the narrow expansion.
+- An infrastructure/tooling blocker gets one safe recovery attempt or 20 minutes. Then use the approved alternative or report one exact blocker; do not spend the work unit repairing Docker, Colima, browsers, CI, or local environment.
+- Produce one clean candidate. Do not add evidence-only frameworks, ADRs, broad reports, or tests unrelated to the frozen acceptance boundary.
+- Send no micro-progress messages or acknowledgements. Internal lease heartbeats remain required, but message the coordinator only for a material blocker or the terminal structured handoff.
+- A correction worker fixes only the exact failed acceptance root cause. It must not reopen accepted unchanged evidence or broaden the work unit.
 
 ## Step 0 — identify and start the lease
 
@@ -27,7 +36,7 @@ If the coordinator crashed before creating the lease, this command backfills it 
 
 ## Progress heartbeats
 
-Update the lease after each meaningful phase and at least every 10–15 minutes while actively reasoning/tooling:
+Update the internal lease after each meaningful phase and at least every 10–15 minutes while actively reasoning/tooling. Do not send a chat message for each heartbeat:
 
 ```bash
 ~/.craft-agent/scripts/worker-lease.py heartbeat \
@@ -110,9 +119,10 @@ The coordinator archives the session first; the deterministic watchdog then remo
 
 ## Checklist
 
+- Exact frozen product outcome; no substituted work unit.
 - Unique cwd.
 - Startup lease heartbeat.
-- Evidence heartbeats or observable job for long work.
+- Evidence heartbeats or observable job for long work; no micro-status chat.
 - Clean + pushed git.
 - Structured coordinator report.
 - Lease `handoff-ready`.

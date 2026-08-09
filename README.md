@@ -1,12 +1,12 @@
-# Craft Agents Multi-Agent Orchestration Protocol v3.1.1 — Complete Standalone Guide
+# Craft Agents Multi-Agent Orchestration Protocol v3.2.0 — Complete Standalone Guide
 
 [![Protocol tests](https://github.com/razumv/craft-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/razumv/craft-protocol/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-**Snapshot:** 2026-08-09 09:02 Europe/Warsaw
+**Snapshot:** 2026-08-09 15:51 Europe/Warsaw
 **Audience:** operators and contributors building safer coordinator/worker/auditor control planes with Craft Agents.
-**Purpose:** preserve work, prevent split-brain, detect stalls deterministically, rotate coordinators safely, gate irreversible actions, and accept completion only from immutable evidence.
+**Purpose:** deliver owner-requested product outcomes through autonomous project coordinators while preserving work, preventing split-brain, detecting stalls deterministically, gating irreversible actions, and using evidence as bounded acceptance rather than work for its own sake.
 
 > This repository is self-contained: it includes the guide, executable scripts, launchd configuration, canonical skills/prompts, labels configuration, regression tests, and SHA-256 manifest. It contains no API keys, credentials, project repositories, private runtime receipts, or session transcripts.
 
@@ -47,8 +47,9 @@ graph LR
 
 ### Roles
 
-- **Owner:** decides substantive or irreversible questions. Relayed approval is invalid.
-- **Coordinator:** persistent project/scope controller. Exactly one authoritative coordinator per scope.
+- **Owner:** decides product priority and substantive or irreversible questions. Relayed approval is invalid.
+- **Owner-facing infrastructure session:** relays exact owner instructions and queries status only on owner request. It does not supervise routine project work, acknowledge coordinator updates, or become a second coordinator.
+- **Coordinator:** autonomous persistent project/scope controller. Exactly one authoritative coordinator per scope; it drives product delivery without routine central approval.
 - **Worker:** disposable implementation attempt in a unique worktree.
 - **Auditor:** disposable skeptical, read-only attempt in its own unique worktree.
 - **Watchdog:** deterministic, non-LLM reconciliation. It detects drift, emits idempotent incidents, and performs only preservation-safe cleanup.
@@ -75,14 +76,16 @@ Chat claims, silence, status names, and repeated CI polling are not authoritativ
 5. A successor adopts live attempts; it never duplicates them without evidence of terminal failure.
 6. Workers and auditors use `permissionMode: allow-all`; read-only auditing is a behavioral mandate, not Explore mode.
 7. Routine work does not call `SubmitPlan`; it is used only when the owner explicitly requests plan review in that exact session.
-8. Default concurrency: at most **2 workers + 1 auditor per project**, and **1 worker + 1 auditor per work-unit**.
+8. Default delivery WIP: one primary visible outcome with **1 worker + risk-tiered acceptance**; absolute ceiling remains **2 workers + 1 auditor per project** and **1 worker + 1 auditor per work-unit**.
 9. Only one global heavy job runs at once.
-10. After two consecutive audit failures, stop patch-looping and perform root-cause/spec review.
-11. No irreversible product action without direct owner authority or an exact standing-authority match.
-12. A project HOLD blocks spawn, implementation, merge, and closure until exact direct-owner `RESUME`.
-13. Simple merge/closure requires exact unchanged audited SHA, independent PASS, required green CI, distinct merged-main readback, zero unresolved gates, and a valid certificate.
-14. Session archive comes **before** guarded harness reaping.
-15. A shared cwd or unknown PID is a hard cleanup refusal.
+10. No audit-of-audit. One focused acceptance failure permits one exact correction and one final re-acceptance; a second failure escalates instead of spawning attempt N+1.
+11. Tests, reports, gates, and certificates verify a candidate; they are not independent indefinite product work.
+12. No irreversible product action without direct owner authority or an exact standing-authority match.
+13. A project HOLD blocks spawn, implementation, merge, and closure until exact direct-owner `RESUME`.
+14. Low-risk reversible work uses coordinator review + scoped CI; Medium/High work retains one focused independent audit and exact certificate gates where required.
+15. Session archive comes **before** guarded harness reaping.
+16. A shared cwd or unknown PID is a hard cleanup refusal.
+17. Coordinators do not send routine updates to the owner-facing infrastructure session, and that session does not acknowledge or poll them without owner request.
 
 ---
 
@@ -163,11 +166,13 @@ config/
   launchd.watchdog.template.plist
 tests/
   test_worker_reliability.py
-  test_orchestration_v31.py
+  test_orchestration_v320.py
   test_self_healing_v311.py
+  test_delivery_mode_v320.py
 docs/
   PROTOCOL-v3.1.md
   SELF-HEALING-v3.1.1.md
+  DELIVERY-MODE-v3.2.0.md
   CURRENT-DEFAULTS.md
 tools/
   generate-manifest.sh
@@ -876,7 +881,9 @@ needs-owner
 cd <bundle>/tests
 python3 -m unittest -v \
   test_worker_reliability.py \
-  test_orchestration_v31.py
+  test_orchestration_v320.py \
+  test_self_healing_v311.py \
+  test_delivery_mode_v320.py
 ```
 
 Current packaged suite covers:

@@ -1,4 +1,4 @@
-# Protocol v3.1.1 defaults
+# Protocol v3.2.0 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -32,17 +32,37 @@ Coordinator lease:             3600 seconds
 ## Execution limits
 
 ```text
-Workers per project:           2
-Auditors per project:          1
+Primary outcomes per project:  1
+Default implementation workers:1
+Workers per project ceiling:   2
+Auditors per project ceiling:  1
 Workers per work-unit:         1
 Auditors per work-unit:        1
 Global heavy jobs:             1
 Observable-job threshold:      expected runtime >10 minutes
-Heartbeat interval:            10–15 minutes
+Heartbeat interval:            10–15 minutes, internal lease only
 Healthy evidence window:       900 seconds
 Stalled evidence threshold:    1800 seconds
-Audit failures before freeze:  2
+Infrastructure detour:         1 safe attempt or 20 minutes
+Correction cycles:             1
+Second acceptance failure:     exact escalation; no automatic attempt N+1
 ```
+
+## Acceptance and communication
+
+```text
+Low risk:                      coordinator review + scoped CI
+Medium risk:                   1 focused independent audit
+High risk:                     1 focused audit + CI/readback/gates/certificate
+Audit-of-audit:                prohibited
+Owner-facing routine polling:  prohibited
+Coordinator routine updates:   prohibited
+Owner-requested status query:  allowed
+Exact owner decision request:  allowed
+Material milestone report:     candidate/verdict/merge/readback/blocker only
+```
+
+See [Delivery Mode and Role Separation](DELIVERY-MODE-v3.2.0.md).
 
 ## Rotation guidance
 
