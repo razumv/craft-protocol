@@ -218,7 +218,8 @@ def inspect_one(project: str) -> dict[str, Any]:
         labels = set(manifest.get("labels") or [])
         for required in ("coordinators", "agent-role::coordinator"):
             if required not in labels: issues.append(f"missing-label:{required}")
-        if "protocol-version::3" not in labels: issues.append("missing-label:protocol-version::3")
+        if not any(label == "protocol-version::3" or label.startswith("protocol-version::3.") for label in labels):
+            issues.append("missing-label:protocol-version::3.x")
     return {"record": value, "issues": issues, "healthy": not issues}
 
 

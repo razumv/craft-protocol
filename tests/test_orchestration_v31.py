@@ -110,5 +110,12 @@ class OrchestrationV31Test(unittest.TestCase):
         self.assertIn("ambiguous-coordinator-owner",[r["kind"] for r in incidents])
         conflict=[r for r in incidents if r["kind"]=="project-mapping-conflict"][0]
         self.assertIsNone(conflict["project"]); self.assertNotIn("worker-stalled",[r["kind"] for r in incidents])
+    def test_21_v311_protocol_label_is_compatible(self):
+        self.manifest("c1",labels=["coordinators","agent-role::coordinator","project::demo","protocol-version::3.1.1"])
+        self.claim("c1","demo")
+        self.exec_tool("coordinator-registry.py","inspect","--project","demo")
+        report=json.loads(self.exec_tool("coordinator-reconcile.py").stdout)
+        self.assertTrue(report["healthy"]); self.assertEqual(report["coordinators"][0]["issues"],[])
+        self.assertTrue(report["coordinators"][0]["desiredName"].endswith("v3.1.1"))
 
 if __name__ == "__main__": unittest.main()
