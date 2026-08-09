@@ -20,7 +20,7 @@ cd craft-protocol
 ./install.sh          # dry-run; no files changed
 ```
 
-Review the plan, then use `./install.sh --apply`. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. Self-healing automations ship disabled. Protocol v3.2.1 permits staged activation of the self-registering scheduled controller only; keep terminal-event prompts disabled. Review [the v3.2.1 harness lifecycle guide](docs/SELF-HEALING-v3.2.1.md) before canaries.
+Review the plan, then use `./install.sh --apply`. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. Self-healing automations ship disabled. Protocol v3.2.1 permanently disables recurring controller prompts and permits only deterministic pre-session admission to an exact-minute notifier backed by one persistent recovery controller. Keep the kill switch present through report-only and notifier lifecycle canaries. Review [the v3.2.1 admission guide](docs/SELF-HEALING-v3.2.1.md) before activation.
 
 ---
 
@@ -38,7 +38,8 @@ graph LR
     A --> L
     L --> D[Deterministic watchdog]
     D --> I[Idempotent recovery incidents]
-    I --> H[Bounded recovery controller]
+    I --> P[Deterministic pre-session admission]
+    P --> H[One persistent recovery controller]
     H --> C
     C --> R[Recovery ledger]
     A --> X[Completion certificate]
@@ -53,7 +54,7 @@ graph LR
 - **Worker:** disposable implementation attempt in a unique worktree.
 - **Auditor:** disposable skeptical, read-only attempt in its own unique worktree.
 - **Watchdog:** deterministic, non-LLM reconciliation. It detects drift, emits idempotent incidents, and performs only preservation-safe cleanup.
-- **Recovery controller:** short-lived, bounded agentic session. It wakes/reconciles coordinators and may clean only fully preservation-proven terminal lanes; it never decides owner gates.
+- **Recovery controller:** one persistent, bounded infrastructure session awakened only by an admitted notifier. It wakes/reconciles coordinators and may clean only fully preservation-proven terminal lanes; it never decides owner gates or supervises product work.
 
 ### Sources of truth
 
@@ -154,6 +155,8 @@ scripts/
   worker-watchdog.py
   post-archive-reaper.py
   controller-harness.py
+  recovery-admission.py
+  recovery-admission-cron.sh
   scan-reapable-workers.py
   watchdog-cron.sh
   coordinator-kickoff.md
@@ -165,12 +168,14 @@ config/
   labels.config.json
   self-healing.automations.template.json
   launchd.watchdog.template.plist
+  launchd.admission.template.plist
 tests/
   test_worker_reliability.py
   test_orchestration_v320.py
   test_self_healing_v311.py
   test_delivery_mode_v320.py
   test_controller_harness_v321.py
+  test_recovery_admission_v321.py
 docs/
   PROTOCOL-v3.1.md
   SELF-HEALING-v3.1.1.md

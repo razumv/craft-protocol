@@ -111,6 +111,7 @@ class OrchestrationV320Test(unittest.TestCase):
         conflict=[r for r in incidents if r["kind"]=="project-mapping-conflict"][0]
         self.assertIsNone(conflict["project"]); self.assertNotIn("worker-stalled",[r["kind"] for r in incidents])
     def test_21_v311_label_is_compatible_with_v320_name(self):
+        self.env["CRAFT_COORDINATOR_TTL_SECONDS"]="60"  # compatibility assertion must not race a 1s expiry
         self.manifest("c1",labels=["coordinators","agent-role::coordinator","project::demo","protocol-version::3.1.1"])
         self.claim("c1","demo")
         self.exec_tool("coordinator-registry.py","inspect","--project","demo")

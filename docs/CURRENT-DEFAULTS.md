@@ -14,7 +14,8 @@ PID fallback:        $HOME/.craft-agent/pids
 Logs:                $HOME/.craft-agent/logs
 Workspace skills:    $HOME/.craft-agent/workspaces/general/skills
 Workspace labels:    $HOME/.craft-agent/workspaces/general/labels/config.json
-LaunchAgent:         $HOME/Library/LaunchAgents/com.craft-protocol.worker-watchdog.plist
+Watchdog LaunchAgent:          $HOME/Library/LaunchAgents/com.craft-protocol.worker-watchdog.plist
+Admission LaunchAgent:         $HOME/Library/LaunchAgents/com.craft-protocol.recovery-admission.plist
 ```
 
 ## Models and permissions
@@ -89,10 +90,13 @@ Python default:                /opt/homebrew/bin/python3
 
 ```text
 Public automation templates:   disabled by default
-Local safe activation:         scheduled sweep only; terminal-event prompt disabled
-Scheduled sweep:               every 15 minutes after self-reaping canary
-Controller model:              pi/gpt-5.6-sol / medium / allow-all
-Concurrent controllers:        1
+Legacy recurring prompts:      permanently disabled
+Admission supervisor:          deterministic, before any LLM session
+Admission interval:            300 seconds; report-only under kill switch
+Notifier schedule:             one exact admitted UTC minute only
+Persistent controllers:        exactly 1 reusable session
+Notifier model:                pi/gpt-5.4-mini / allow-all
+Controller model:              pi/gpt-5.6-sol / high / allow-all
 Controller/claim TTL:          900 seconds
 Maximum controller wall time:  900 seconds; heartbeat cannot extend it
 Incident actions per turn:     3
@@ -100,9 +104,9 @@ Archive/reaps per turn:        2
 Coordinator rotations/turn:    1
 Worker attempts/incident:      2, then owner escalation
 Coordinator recovery:          2 wake cycles + 1 bounded rotation, then escalation
-Controller harness invariant:  <=1 active + <=1 terminal awaiting next-run reap
+Controller harness invariant:  exactly 1 persistent active; zero stale receipts
 Harness identity:              PID + process start token + command SHA-256
-Prior controller cleanup:      archive first; max 2 per turn; never self-reap
+Notifier cleanup:              archive first; exact guarded reap only
 Kill-switch sentinel:          $HOME/.craft-agent/runtime/self-healing.disabled
 ```
 
@@ -127,5 +131,6 @@ Worker leases:                 1
 Observable job receipts:       1
 Recovery incidents:            1
 Recovery controller lease:     1
+Recovery admission receipt:    1
 Labels config:                 1
 ```

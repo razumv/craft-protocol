@@ -43,6 +43,12 @@
       "valueType": "string"
     },
     {
+      "id": "controller-mode",
+      "name": "Controller Mode",
+      "color": { "light": "#6D28D9", "dark": "#C4B5FD" },
+      "valueType": "string"
+    },
+    {
       "id": "parent-session",
       "name": "Parent Session",
       "color": { "light": "#0369A1", "dark": "#7DD3FC" },

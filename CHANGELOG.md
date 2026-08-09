@@ -8,16 +8,18 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ### Fixed
 
-- scheduled recovery controllers self-register their exact harness PID, process start identity, and command fingerprint before incident work;
-- a later singleton controller can archive-first reap at most two prior terminal controller harnesses with PID-reuse, app-PID, non-harness, self-reap, live-session, and non-terminal hard refusals;
-- deterministic watchdog now reports controller-harness ownership and fails health when more than one active or one terminal-awaiting-reap harness exists, or identity is unknown/mismatched;
-- event-triggered terminal recovery remains disabled to prevent prompt-session storms; one scheduled controller owns automatic recovery;
-- v3.2.1 adds adversarial lifecycle tests for exact registration, app guard, PID reuse, archive-first order, self-reap refusal, and bounded process count.
+- moved recovery admission outside the LLM lifecycle: no session exists before `recovery-admission.py` finds an actionable, permitted incident batch;
+- replaced recurring recovery-controller prompts with one disabled exact-minute notifier and one reusable persistent recovery controller;
+- added atomic admission receipts, incident-fingerprint cooldown, exact execution-history reconciliation, and duplicate/missed-tick fail-closed states;
+- excluded owner gates, preservation-unknown lanes, cwd/project conflicts, and ambiguous ownership from automatic admission;
+- retained exact harness PID/start-token/command fingerprint, caller binding, archive-first, PID-reuse, app-PID, non-harness, self-reap, live-session, and non-terminal hard refusals;
+- added a report-only-by-default launchd service and adversarial tests for kill switch, no-op admission, duplicate execution, missed execution, invalid controller/config, and gate refusal.
 
 ### Operational result
 
-- automatic incident consumption can be enabled without unbounded registered Pi harness growth;
-- the steady-state invariant is at most one active controller harness plus one terminal harness awaiting the next scheduled reap;
+- healthy steady state uses exactly one persistent recovery controller and creates zero recurring controller sessions;
+- the notifier matcher is disabled except for one deterministically admitted UTC minute and is disabled again after one durable history receipt;
+- any duplicate/missed execution or cleanup ambiguity blocks rollout and preserves the kill switch;
 - deterministic incident detection, owner-gate refusal, bounded actions, and v3.2.0 delivery-role separation remain unchanged.
 
 ## [3.2.0] — 2026-08-09

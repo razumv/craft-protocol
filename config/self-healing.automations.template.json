@@ -3,8 +3,30 @@
   "automations": {
     "SchedulerTick": [
       {
+        "id": "a321-notifier",
+        "name": "Protocol v3.2.1 admitted recovery notifier",
+        "enabled": false,
+        "cron": "0 0 1 1 *",
+        "timezone": "UTC",
+        "permissionMode": "allow-all",
+        "labels": [
+          "auto",
+          "agent-role::recovery-notifier",
+          "work-unit::self-healing-v3.2.1-notifier",
+          "protocol-version::3.2.1"
+        ],
+        "actions": [
+          {
+            "type": "prompt",
+            "llmConnection": "chatgpt-plus",
+            "model": "pi/gpt-5.4-mini",
+            "prompt": "DISABLED TEMPLATE. recovery-admission.py replaces this prompt only after deterministic pre-session admission."
+          }
+        ]
+      },
+      {
         "id": "a31101",
-        "name": "Protocol v3.2.1 self-reaping recovery sweep",
+        "name": "Legacy recurring recovery sweep (permanently disabled)",
         "enabled": false,
         "cron": "*/15 * * * *",
         "timezone": "Europe/Warsaw",
@@ -12,7 +34,7 @@
         "labels": [
           "auto",
           "agent-role::recovery-controller",
-          "work-unit::self-healing-v3.2.1",
+          "work-unit::self-healing-v3.2.1-legacy",
           "protocol-version::3.2.1"
         ],
         "actions": [
@@ -20,7 +42,7 @@
             "type": "prompt",
             "llmConnection": "chatgpt-plus",
             "model": "pi/gpt-5.6-sol",
-            "prompt": "[skill:self-healing-controller] Run one bounded v3.2.1 recovery sweep. Read the skill, get self session ID, and FIRST register the exact harness with controller-harness.py. Acquire the singleton lease; archive-first reap at most two prior registered terminal controllers; require harness report bounded/healthy; detect incidents; process at most three allowed actions; release lease; set needs-review; stop. Never guess PID, reap yourself, resolve owner gates, or kill/restart Craft Agents."
+            "prompt": "PERMANENTLY DISABLED: recurring PromptAction creates a session before admission."
           }
         ]
       }

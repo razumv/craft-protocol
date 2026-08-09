@@ -27,13 +27,14 @@ BACKUP="$CRAFT/backups/orchestration-v3.2.1-$STAMP"
 PYTHON="${CRAFT_PYTHON:-/opt/homebrew/bin/python3}"
 [[ -x "$PYTHON" ]] || PYTHON=$(command -v python3)
 PLIST_NAME="com.craft-protocol.worker-watchdog.plist"
+ADMISSION_PLIST_NAME="com.craft-protocol.recovery-admission.plist"
 
 files=(
   orchestration-common.py coordinator-registry.py coordinator-reconcile.py
   owner-gate.py recovery-ledger.py completion-certificate.py recovery-incident.py
   worker-lease.py observable-job.py worker-watchdog.py post-archive-reaper.py
-  controller-harness.py
-  scan-reapable-workers.py watchdog-cron.sh coordinator-kickoff.md
+  controller-harness.py recovery-admission.py
+  scan-reapable-workers.py watchdog-cron.sh recovery-admission-cron.sh coordinator-kickoff.md
 )
 
 echo "Mode: $([[ $APPLY == 1 ]] && echo APPLY || echo DRY-RUN)"
@@ -85,8 +86,11 @@ if (( APPLY )); then
   backup_existing "$PLIST_DST"
   sed "s|__HOME__|$HOME|g; s|__PYTHON__|$PYTHON|g" \
     "$ROOT/config/launchd.watchdog.template.plist" > "$PLIST_DST"
+  ADMISSION_PLIST_DST="$SCRIPTS/$ADMISSION_PLIST_NAME"
+  backup_existing "$ADMISSION_PLIST_DST"
+  sed "s|__HOME__|$HOME|g" "$ROOT/config/launchd.admission.template.plist" > "$ADMISSION_PLIST_DST"
   chmod 700 "$SCRIPTS"/*.py "$SCRIPTS"/*.sh
-  chmod 600 "$PLIST_DST"
+  chmod 600 "$PLIST_DST" "$ADMISSION_PLIST_DST"
 fi
 
 echo
@@ -104,7 +108,8 @@ if (( APPLY )); then
   echo "Running regression tests against installed scripts..."
   (cd "$ROOT/tests" && CRAFT_TEST_SCRIPTS="$SCRIPTS" "$PYTHON" -m unittest -v \
     test_worker_reliability.py test_orchestration_v320.py test_self_healing_v311.py \
-    test_delivery_mode_v320.py test_controller_harness_v321.py)
+    test_delivery_mode_v320.py test_controller_harness_v321.py \
+    test_recovery_admission_v321.py)
   echo "Running watchdog dry-run..."
   "$PYTHON" "$SCRIPTS/worker-watchdog.py"
   echo "Install complete. Review output before enabling launchd."
@@ -117,3 +122,7 @@ echo "Optional launchd activation (manual review required):"
 echo "  mkdir -p ~/Library/LaunchAgents"
 echo "  cp '$PLIST_DST' ~/Library/LaunchAgents/$PLIST_NAME"
 echo "  launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/$PLIST_NAME"
+echo
+echo "Optional recovery-admission report-only canary (kill switch must remain present):"
+echo "  cp '$SCRIPTS/$ADMISSION_PLIST_NAME' ~/Library/LaunchAgents/$ADMISSION_PLIST_NAME"
+echo "  launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/$ADMISSION_PLIST_NAME"
