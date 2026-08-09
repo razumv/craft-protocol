@@ -39,6 +39,7 @@ ACTION_MATRIX = {
     "job-exit-unreported": ["inspect-receipt", "wake-coordinator"],
     "heavy-lock-wait": ["ack-receipt", "queue-after-lock", "wake-coordinator"],
     "cwd-collision": ["hard-refusal", "owner-escalation"],
+    "project-mapping-conflict": ["hard-refusal", "owner-escalation"],
     "preservation-unknown": ["verify-preservation", "hard-refusal-until-proven"],
     "owner-gate-blocked": ["report-only"],
 }
@@ -87,10 +88,10 @@ def project_context():
     return records, owners, roots
 
 def project_for_child(lease, manifest, owners, roots):
-    explicit = common.label_value(manifest, "project::")
-    if explicit: return explicit
     parent = str(lease.get("parentSessionId") or "")
     if parent in owners: return owners[parent]
+    explicit = common.label_value(manifest, "project::")
+    if explicit: return explicit
     cwd = lease.get("worktree") or manifest.get("workingDirectory") or manifest.get("sdkCwd")
     for root, project in roots.items():
         if path_within(cwd, root): return project
@@ -137,6 +138,8 @@ def collect_observations():
         lease = common.read_json(p) or {}; sid = str(lease.get("sessionId") or p.stem)
         manifest = manifests.get(sid, {}); project = project_for_child(lease, manifest, owners, roots)
         state = str(lease.get("state") or ""); role = lease.get("role") or common.label_value(manifest, "agent-role::")
+        explicit_project = common.label_value(manifest, "project::")
+        parent_project = owners.get(str(lease.get("parentSessionId") or ""))
         evidence = {"state": state, "phase": lease.get("phase"), "lastHeartbeatAt": lease.get("lastHeartbeatAt"),
                     "preservationState": lease.get("preservationState"), "worktree": lease.get("worktree"), "role": role}
         kind = {"suspect": "worker-suspect", "stalled": "worker-stalled", "error": "worker-error",
@@ -144,6 +147,10 @@ def collect_observations():
         if kind:
             out.append(observation(kind, "high" if state in {"stalled", "error"} else "medium", project, sid, evidence,
                                    coordinatorSessionId=lease.get("parentSessionId"), workUnit=lease.get("workUnit")))
+        if explicit_project and parent_project and explicit_project != parent_project:
+            out.append(observation("project-mapping-conflict", "critical", parent_project, sid,
+                {"authoritativeParentProject": parent_project, "childLabelProject": explicit_project,
+                 "parentSessionId": lease.get("parentSessionId"), "worktree": lease.get("worktree")}))
         if lease.get("cwdCollision"):
             out.append(observation("cwd-collision", "critical", project, sid, {**evidence, "cwdCollision": lease.get("cwdCollision")}))
         if state == "handoff-ready" and role != "auditor" and lease.get("preservationState") not in {"pushed", "merged"}:
@@ -221,10 +228,23 @@ def mutate(iid, fn):
 def claim_limit(row):
     return COORDINATOR_MAX_ATTEMPTS if row.get("kind") in {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm"} else MAX_ATTEMPTS
 
+def coordinator_incident(row):
+    return row.get("kind") in {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm"}
+
+def claim_stage(row, attempt_number):
+    if not coordinator_incident(row): return "recover"
+    return {1: "wake-1", 2: "wake-2", 3: "rotation"}.get(attempt_number, "exhausted")
+
+def claim_actions(row, stage):
+    if stage in {"wake-1", "wake-2"}: return ["wake-coordinator", "renew-request", "preserve-snapshot"]
+    if stage == "rotation": return ["preserve-snapshot", "bridge-rotation-on-attempt-3", "owner-escalation"]
+    return row.get("allowedActions") or ["report-only"]
+
 def require_claim(row, controller):
     if DISABLED.exists(): fail("self-healing kill switch is active")
     if row.get("state") != "claimed" or row.get("claimOwner") != controller:
         fail("incident claim owner/state mismatch")
+    if int(row.get("claimExpiresAt") or 0) <= now_ms(): fail("incident claim expired")
 
 def claim(args):
     now = now_ms()
@@ -239,15 +259,19 @@ def claim(args):
                        resolutionEvidence={"kind": "retry-budget-exhausted", "at": now})
             row.setdefault("history", []).append({"at": now, "action": "retry-budget-exhausted"})
             return
+        attempt_number = int(row.get("recoveryAttempts") or 0)+1
+        stage = claim_stage(row, attempt_number)
         row.update(state="claimed", claimOwner=args.controller, claimExpiresAt=now+args.ttl*1000,
-                   recoveryAttempts=int(row.get("recoveryAttempts") or 0)+1, lastActionAt=now)
-        row.setdefault("history", []).append({"at": now, "action": "claimed", "controller": args.controller})
+                   recoveryAttempts=attempt_number, lastActionAt=now, claimStage=stage,
+                   claimAllowedActions=claim_actions(row, stage))
+        row.setdefault("history", []).append({"at": now, "action": "claimed", "controller": args.controller,
+                                              "attempt": attempt_number, "stage": stage})
     return mutate(args.incident, action)
 
 def heartbeat(args):
     now = now_ms()
     def action(row):
-        if row.get("state") != "claimed" or row.get("claimOwner") != args.controller: fail("claim owner mismatch")
+        require_claim(row, args.controller)
         row["claimExpiresAt"] = now+args.ttl*1000
     return mutate(args.incident, action)
 

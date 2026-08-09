@@ -19,7 +19,9 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - owner gates/HOLD remain report-only for autonomous recovery;
 - dirty, unpushed, shared-cwd, collision, ambiguous-PID, and preservation-unknown cleanup fails closed;
 - coordinator rotation requires a verified project-bound bridge, two failed wake cycles, exact preservation snapshot, and adoption of all live children;
-- kill switch, single-controller lease, action budgets, cooldown, and two-attempt escalation prevent runaway loops;
+- expired claim owners and kill-switched heartbeats/mutations fail closed;
+- authoritative parent project mapping overrides conflicting child labels and emits a critical drift incident;
+- single-controller lease, deterministic wake/wake/rotation stages, action budgets, and cooldown prevent runaway loops;
 - runtime schemas remain version 1 and existing v3/v3.1 attempts remain compatible.
 
 ## [3.1.0] — 2026-08-08

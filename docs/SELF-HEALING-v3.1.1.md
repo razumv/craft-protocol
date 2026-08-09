@@ -9,7 +9,7 @@ Craft Protocol v3.1.1 adds bounded autonomous recovery without giving the determ
 
 ## Incidents
 
-The registry is stored under `~/.craft-agent/runtime/recovery-incidents/`. Stable keys deduplicate repeated observations. Incidents move through `open`, `claimed`, `deferred`, `resolved`, `escalated`, or `suppressed`. Claims and controller ownership use atomic file locks and expiry leases.
+The registry is stored under `~/.craft-agent/runtime/recovery-incidents/`. Stable keys deduplicate repeated observations. Incidents move through `open`, `claimed`, `deferred`, `resolved`, `escalated`, or `suppressed`. Claims and controller ownership use atomic file locks and expiry leases. Expired claim owners cannot heartbeat or mutate; all agentic mutations fail while the kill switch is active. Coordinator claims expose deterministic `wake-1`, `wake-2`, then `rotation` stages with stage-specific allowed actions.
 
 Detected classes include stale/error coordinators, unresolved exact Pi SIGTERM events after the last authoritative heartbeat, expired fallback, stuck transfer, suspect/stalled/error workers, missed terminal handoffs, unreported observable-job exits, heavy-lock exit 75, cwd collisions, unknown preservation, and open owner gates.
 
@@ -17,7 +17,7 @@ Detected classes include stale/error coordinators, unresolved exact Pi SIGTERM e
 
 The controller may wake coordinators, request renewal/reconciliation, acknowledge and queue exit-75 retries, archive/reap a terminal child only after complete preservation proof, release a coordinator slot, and rotate a coordinator only through a verified project-bound Codex bridge after two failed wake attempts.
 
-It may never decide owner gates/HOLD, merge/close/deploy/send, kill/restart Craft Agents, archive dirty/unpushed/shared-cwd work, infer completion from silence, or spawn an unbound coordinator.
+It may never decide owner gates/HOLD, merge/close/deploy/send, kill/restart Craft Agents, archive dirty/unpushed/shared-cwd work, infer completion from silence, or spawn an unbound coordinator. Authoritative parent-coordinator project mapping overrides a child's project label; conflicting labels emit a critical hard-refusal incident.
 
 ## Budgets
 
