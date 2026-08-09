@@ -78,5 +78,17 @@ class OrchestrationV31Test(unittest.TestCase):
         d=self.runtime/"worker-leases"; d.mkdir(parents=True,exist_ok=True)
         (d/"server-worker.json").write_text(json.dumps({"sessionId":"server-worker","parentSessionId":"other","role":"worker","workUnit":"u","state":"running","worktree":str(self.root/'wt-server-worker')}))
         p=self.exec_tool("recovery-ledger.py","reconstruct","--project","client"); self.assertNotIn('"sessionId": "server-worker"',p.stdout)
+    def test_19_authoritative_parent_mapping_is_exclusive(self):
+        self.manifest("alpha-coord",project="alpha"); self.claim("alpha-coord","alpha")
+        self.manifest("beta-coord",project="beta"); self.claim("beta-coord","beta")
+        self.manifest("worker",labels=["agent-role::worker","project::beta","parent-session::alpha-coord","work-unit::u"])
+        d=self.runtime/"worker-leases"; d.mkdir(parents=True,exist_ok=True)
+        (d/"worker.json").write_text(json.dumps({"sessionId":"worker","parentSessionId":"alpha-coord","role":"worker","workUnit":"u","state":"running","preservationState":"pushed"}))
+        alpha=json.loads(self.exec_tool("recovery-ledger.py","reconstruct","--project","alpha").stdout)["observed"]
+        beta=json.loads(self.exec_tool("recovery-ledger.py","reconstruct","--project","beta").stdout)["observed"]
+        self.assertEqual([c["sessionId"] for c in alpha["activeChildren"]],["worker"])
+        self.assertEqual(beta["activeChildren"],[])
+        self.assertEqual(alpha["projectMappingConflicts"][0]["childLabelProject"],"beta")
+        self.assertIn("project-mapping:worker",alpha["unknowns"])
 
 if __name__ == "__main__": unittest.main()

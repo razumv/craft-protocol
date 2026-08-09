@@ -33,31 +33,49 @@ def synthesize(project: str) -> dict[str, Any]:
     owner = coordinator.get("coordinatorSessionId")
     manifests = common.all_manifests(); owner_manifest = manifests.get(str(owner)) or {}
     owner_cwd = owner_manifest.get("workingDirectory") or owner_manifest.get("sdkCwd")
+    coordinator_rows = load_rows(common.RUNTIME / "coordinators")
+    authoritative_parents = {str(row.get("coordinatorSessionId")): row.get("project")
+                             for row in coordinator_rows if row.get("coordinatorSessionId")}
     leases = load_rows(common.RUNTIME / "worker-leases")
     jobs = {p.stem: v for p in (common.RUNTIME / "worker-jobs").glob("*.json") if (v := common.read_json(p))}
     children: list[dict[str, Any]] = []
+    mapping_conflicts: list[dict[str, Any]] = []
     for lease in leases:
         sid = str(lease.get("sessionId") or ""); manifest = manifests.get(sid)
         if not manifest or manifest.get("isArchived"): continue
         explicit_project = common.label_value(manifest, "project::")
+        parent_session = str(lease.get("parentSessionId") or "")
+        parent_project = authoritative_parents.get(parent_session)
         child_cwd = lease.get("worktree") or manifest.get("workingDirectory") or manifest.get("sdkCwd")
-        belongs = (lease.get("parentSessionId") == owner or explicit_project == project or
-                   (explicit_project is None and path_within(child_cwd, owner_cwd)))
+        if parent_project:
+            # An authoritative parent mapping is exclusive. A conflicting child
+            # label is drift evidence, never permission for dual-ledger adoption.
+            belongs = parent_project == project
+        else:
+            belongs = (explicit_project == project or
+                       (explicit_project is None and path_within(child_cwd, owner_cwd)))
         # Native projectId alone is never sufficient: Lineage client/server share it.
         if not belongs: continue
+        conflict = None
+        if parent_project and explicit_project and explicit_project != parent_project:
+            conflict = {"sessionId": sid, "authoritativeParentProject": parent_project,
+                        "childLabelProject": explicit_project, "parentSessionId": parent_session}
+            mapping_conflicts.append(conflict)
         children.append({"sessionId": sid, "role": lease.get("role"), "workUnit": lease.get("workUnit"),
             "attempt": lease.get("attempt"), "worktree": lease.get("worktree"), "state": lease.get("state"),
             "phase": lease.get("phase"), "lastEvidenceAt": lease.get("lastEvidenceAt"),
             "preservationState": lease.get("preservationState", "unknown"), "job": jobs.get(sid),
-            "manifestStatus": manifest.get("sessionStatus"), "parentSessionId": lease.get("parentSessionId")})
+            "manifestStatus": manifest.get("sessionStatus"), "parentSessionId": lease.get("parentSessionId"),
+            "projectMappingConflict": conflict})
     gates = [v for p in (common.RUNTIME / "owner-gates" / project).glob("*.json") if (v := common.read_json(p))]
     certs = [str(p) for p in sorted((common.RUNTIME / "completion-certificates" / project).glob("*.json"))]
     return {"schemaVersion": 1, "project": project, "generatedAt": common.now_ms(), "coordinator": coordinator,
             "activeChildren": children, "openGates": [g for g in gates if g.get("state") == "open"],
             "resolvedGates": [g for g in gates if g.get("state") == "resolved"],
-            "completionCertificates": certs,
+            "completionCertificates": certs, "projectMappingConflicts": mapping_conflicts,
             "unknowns": (["authoritative-coordinator"] if coordinator.get("state") == "missing" else []) +
-                        [f"preservation:{c['sessionId']}" for c in children if c.get("preservationState") == "unknown"]}
+                        [f"preservation:{c['sessionId']}" for c in children if c.get("preservationState") == "unknown"] +
+                        [f"project-mapping:{c['sessionId']}" for c in mapping_conflicts]}
 
 
 def cmd_snapshot(args: argparse.Namespace) -> int:
