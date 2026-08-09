@@ -217,9 +217,11 @@ def tick(args: argparse.Namespace) -> int:
             print(json.dumps({"schemaVersion":1,"applied":False,"state":old,"reason":"fingerprint-cooldown"},indent=2)); return 0
         when=next_minute(now); cron=f"{when.minute} {when.hour} {when.day} {when.month} *"
         ids=[str(r["incidentId"]) for r in rows]
-        prompt=("RECOVERY NOTIFIER v3.2.1. This is not a project controller. Read your session ID, then send exactly one message "
-                f"to persistent recovery controller {args.controller_session} containing admission fingerprint {fp} and incident IDs {','.join(ids)}. "
-                "Do not contact project coordinators, inspect projects, claim incidents, spawn sessions, or mutate files. After delivery, set needs-review and stop.")
+        prompt=("RECOVERY NOTIFIER v3.2.1. This is not a project controller. Get your exact session ID and FIRST run "
+                "~/.craft-agent/scripts/controller-harness.py register --session <self>. If registration fails, stop without messaging. "
+                f"Then send exactly one message to persistent recovery controller {args.controller_session} containing your session ID, admission fingerprint {fp}, and incident IDs {','.join(ids)}. "
+                "Do not contact project coordinators, inspect projects, claim incidents, spawn sessions, or mutate project files. After delivery, set needs-review and stop. "
+                "The persistent controller must archive your terminal session before exact guarded reap.")
         new={"schemaVersion":1,"phase":"armed","controllerSessionId":args.controller_session,"fingerprint":fp,"incidentIds":ids,
              "armedAt":now,"scheduledFor":int(when.timestamp()*1000),"armExpiresAt":int(when.timestamp()*1000)+ARM_TTL_SECONDS*1000,
              "historyBaseline":len(history_rows()),"lastFingerprint":fp,"cooldownUntil":now+COOLDOWN_SECONDS*1000}

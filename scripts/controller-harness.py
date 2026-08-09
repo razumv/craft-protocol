@@ -121,20 +121,25 @@ def nearest_harness(start_pid: int) -> dict[str, Any] | None:
     return None
 
 
-def require_controller(session_id: str, archived: bool | None = None) -> dict[str, Any]:
+def require_role(session_id: str, roles: set[str], archived: bool | None = None) -> tuple[dict[str, Any], str]:
     row = manifest(session_id)
     if not row: raise ValueError("session manifest missing")
-    if label_value(row, "agent-role::") != "recovery-controller": raise ValueError("session is not recovery-controller")
+    role = str(label_value(row, "agent-role::") or "")
+    if role not in roles: raise ValueError(f"session role {role or 'missing'} is not permitted")
     if archived is not None and bool(row.get("isArchived")) != archived:
         raise ValueError("session archive state does not satisfy guard")
-    return row
+    return row, role
+
+
+def require_controller(session_id: str, archived: bool | None = None) -> dict[str, Any]:
+    return require_role(session_id, {"recovery-controller"}, archived)[0]
 
 
 def register(args: argparse.Namespace) -> int:
-    row = require_controller(args.session, archived=False)
+    row, role = require_role(args.session, {"recovery-controller", "recovery-notifier"}, archived=False)
     proc = identity(args.pid) if args.pid else nearest_harness(os.getpid())
     if not proc or not is_harness(proc["command"]): raise ValueError("exact session harness not found; refusing registration")
-    receipt = {"schemaVersion": 1, "sessionId": args.session, "harnessPid": proc["pid"],
+    receipt = {"schemaVersion": 1, "sessionId": args.session, "sessionRole": role, "harnessPid": proc["pid"],
                "harnessStartToken": proc["startToken"], "harnessCommandSha256": proc["commandSha256"],
                "registeredAt": NOW_MS(), "sessionCreatedAt": row.get("createdAt"), "state": "registered"}
     atomic_write(RECEIPTS / f"{args.session}.json", receipt)
@@ -169,11 +174,11 @@ def verify_current_controller(session_id: str) -> None:
 def reap(args: argparse.Namespace) -> int:
     verify_current_controller(args.current_session)
     if args.session == args.current_session: raise ValueError("controller cannot reap itself")
-    row = require_controller(args.session, archived=True)
+    row, role = require_role(args.session, {"recovery-controller", "recovery-notifier"}, archived=True)
     if row.get("sessionStatus") not in ("needs-review", "done", "cancelled"):
-        raise ValueError("archived controller is not terminal")
+        raise ValueError("archived recovery session is not terminal")
     receipt = read_receipt(args.session); pid = int(receipt["harnessPid"]); probe_state, proc = process_probe(pid)
-    result: dict[str, Any] = {"sessionId": args.session, "pid": pid, "applied": bool(args.apply)}
+    result: dict[str, Any] = {"sessionId": args.session, "sessionRole": role, "pid": pid, "applied": bool(args.apply)}
     if probe_state == "unknown": raise ValueError("process identity lookup unknown; refusing receipt deletion")
     if probe_state == "absent":
         result["state"] = "already-exited"
@@ -212,10 +217,11 @@ def reap(args: argparse.Namespace) -> int:
 
 
 def report(_: argparse.Namespace) -> int:
-    rows=[]; counts={"active":0,"terminalAwaitingReap":0,"alreadyExited":0,"lookupUnknown":0,"identityMismatch":0,"unknown":0}
+    rows=[]; counts={"active":0,"activeControllers":0,"activeNotifiers":0,"terminalAwaitingReap":0,"alreadyExited":0,"lookupUnknown":0,"identityMismatch":0,"unknown":0}
     for path in sorted(RECEIPTS.glob("*.json")):
         try:
             rec=json.loads(path.read_text()); sid=str(rec["sessionId"]); man=manifest(sid)
+            role=str(rec.get("sessionRole") or (label_value(man or {}, "agent-role::") if man else "") or "unknown")
             probe_state, proc=process_probe(int(rec["harnessPid"]))
             if not man: state="unknown"
             elif probe_state == "unknown": state="lookupUnknown"
@@ -224,12 +230,16 @@ def report(_: argparse.Namespace) -> int:
             elif man.get("isArchived") and man.get("sessionStatus") in ("needs-review","done","cancelled"): state="terminalAwaitingReap"
             elif not man.get("isArchived"): state="active"
             else: state="unknown"
-            counts[state]+=1; rows.append({"sessionId":sid,"pid":rec.get("harnessPid"),"state":state})
+            counts[state]+=1
+            if state == "active" and role == "recovery-controller": counts["activeControllers"]+=1
+            if state == "active" and role == "recovery-notifier": counts["activeNotifiers"]+=1
+            rows.append({"sessionId":sid,"sessionRole":role,"pid":rec.get("harnessPid"),"state":state})
         except Exception:
             counts["unknown"]+=1; rows.append({"sessionId":path.stem,"state":"unknown"})
     violations=[]
-    if counts["active"] > 1: violations.append("more than one registered active controller harness")
-    if counts["terminalAwaitingReap"] > 1: violations.append("more than one terminal controller harness awaits reap")
+    if counts["activeControllers"] > 1: violations.append("more than one registered active controller harness")
+    if counts["activeNotifiers"] > 1: violations.append("more than one registered active notifier harness")
+    if counts["terminalAwaitingReap"] > 1: violations.append("more than one terminal recovery harness awaits reap")
     if counts["alreadyExited"]: violations.append("stale exited controller harness receipt requires cleanup")
     if counts["lookupUnknown"]: violations.append("controller harness process lookup is unknown")
     if counts["identityMismatch"]: violations.append("controller harness PID identity mismatch")

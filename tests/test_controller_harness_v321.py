@@ -99,5 +99,16 @@ class ControllerHarnessV321Test(unittest.TestCase):
         for sid,pid in (("a",100),("b",101)): self.manifest(sid); self.register(sid,pid)
         cp,row=self.cli("report",ok=False); self.assertNotEqual(cp.returncode,0); self.assertFalse(row["healthy"])
         self.assertIn("more than one registered active",row["violations"][0])
+    def test_persistent_controller_can_reap_registered_notifier(self):
+        self.manifest("controller"); self.manifest("notifier",role="recovery-notifier")
+        self.env["CRAFT_TEST_CALLER_PID"]="200"
+        self.processes({100:{"command":"bun pi-agent-server/index.js","startToken":"N"},
+                        200:{"command":"bun pi-agent-server/index.js","startToken":"C"}})
+        self.register("notifier",100); self.register("controller",200)
+        cp,report=self.cli("report"); self.assertTrue(report["healthy"])
+        self.assertEqual(report["counts"]["activeControllers"],1); self.assertEqual(report["counts"]["activeNotifiers"],1)
+        self.manifest("notifier",role="recovery-notifier",archived=True,status="needs-review")
+        _,row=self.cli("reap","--session","notifier","--current-session","controller","--apply")
+        self.assertEqual(row["state"],"reaped"); self.assertEqual(row["sessionRole"],"recovery-notifier")
 
 if __name__=="__main__": unittest.main()

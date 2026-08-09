@@ -45,7 +45,9 @@ The exact cron includes minute, hour, day, and month in UTC. Even if disable rec
 
 ## Persistent controller and notifier
 
-The notifier is infrastructure transport only. It sends one admitted fingerprint and incident-ID set to the one persistent controller, then stops. It must not inspect projects, claim incidents, contact coordinators, or spawn sessions.
+The notifier is infrastructure transport only. Its first action registers its exact harness PID/start-token/command hash with `controller-harness.py`; registration failure stops before delivery. It then sends one admitted fingerprint, its own session ID, and incident-ID set to the one persistent controller, then stops. It must not inspect projects, claim incidents, contact coordinators, or spawn sessions.
+
+Healthy transient bounds permit exactly one active persistent controller plus at most one active or terminal-awaiting-reap notifier. Duplicate controllers, duplicate notifiers, or more than one terminal recovery receipt fail health.
 
 The persistent controller applies only ledger-authorized recovery. It does not replace project coordinators or report routine status. It archives each notifier before exact guarded harness reaping. If archive/preservation/process identity cannot be proven, cleanup fails closed.
 
