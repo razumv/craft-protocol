@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -171,6 +172,31 @@ class ReliabilityToolsTest(unittest.TestCase):
             "assert m.work_preserved(str(repo),readonly_auditors=True)[0]"
         )
         subprocess.run(["python3", "-c", code], env=self.env, check=True, timeout=20)
+
+    def test_worker_head_on_differently_named_origin_ref_is_preserved(self):
+        spec = importlib.util.spec_from_file_location("reaper", SCRIPTS / "post-archive-reaper.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        remote = self.root / "remote.git"
+        repo = self.root / "repo"
+        subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo, check=True)
+        (repo / "base").write_text("base")
+        subprocess.run(["git", "add", "base"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+        subprocess.run(["git", "branch", "-M", "main"], cwd=repo, check=True)
+        subprocess.run(["git", "push", "-qu", "origin", "main"], cwd=repo, check=True)
+        subprocess.run(["git", "checkout", "-qb", "worker-local"], cwd=repo, check=True)
+        (repo / "change").write_text("preserved")
+        subprocess.run(["git", "add", "change"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "worker"], cwd=repo, check=True)
+        subprocess.run(["git", "push", "-q", "origin", "HEAD:preserved-pr-head"], cwd=repo, check=True)
+        ok, detail = module.work_preserved(str(repo))
+        self.assertTrue(ok, detail)
+        self.assertIn("origin/preserved-pr-head", detail)
 
     def test_non_harness_process_is_never_accepted(self):
         code = (

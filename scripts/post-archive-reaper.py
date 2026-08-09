@@ -165,11 +165,17 @@ def work_preserved(worktree: str, readonly_auditors: bool = False) -> tuple[bool
     if branch:
         candidates.append(f"origin/{branch}")
     candidates.append(f"origin/{default_branch(repo)}")
-    for ref in candidates:
+    rc, remote_refs, _ = run(
+        ["git", "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"],
+        cwd=worktree,
+    )
+    if rc == 0:
+        candidates.extend(ref for ref in remote_refs.splitlines() if ref and ref != "origin/HEAD")
+    for ref in dict.fromkeys(candidates):
         rc, _, _ = run(["git", "merge-base", "--is-ancestor", head, ref], cwd=worktree)
         if rc == 0:
             return True, f"HEAD preserved on {ref}"
-    return False, "HEAD not found on origin branch/default"
+    return False, "HEAD not found on any origin ref"
 
 
 def remove_runtime(session_id: str) -> None:
