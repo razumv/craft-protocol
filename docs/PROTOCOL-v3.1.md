@@ -79,7 +79,7 @@ Connection фиксируется при spawn. Сломанную/исчерп�
 
 Repository companion files:
 tests/test_worker_reliability.py
-tests/test_orchestration_v31.py
+tests/test_orchestration_v320.py
 config/labels.config.json
 config/launchd.watchdog.template.plist
 ```

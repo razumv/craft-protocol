@@ -2,6 +2,14 @@
 
 This roadmap is directional, not a promise of dates. Contributions are welcome through design Issues and pull requests.
 
+## Delivered in v3.2.0
+
+- strict separation between owner-facing infrastructure and autonomous project coordination;
+- product-first one-outcome WIP and milestone-only reporting;
+- Low/Medium/High risk-tiered focused acceptance instead of audit-on-by-default;
+- one correction cycle, no audit-of-audit, and exact escalation after a second failure;
+- bounded infrastructure detours and protection against silently replacing owner-requested work.
+
 ## Delivered in v3.1.1
 
 - deterministic incident emission separated from bounded agentic recovery;

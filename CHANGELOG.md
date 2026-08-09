@@ -4,6 +4,26 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.2.0] — 2026-08-09
+
+### Changed
+
+- separated the owner-facing infrastructure role from autonomous project coordination; routine coordinator updates, ACK loops, micro-polling, and central phase approvals are prohibited;
+- made one primary visible/executable product outcome the default project WIP;
+- replaced audit-on-by-default with risk-tiered acceptance: coordinator review for Low risk, one focused independent audit for Medium risk, and one focused audit plus immutable CI/readback/gates/certificate for High risk;
+- capped failure recovery at one exact correction and one final focused re-acceptance; a second failure escalates instead of spawning attempt N+1;
+- capped infrastructure detours at one safe attempt or 20 minutes before approved alternative/escalation;
+- limited reports to candidate, verdict, merge/deploy/readback, or exact owner blocker milestones;
+- prohibited replacing a direct owner-requested work unit with a related parent specification or coordinator interpretation.
+
+### Delivery safeguards
+
+- tests, audits, reports, gates, and certificates verify a finished candidate; they cannot become independent indefinite product work;
+- audit-of-audit, evidence-only successor issues, and framework/ADR/measurement expansion require a concrete candidate defect;
+- immutable accepted evidence is reused when SHA, inputs, environment, and claim boundary are unchanged;
+- unrelated pre-existing debt remains outside the product lane;
+- all v3.1.1 preservation, HOLD, unique-worktree, secret/privacy, heavy-lane, deterministic watchdog, and bounded self-healing safety invariants remain intact.
+
 ## [3.1.1] — 2026-08-09
 
 ### Added
@@ -52,6 +72,7 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.1.1...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/razumv/craft-protocol/compare/v3.1.1...v3.2.0
 [3.1.1]: https://github.com/razumv/craft-protocol/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/razumv/craft-protocol/releases/tag/v3.1.0
