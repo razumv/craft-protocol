@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/python3
+#!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 """Run deterministic lease reconciliation and post-archive harness cleanup."""
 from __future__ import annotations

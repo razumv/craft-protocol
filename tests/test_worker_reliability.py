@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -179,6 +180,28 @@ class ReliabilityToolsTest(unittest.TestCase):
             "raise SystemExit(0 if not m.harness_ok(str(os.getpid())) else 1)"
         )
         subprocess.run(["python3", "-c", code], env=self.env, check=True, timeout=20)
+
+    def test_linux_proc_cwd_discovery_and_incomplete_refusal(self):
+        if not sys.platform.startswith("linux"):
+            self.skipTest("Linux /proc regression")
+        proc = self.root / "proc"; pid = proc / "1234"; worktree = self.root / "worktree"
+        pid.mkdir(parents=True); worktree.mkdir()
+        (pid / "cmdline").write_bytes(b"pi-agent-server\\0")
+        (pid / "comm").write_text("bun\\n")
+        (pid / "cwd").symlink_to(worktree)
+        env = self.env
+        for script, function in (("post-archive-reaper.py", "cwd_pids"),
+                                 ("scan-reapable-workers.py", "cwd_pid_map")):
+            code = (
+                "import importlib.util,shutil,pathlib;"
+                f"p='{SCRIPTS / script}';"
+                "s=importlib.util.spec_from_file_location('r',p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+                f"m.PROC_ROOT=pathlib.Path(r'{proc}');shutil.rmtree(m.PROC_ROOT/'9999', ignore_errors=True);"
+                f"assert getattr(m, '{function}')() == {{r'{worktree}':['1234']}};"
+                "(m.PROC_ROOT/'9999').mkdir();(m.PROC_ROOT/'9999'/'cwd').write_text('not-a-link');"
+                f"assert getattr(m, '{function}')() is None"
+            )
+            subprocess.run(["python3", "-c", code], env=env, check=True, timeout=20)
 
 
 if __name__ == "__main__":

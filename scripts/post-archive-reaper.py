@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/python3
+#!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 """Reap harnesses left behind by archived worker/auditor sessions.
 
@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import time
 from typing import Any
 
@@ -23,6 +24,7 @@ WORKSPACE = Path(os.environ.get("CRAFT_WORKSPACE", HOME / ".craft-agent/workspac
 SESSIONS = Path(os.environ.get("CRAFT_SESSIONS", WORKSPACE / "sessions")).expanduser()
 RUNTIME = Path(os.environ.get("CRAFT_RUNTIME", HOME / ".craft-agent/runtime")).expanduser()
 PID_DIR = Path(os.environ.get("CRAFT_PID_DIR", HOME / ".craft-agent/pids")).expanduser()
+PROC_ROOT = Path("/proc")
 LEASES = RUNTIME / "worker-leases"
 JOBS = RUNTIME / "worker-jobs"
 ROLES = {"worker", "auditor"}
@@ -65,16 +67,56 @@ def worktree_of(manifest: dict[str, Any]) -> str | None:
     return str(Path(raw).expanduser().resolve()) if raw else None
 
 
-def cwd_pids() -> dict[str, list[str]]:
+def harness_process(pid: str) -> bool:
+    """Return whether pid names a known agent harness without trusting its cwd."""
+    if sys.platform.startswith("linux"):
+        try:
+            command = (PROC_ROOT / pid / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="ignore")
+            name = (PROC_ROOT / pid / "comm").read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return False
+        return name.strip() in {"bun", "claude"} or "pi-agent-server" in command or "claude-agent-sdk-binary/claude" in command
+    _, command, _ = run(["ps", "-o", "command=", "-p", pid])
+    return "pi-agent-server" in command or "claude-agent-sdk-binary/claude" in command
+
+
+def lsof_cwd_pids() -> dict[str, list[str]] | None:
     rc, out, _ = run(["lsof", "-a", "-d", "cwd"], timeout=30)
-    result: dict[str, list[str]] = {}
     if rc != 0:
-        return result
+        return None
+    result: dict[str, list[str]] = {}
     for line in out.splitlines()[1:]:
         parts = line.split(None, 8)
-        if len(parts) < 9 or parts[0] not in ("bun", "claude"):
+        if len(parts) < 9 or not harness_process(parts[1]):
             continue
-        result.setdefault(parts[8], []).append(parts[1])
+        result.setdefault(str(Path(parts[8]).resolve()), []).append(parts[1])
+    return result
+
+
+def cwd_pids() -> dict[str, list[str]] | None:
+    """Map known harness cwd to PID; refuse reaping on incomplete Linux discovery."""
+    if not sys.platform.startswith("linux"):
+        return lsof_cwd_pids()
+    proc = PROC_ROOT
+    if not proc.is_dir():
+        return lsof_cwd_pids()
+    result: dict[str, list[str]] = {}
+    try:
+        entries = list(proc.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            cwd = os.readlink(entry / "cwd")
+        except FileNotFoundError:  # Process exited during enumeration.
+            continue
+        except OSError:
+            # hidepid/permission errors mean we cannot prove cwd uniqueness.
+            return None
+        if harness_process(entry.name):
+            result.setdefault(str(Path(cwd).resolve()), []).append(entry.name)
     return result
 
 
@@ -82,7 +124,7 @@ def harness_ok(pid: str) -> bool:
     _, command, _ = run(["ps", "-o", "command=", "-p", str(pid)])
     if not command:
         return False
-    if "MacOS/Craft Agents" in command and "Helper" not in command:
+    if ("MacOS/Craft Agents" in command or "Craft Agents" in command) and "Helper" not in command:
         return False
     return "pi-agent-server" in command or "claude-agent-sdk-binary/claude" in command
 
@@ -154,6 +196,13 @@ def main() -> int:
         target.setdefault(cwd, []).append(sid)
 
     pid_map = cwd_pids()
+    if pid_map is None:
+        print(json.dumps({"applied": bool(args.apply), "groups": [],
+                          "summary": {"groups": 0, "reapable": 0, "reaped": 0,
+                                      "blocked": 1, "deferred": 0},
+                          "refusal": "cwd PID discovery unavailable or incomplete"},
+                         ensure_ascii=False, indent=2))
+        return 0
     rows = []
     applied_groups = 0
     for cwd, session_ids in sorted(archived_by_cwd.items()):

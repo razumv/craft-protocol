@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Craft Protocol worker watchdog every 300 seconds
+
+[Timer]
+OnBootSec=300
+OnUnitActiveSec=300
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

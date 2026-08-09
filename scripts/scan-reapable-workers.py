@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/python3
+#!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 """
 Find worker sessions safe to terminate; optionally kill their leaked processes.
@@ -16,9 +16,11 @@ Default: JSON report. --reap: kill the resolved PID (guarded: never the app), th
 remove its PID file. Archiving the session is the AGENT's job (no external CLI).
 """
 import json, os, glob, re, subprocess, sys, time
+from pathlib import Path
 WS = os.path.expanduser("~/.craft-agent/workspaces/general")   # <WORKSPACE>
 SESS = os.path.join(WS, "sessions")
 PID_DIR = os.path.expanduser("~/.craft-agent/pids")
+PROC_ROOT = Path("/proc")
 IDLE_MIN = 10
 REAP = "--reap" in sys.argv
 ALL = "--all" in sys.argv        # system backstop only (launchd): reap across all projects
@@ -44,18 +46,57 @@ def harness_ok(pid):
     """SAFETY: only ever kill a real session harness — never the Craft app or unrelated procs."""
     _, cmd, _ = run(["ps", "-o", "command=", "-p", str(pid)])
     if not cmd: return False
-    if "MacOS/Craft Agents" in cmd and "Helper" not in cmd:  # the app itself
+    if ("MacOS/Craft Agents" in cmd or "Craft Agents" in cmd) and "Helper" not in cmd:  # the app itself
         return False
     return ("pi-agent-server" in cmd) or ("claude-agent-sdk-binary/claude" in cmd)
 
-def cwd_pid_map():
-    """PRIMARY: map harness cwd -> ALL PIDs; never hide shared-cwd collisions."""
-    _, out, _ = run(["lsof", "-a", "-d", "cwd"], t=30)
+def harness_process(pid):
+    """Identify a candidate harness without relying on a process-tree guess."""
+    if sys.platform.startswith("linux"):
+        try:
+            command = (PROC_ROOT / str(pid) / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="ignore")
+            name = (PROC_ROOT / str(pid) / "comm").read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return False
+        return name.strip() in ("bun", "claude") or "pi-agent-server" in command or "claude-agent-sdk-binary/claude" in command
+    _, command, _ = run(["ps", "-o", "command=", "-p", str(pid)])
+    return "pi-agent-server" in command or "claude-agent-sdk-binary/claude" in command
+
+def lsof_cwd_pid_map():
+    """Fallback for non-Linux hosts or systems without procfs."""
+    rc, out, _ = run(["lsof", "-a", "-d", "cwd"], t=30)
+    if rc != 0:
+        return None
     m = {}
     for ln in out.splitlines()[1:]:
         parts = ln.split(None, 8)
-        if len(parts) >= 9 and parts[0] in ("bun", "claude"):
-            m.setdefault(parts[8], []).append(parts[1])
+        if len(parts) >= 9 and harness_process(parts[1]):
+            m.setdefault(os.path.realpath(parts[8]), []).append(parts[1])
+    return m
+
+def cwd_pid_map():
+    """PRIMARY on Linux: exhaustive procfs cwd discovery, fail-closed if incomplete."""
+    if not sys.platform.startswith("linux"):
+        return lsof_cwd_pid_map()
+    proc = PROC_ROOT
+    if not proc.is_dir():
+        return lsof_cwd_pid_map()
+    m = {}
+    try:
+        entries = list(proc.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            cwd = os.readlink(entry / "cwd")
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return None
+        if harness_process(entry.name):
+            m.setdefault(os.path.realpath(cwd), []).append(entry.name)
     return m
 
 def pidfile_pid(sid):
@@ -137,6 +178,8 @@ def work_preserved(worktree):
 
 def resolve_pid(sid, wd, cwdmap, legacy):
     """cwd (primary, unique per worktree) -> pidfile -> legacy claude-resume."""
+    if cwdmap is None:
+        return None, "cwd-discovery-unavailable"
     wd = os.path.realpath(os.path.expanduser(wd or "")) if wd else ""
     pids = cwdmap.get(wd) or []
     if len(pids) == 1: return pids[0], "cwd"
