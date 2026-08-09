@@ -101,7 +101,7 @@ if (( APPLY )); then
   echo "Compiling Python scripts..."
   "$PYTHON" -m py_compile "$SCRIPTS"/*.py
   echo "Running regression tests against installed scripts..."
-  (cd "$ROOT/tests" && "$PYTHON" -m unittest -v \
+  (cd "$ROOT/tests" && CRAFT_TEST_SCRIPTS="$SCRIPTS" "$PYTHON" -m unittest -v \
     test_worker_reliability.py test_orchestration_v31.py test_self_healing_v311.py)
   echo "Running watchdog dry-run..."
   "$PYTHON" "$SCRIPTS/worker-watchdog.py"

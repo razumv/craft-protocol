@@ -316,8 +316,10 @@ def controller_claim(args):
 def controller_heartbeat(args):
     now = now_ms()
     with common.file_lock(LOCK):
+        if DISABLED.exists(): fail("self-healing kill switch is active")
         row = common.read_json(CONTROLLER) or {}
         if row.get("sessionId") != args.session: fail("controller owner mismatch")
+        if int(row.get("leaseExpiresAt") or 0) <= now: fail("controller lease expired")
         row.update(lastHeartbeatAt=now, leaseExpiresAt=now+args.ttl*1000)
         common.atomic_json(CONTROLLER, row)
     return row

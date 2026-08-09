@@ -40,8 +40,8 @@ jobs:
         run: |
           set -euo pipefail
           ! rg -n 'spawn_session|send_agent_message|archive_session|call_llm' scripts/worker-watchdog.py scripts/recovery-incident.py
-      - name: Run regression suite
+      - name: Run regression suite against installed payload
         working-directory: tests
-        run: python3 -m unittest -v test_worker_reliability.py test_orchestration_v31.py test_self_healing_v311.py
+        run: CRAFT_TEST_SCRIPTS="$HOME/.craft-agent/scripts" python3 -m unittest -v test_worker_reliability.py test_orchestration_v31.py test_self_healing_v311.py
       - name: Installer dry run
         run: ./install.sh

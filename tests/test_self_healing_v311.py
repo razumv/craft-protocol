@@ -4,7 +4,8 @@ import json, os, subprocess, tempfile, time, unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TOOL = ROOT / "scripts" / "recovery-incident.py"
+SCRIPTS = Path(os.environ.get("CRAFT_TEST_SCRIPTS", ROOT / "scripts"))
+TOOL = SCRIPTS / "recovery-incident.py"
 
 class SelfHealingV311Test(unittest.TestCase):
     def setUp(self):
@@ -145,9 +146,15 @@ class SelfHealingV311Test(unittest.TestCase):
         _,renewed=self.cli("controller-heartbeat","--session","c1")
         self.assertGreaterEqual(renewed["lastHeartbeatAt"],first["lastHeartbeatAt"])
         cp,_=self.cli("controller-claim","--session","c2",ok=False); self.assertNotEqual(cp.returncode,0)
-        self.cli("controller-release","--session","c1")
         self.runtime.mkdir(parents=True,exist_ok=True); (self.runtime/"self-healing.disabled").touch()
+        cp,_=self.cli("controller-heartbeat","--session","c1",ok=False); self.assertNotEqual(cp.returncode,0)
+        # Release is the sole fail-safe mutation allowed under the kill switch.
+        self.cli("controller-release","--session","c1")
         cp,_=self.cli("controller-claim","--session","c2",ok=False); self.assertNotEqual(cp.returncode,0)
+    def test_expired_controller_cannot_revive_but_can_release(self):
+        self.cli("controller-claim","--session","c1","--ttl","0")
+        cp,_=self.cli("controller-heartbeat","--session","c1",ok=False); self.assertNotEqual(cp.returncode,0)
+        self.cli("controller-release","--session","c1")
     def test_cwd_collision_is_critical(self):
         self.base(); self.manifest("worker"); self.lease(cwdCollision={"with":"w2"})
         _,d=self.cli("detect"); row=[x for x in d["observations"] if x["kind"]=="cwd-collision"][0]
