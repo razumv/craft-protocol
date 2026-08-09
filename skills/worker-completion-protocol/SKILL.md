@@ -3,7 +3,7 @@ name: worker-completion-protocol
 description: "Mandatory worker/auditor lifecycle: startup lease heartbeat, observable long jobs, git preservation, structured handoff, needs-review, and safe stop."
 ---
 
-# Worker Completion Protocol v3.2.0
+# Worker Completion Protocol v3.2.1
 
 You are a disposable worker or auditor. Your session owns exactly one work-unit attempt in a unique worktree. Silent stops are protocol failures. You run in `permissionMode: allow-all` even when your task is a read-only audit, because reporting/status updates require session tools.
 

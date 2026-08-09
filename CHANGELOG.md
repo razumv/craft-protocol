@@ -4,6 +4,22 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.2.1] — 2026-08-09
+
+### Fixed
+
+- scheduled recovery controllers self-register their exact harness PID, process start identity, and command fingerprint before incident work;
+- a later singleton controller can archive-first reap at most two prior terminal controller harnesses with PID-reuse, app-PID, non-harness, self-reap, live-session, and non-terminal hard refusals;
+- deterministic watchdog now reports controller-harness ownership and fails health when more than one active or one terminal-awaiting-reap harness exists, or identity is unknown/mismatched;
+- event-triggered terminal recovery remains disabled to prevent prompt-session storms; one scheduled controller owns automatic recovery;
+- v3.2.1 adds adversarial lifecycle tests for exact registration, app guard, PID reuse, archive-first order, self-reap refusal, and bounded process count.
+
+### Operational result
+
+- automatic incident consumption can be enabled without unbounded registered Pi harness growth;
+- the steady-state invariant is at most one active controller harness plus one terminal harness awaiting the next scheduled reap;
+- deterministic incident detection, owner-gate refusal, bounded actions, and v3.2.0 delivery-role separation remain unchanged.
+
 ## [3.2.0] — 2026-08-09
 
 ### Changed
@@ -72,7 +88,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.2.0...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.2.1...HEAD
+[3.2.1]: https://github.com/razumv/craft-protocol/compare/v3.2.0...v3.2.1
 [3.2.0]: https://github.com/razumv/craft-protocol/compare/v3.1.1...v3.2.0
 [3.1.1]: https://github.com/razumv/craft-protocol/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/razumv/craft-protocol/releases/tag/v3.1.0

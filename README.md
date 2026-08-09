@@ -1,10 +1,10 @@
-# Craft Agents Multi-Agent Orchestration Protocol v3.2.0 — Complete Standalone Guide
+# Craft Agents Multi-Agent Orchestration Protocol v3.2.1 — Complete Standalone Guide
 
 [![Protocol tests](https://github.com/razumv/craft-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/razumv/craft-protocol/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-**Snapshot:** 2026-08-09 15:51 Europe/Warsaw
+**Snapshot:** 2026-08-09 18:26 Europe/Warsaw
 **Audience:** operators and contributors building safer coordinator/worker/auditor control planes with Craft Agents.
 **Purpose:** deliver owner-requested product outcomes through autonomous project coordinators while preserving work, preventing split-brain, detecting stalls deterministically, gating irreversible actions, and using evidence as bounded acceptance rather than work for its own sake.
 
@@ -20,7 +20,7 @@ cd craft-protocol
 ./install.sh          # dry-run; no files changed
 ```
 
-Review the plan, then use `./install.sh --apply`. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. The v3.1.1 self-healing automations are additive and ship disabled; review [the self-healing guide](docs/SELF-HEALING-v3.1.1.md) and merge the template only after a report-only canary.
+Review the plan, then use `./install.sh --apply`. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. Self-healing automations ship disabled. Protocol v3.2.1 permits staged activation of the self-registering scheduled controller only; keep terminal-event prompts disabled. Review [the v3.2.1 harness lifecycle guide](docs/SELF-HEALING-v3.2.1.md) before canaries.
 
 ---
 
@@ -153,6 +153,7 @@ scripts/
   observable-job.py
   worker-watchdog.py
   post-archive-reaper.py
+  controller-harness.py
   scan-reapable-workers.py
   watchdog-cron.sh
   coordinator-kickoff.md
@@ -169,9 +170,11 @@ tests/
   test_orchestration_v320.py
   test_self_healing_v311.py
   test_delivery_mode_v320.py
+  test_controller_harness_v321.py
 docs/
   PROTOCOL-v3.1.md
   SELF-HEALING-v3.1.1.md
+  SELF-HEALING-v3.2.1.md
   DELIVERY-MODE-v3.2.0.md
   CURRENT-DEFAULTS.md
 tools/
@@ -883,7 +886,8 @@ python3 -m unittest -v \
   test_worker_reliability.py \
   test_orchestration_v320.py \
   test_self_healing_v311.py \
-  test_delivery_mode_v320.py
+  test_delivery_mode_v320.py \
+  test_controller_harness_v321.py
 ```
 
 Current packaged suite covers:

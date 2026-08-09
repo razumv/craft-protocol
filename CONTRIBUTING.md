@@ -44,7 +44,8 @@ find scripts -maxdepth 1 -type f -exec cp -p {} "$TMPHOME/.craft-agent/scripts/"
 chmod 700 "$TMPHOME/.craft-agent/scripts/"*.py "$TMPHOME/.craft-agent/scripts/"*.sh
 (cd tests && HOME="$TMPHOME" python3 -m unittest -v \
   test_worker_reliability.py test_orchestration_v320.py \
-  test_self_healing_v311.py test_delivery_mode_v320.py)
+  test_self_healing_v311.py test_delivery_mode_v320.py \
+  test_controller_harness_v321.py)
 rm -rf "$TMPHOME"
 ```
 

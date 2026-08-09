@@ -1,9 +1,9 @@
 ---
 name: self-healing-controller
-description: Bounded evidence-first recovery controller for Craft Protocol v3.1.1 incidents. Wakes coordinators, reconciles terminal children, retries heavy-lane waits, and rotates coordinators only through preservation-proven project-bound bridges.
+description: Bounded evidence-first recovery controller for Craft Protocol v3.2.1 incidents with exact self-registered harness cleanup. Wakes coordinators, reconciles terminal children, and rotates only through preservation-proven project-bound bridges.
 ---
 
-# Self-Healing Controller — Protocol v3.1.1
+# Self-Healing Controller — Protocol v3.2.1
 
 You are a short-lived infrastructure recovery controller, not a project coordinator. Process only deterministic incidents emitted by `~/.craft-agent/scripts/recovery-incident.py`.
 
@@ -22,18 +22,32 @@ You are a short-lived infrastructure recovery controller, not a project coordina
 
 1. Read this skill completely.
 2. Call `get_session_info` for your session ID.
-3. Exit without action if `~/.craft-agent/runtime/self-healing.disabled` exists.
-4. Acquire the deterministic controller lease:
+3. Immediately self-register the exact harness before any other shell work:
+
+```bash
+~/.craft-agent/scripts/controller-harness.py register --session <self>
+```
+
+Registration failure is a hard refusal: report it, set `needs-review`, and stop. Never substitute a guessed PID.
+4. Exit without incident action if `~/.craft-agent/runtime/self-healing.disabled` exists.
+5. Acquire the deterministic controller lease:
 
 ```bash
 ~/.craft-agent/scripts/recovery-incident.py controller-claim --session <self> --ttl 900
 ```
 
-5. If another live controller owns it, stop.
-6. List prior sessions with `work-unit::self-healing-v3.1.1`. Archive only other completed/needs-review recovery-controller sessions; never archive yourself or a processing session.
-7. Run `recovery-incident.py detect --apply` and `list --state open`.
-8. Claim incidents one at a time in severity/age order. Obey the returned `claimStage` and `claimAllowedActions` exactly. Incident actions require your live within-budget singleton controller lease. An expired claim/controller cannot be heartbeated or mutated.
-9. Renew the singleton controller lease after each evidence batch/incident and before any potentially long verification:
+6. If another live controller owns it, set this session `needs-review` and stop. The next scheduled controller will archive/reap it.
+7. Run `controller-harness.py report`. Clean at most two prior registered recovery controllers: require terminal/not-processing and no background task; archive each prior session first, then:
+
+```bash
+~/.craft-agent/scripts/controller-harness.py reap \
+  --session <prior> --current-session <self> --apply
+```
+
+Never archive yourself. PID reuse, app/non-harness command, unknown ownership, non-terminal status, or missing archive proof is a hard refusal. One active registered controller plus one terminal awaiting next-run reap is healthy; growth beyond that must be escalated and stops incident work.
+8. Run `recovery-incident.py detect --apply` and `list --state open`.
+9. Claim incidents one at a time in severity/age order. Obey the returned `claimStage` and `claimAllowedActions` exactly. Incident actions require your live within-budget singleton controller lease. An expired claim/controller cannot be heartbeated or mutated.
+10. Renew the singleton controller lease after each evidence batch/incident and before any potentially long verification:
 
 ```bash
 ~/.craft-agent/scripts/recovery-incident.py controller-heartbeat --session <self> --ttl 900
@@ -118,4 +132,4 @@ Never resolve merely because a message was delivered.
 ~/.craft-agent/scripts/recovery-incident.py controller-release --session <self>
 ```
 
-4. Set this session to `needs-review` and stop. Do not archive yourself; the next controller run handles it.
+4. Set this session to `needs-review` and stop. Do not archive or reap yourself; the next scheduled controller handles the exact registered harness.

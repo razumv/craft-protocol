@@ -2,6 +2,13 @@
 
 This roadmap is directional, not a promise of dates. Contributions are welcome through design Issues and pull requests.
 
+## Delivered in v3.2.1
+
+- exact recovery-controller harness self-registration;
+- archive-first next-run reap with PID-reuse and Craft app hard refusals;
+- deterministic bounded-count health invariant;
+- scheduled-only automatic recovery topology that avoids terminal-event session storms.
+
 ## Delivered in v3.2.0
 
 - strict separation between owner-facing infrastructure and autonomous project coordination;
