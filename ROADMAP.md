@@ -2,6 +2,13 @@
 
 This roadmap is directional, not a promise of dates. Contributions are welcome through design Issues and pull requests.
 
+## Delivered in v3.1.1
+
+- deterministic incident emission separated from bounded agentic recovery;
+- single-controller lease, cooldown, retry budget, and kill switch;
+- preservation-first terminal handoff reconciliation and heavy-lock retry semantics;
+- opt-in Craft Automation templates and adversarial incident tests.
+
 ## Near term
 
 - package and test a Linux/systemd-compatible watchdog backend;

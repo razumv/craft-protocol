@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 
-SCRIPTS = Path.home() / ".craft-agent/scripts"
+SCRIPTS = Path(os.environ.get("CRAFT_TEST_SCRIPTS", Path.home() / ".craft-agent/scripts"))
 
 
 class ReliabilityToolsTest(unittest.TestCase):

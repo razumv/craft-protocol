@@ -45,6 +45,30 @@ def load(project: str) -> dict[str, Any] | None:
     return common.read_json(path_for(project))
 
 
+def active_records() -> list[dict[str, Any]]:
+    return [value for path in sorted(REGISTRY.glob("*.json"))
+            if (value := common.read_json(path)) and value.get("state") in {"authoritative", "rotating", "hold", "needs-owner"}]
+
+
+def session_projects(session_id: str, exclude_project: str | None = None, include_pending: bool = False) -> list[str]:
+    projects = []
+    for row in active_records():
+        project = str(row.get("project") or "")
+        if exclude_project and project == exclude_project: continue
+        owns = row.get("coordinatorSessionId") == session_id
+        pending = include_pending and row.get("state") == "rotating" and row.get("successorSessionId") == session_id
+        if owns or pending: projects.append(project)
+    return sorted(set(projects))
+
+
+def refuse_cross_project(session_id: str, project: str, include_pending: bool = False) -> None:
+    conflicts = session_projects(session_id, exclude_project=project, include_pending=include_pending)
+    if conflicts:
+        print(json.dumps({"ok": False, "error": "cross-project-owner-refused", "sessionId": session_id,
+                          "requestedProject": project, "conflictingProjects": conflicts}, indent=2))
+        raise SystemExit(3)
+
+
 def save(value: dict[str, Any]) -> None:
     value["schemaVersion"] = SCHEMA
     value["updatedAt"] = common.now_ms()
@@ -77,6 +101,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
     project = clean_project(args.project)
     manifest = manifest_or_die(args.session)
     with common.file_lock(LOCK):
+        refuse_cross_project(args.session, project, include_pending=True)
         current = load(project)
         if current and current.get("state") in {"authoritative", "rotating", "hold", "needs-owner"}:
             owner = str(current.get("coordinatorSessionId") or "")
@@ -123,6 +148,7 @@ def cmd_renew(args: argparse.Namespace) -> int:
 def cmd_begin_transfer(args: argparse.Namespace) -> int:
     project = clean_project(args.project); manifest_or_die(args.successor)
     with common.file_lock(LOCK):
+        refuse_cross_project(args.successor, project, include_pending=True)
         value = require_owner(project, args.session)
         if value.get("state") == "rotating":
             if value.get("successorSessionId") == args.successor:
@@ -139,6 +165,7 @@ def cmd_begin_transfer(args: argparse.Namespace) -> int:
 def cmd_accept_transfer(args: argparse.Namespace) -> int:
     project = clean_project(args.project); manifest = manifest_or_die(args.session)
     with common.file_lock(LOCK):
+        refuse_cross_project(args.session, project, include_pending=True)
         value = load(project)
         if not value or value.get("state") != "rotating" or value.get("successorSessionId") != args.session:
             raise SystemExit("no matching open transfer")
@@ -176,10 +203,13 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
 
 def inspect_one(project: str) -> dict[str, Any]:
-    value = load(project) or {"project": clean_project(project), "state": "missing"}
+    project = clean_project(project)
+    value = load(project) or {"project": project, "state": "missing"}
     manifest = common.read_manifest(str(value.get("coordinatorSessionId") or ""))
     now = common.now_ms(); issues: list[str] = []
     if value.get("state") != "missing" and not common.session_live(manifest): issues.append("owner-not-live")
+    duplicates = session_projects(str(value.get("coordinatorSessionId") or ""), exclude_project=project)
+    if duplicates: issues.append("cross-project-owner:" + ",".join(duplicates))
     if value.get("state") != "hold" and value.get("leaseExpiresAt") is not None and now > int(value["leaseExpiresAt"]): issues.append("coordinator-lease-stale")
     if value.get("fallbackExpiresAt") is not None and now > int(value["fallbackExpiresAt"]): issues.append("fallback-ttl-expired")
     if manifest:
@@ -188,7 +218,8 @@ def inspect_one(project: str) -> dict[str, Any]:
         labels = set(manifest.get("labels") or [])
         for required in ("coordinators", "agent-role::coordinator"):
             if required not in labels: issues.append(f"missing-label:{required}")
-        if "protocol-version::3" not in labels: issues.append("missing-label:protocol-version::3")
+        if not any(label == "protocol-version::3" or label.startswith("protocol-version::3.") for label in labels):
+            issues.append("missing-label:protocol-version::3.x")
     return {"record": value, "issues": issues, "healthy": not issues}
 
 

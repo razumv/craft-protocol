@@ -29,14 +29,21 @@ jobs:
             head -n 3 "$file" | grep -q 'SPDX-License-Identifier: Apache-2.0'
           done
       - name: Install scripts into isolated home path
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p "$HOME/.craft-agent/scripts"
-          cp scripts/* "$HOME/.craft-agent/scripts/"
+          find scripts -maxdepth 1 -type f -exec cp {} "$HOME/.craft-agent/scripts/" \;
           chmod 700 "$HOME/.craft-agent/scripts/"*.py "$HOME/.craft-agent/scripts/"*.sh
-      - name: Compile
-        run: python3 -m py_compile scripts/*.py
-      - name: Run regression suite
+      - name: Compile installed payload
+        run: python3 -m py_compile "$HOME/.craft-agent/scripts/"*.py
+      - name: Verify deterministic watchdog boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! rg -n 'spawn_session|send_agent_message|archive_session|call_llm' "$HOME/.craft-agent/scripts/worker-watchdog.py" "$HOME/.craft-agent/scripts/recovery-incident.py"
+      - name: Run regression suite against installed payload
         working-directory: tests
-        run: python3 -m unittest -v test_worker_reliability.py test_orchestration_v31.py
+        run: CRAFT_TEST_SCRIPTS="$HOME/.craft-agent/scripts" python3 -m unittest -v test_worker_reliability.py test_orchestration_v31.py test_self_healing_v311.py
       - name: Installer dry run
         run: ./install.sh

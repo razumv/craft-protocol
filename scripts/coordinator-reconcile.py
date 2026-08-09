@@ -20,13 +20,15 @@ def report() -> dict:
     for path in sorted((common.RUNTIME / "coordinators").glob("*.json")):
         record = common.read_json(path) or {}; project = str(record.get("project") or path.stem)
         sid = str(record.get("coordinatorSessionId") or ""); m = common.read_manifest(sid); issues = []; warnings = []
-        desired = f"Coordinator {PROJECT_NAMES.get(project, project)} (Codex/Sol) — v3"
+        desired = f"Coordinator {PROJECT_NAMES.get(project, project)} (Codex/Sol) — v3.1.1"
         if not m: issues.append("manifest-missing")
         else:
             if m.get("name") != desired: warnings.append("canonical-name-drift")
             labels = set(m.get("labels") or [])
-            required = {"coordinators", "agent-role::coordinator", "protocol-version::3", f"project::{project}"}
+            required = {"coordinators", "agent-role::coordinator", f"project::{project}"}
             issues += [f"missing-label:{x}" for x in sorted(required-labels)]
+            if not any(label == "protocol-version::3" or label.startswith("protocol-version::3.") for label in labels):
+                issues.append("missing-label:protocol-version::3.x")
             if m.get("projectId") != record.get("projectId"): issues.append("native-project-binding-drift")
             if record.get("state") == "authoritative" and (m.get("llmConnection"), m.get("model")) != ("chatgpt-plus", "pi/gpt-5.6-sol"): issues.append("provider-policy-drift")
             token = m.get("tokenUsage") or {}; messages = int(m.get("messageCount") or 0); total = int(token.get("totalTokens") or 0)

@@ -1,8 +1,8 @@
-# Coordinator kickoff prompt (canonical v3.1)
+# Coordinator kickoff prompt (canonical v3.1.1)
 
 Use this for every new project coordinator. Replace `<PROJECT>`, `<PROJECT-SLUG>`, `<REPO>`, and `<GITHUB>`.
 
-Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonical name `Coordinator <PROJECT> (Codex/Sol) — v3`, and labels `coordinators`, `agent-role::coordinator`, `project::<PROJECT-SLUG>`, `protocol-version::3`. Workers/auditors: `chatgpt-plus`, `pi/gpt-5.6-terra`, medium. If the connection fails, preserve a handoff and re-spawn; a live session’s connection cannot change. A non-Codex fallback must record a reason, expires after 60 minutes by default, and must repatriate to one Codex successor when available.
+Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonical name `Coordinator <PROJECT> (Codex/Sol) — v3.1.1`, and labels `coordinators`, `agent-role::coordinator`, `project::<PROJECT-SLUG>`, `protocol-version::3.1.1`. Workers/auditors: `chatgpt-plus`, `pi/gpt-5.6-terra`, medium. If the connection fails, preserve a handoff and re-spawn; a live session’s connection cannot change. A non-Codex fallback must record a reason, expires after 60 minutes by default, and must repatriate to one Codex successor when available.
 
 ---
 
@@ -51,5 +51,6 @@ Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonica
 
 - При первом request-buffer/context error или complexity threshold подготовь recovery snapshot и выполни двухфазную ротацию (`begin-transfer` → successor `accept-transfer`). Для долгой работы учитывай PID + лог/receipt, а не словесное “still working”.
 - Простая merge/closure автоматизация разрешена только при валидном completion certificate: unchanged audited SHA, independent PASS, distinct immutable required-CI/readback IDs и zero unresolved gates.
+- Recovery-controller wake — это только сигнал выполнить renew/reconcile/adopt/snapshot. Он не является completion proof и не расширяет authority. После подтверждённого archive/reap terminal child slot-release можно продолжить лишь уже разрешённый next gate.
 
 Начни с `get_session_info`, чтения skill, ownership claim, cold-recovery reconstruction, синхронизации GitHub и reconciliation существующих children. Продолжай существующую работу, не перезапускай её без доказанной необходимости.

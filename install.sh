@@ -1,6 +1,6 @@
 #!/bin/zsh
 # SPDX-License-Identifier: Apache-2.0
-# Safe installer for Craft Agents orchestration protocol v3.1.
+# Safe installer for Craft Agents orchestration protocol v3.1.1.
 # Dry-run by default. Use --apply only after reviewing README.md.
 set -eu
 
@@ -23,15 +23,15 @@ SKILLS="$WORKSPACE/skills"
 RUNTIME="$CRAFT/runtime"
 LOGS="$CRAFT/logs"
 STAMP=$(date '+%Y%m%d-%H%M%S')
-BACKUP="$CRAFT/backups/orchestration-v3.1-$STAMP"
+BACKUP="$CRAFT/backups/orchestration-v3.1.1-$STAMP"
 PYTHON="${CRAFT_PYTHON:-/opt/homebrew/bin/python3}"
 [[ -x "$PYTHON" ]] || PYTHON=$(command -v python3)
 PLIST_NAME="com.craft-protocol.worker-watchdog.plist"
 
 files=(
   orchestration-common.py coordinator-registry.py coordinator-reconcile.py
-  owner-gate.py recovery-ledger.py completion-certificate.py worker-lease.py
-  observable-job.py worker-watchdog.py post-archive-reaper.py
+  owner-gate.py recovery-ledger.py completion-certificate.py recovery-incident.py
+  worker-lease.py observable-job.py worker-watchdog.py post-archive-reaper.py
   scan-reapable-workers.py watchdog-cron.sh coordinator-kickoff.md
 )
 
@@ -70,13 +70,16 @@ install_file "$ROOT/skills/coordinator-lifecycle-protocol/SKILL.md" \
   "$SKILLS/coordinator-lifecycle-protocol/SKILL.md"
 install_file "$ROOT/skills/worker-completion-protocol/SKILL.md" \
   "$SKILLS/worker-completion-protocol/SKILL.md"
+install_file "$ROOT/skills/self-healing-controller/SKILL.md" \
+  "$SKILLS/self-healing-controller/SKILL.md"
 
 PLIST_DST="$SCRIPTS/$PLIST_NAME"
 echo "RENDER $ROOT/config/launchd.watchdog.template.plist -> $PLIST_DST"
 if (( APPLY )); then
   mkdir -p "$SCRIPTS" "$RUNTIME/worker-leases" "$RUNTIME/worker-jobs" \
     "$RUNTIME/coordinators" "$RUNTIME/owner-gates" \
-    "$RUNTIME/recovery-ledger" "$RUNTIME/completion-certificates" "$LOGS"
+    "$RUNTIME/recovery-ledger" "$RUNTIME/completion-certificates" \
+    "$RUNTIME/recovery-incidents" "$RUNTIME/self-healing" "$LOGS"
   chmod 700 "$RUNTIME" "$LOGS" 2>/dev/null || true
   backup_existing "$PLIST_DST"
   sed "s|__HOME__|$HOME|g; s|__PYTHON__|$PYTHON|g" \
@@ -98,8 +101,8 @@ if (( APPLY )); then
   echo "Compiling Python scripts..."
   "$PYTHON" -m py_compile "$SCRIPTS"/*.py
   echo "Running regression tests against installed scripts..."
-  (cd "$ROOT/tests" && "$PYTHON" -m unittest -v \
-    test_worker_reliability.py test_orchestration_v31.py)
+  (cd "$ROOT/tests" && CRAFT_TEST_SCRIPTS="$SCRIPTS" "$PYTHON" -m unittest -v \
+    test_worker_reliability.py test_orchestration_v31.py test_self_healing_v311.py)
   echo "Running watchdog dry-run..."
   "$PYTHON" "$SCRIPTS/worker-watchdog.py"
   echo "Install complete. Review output before enabling launchd."

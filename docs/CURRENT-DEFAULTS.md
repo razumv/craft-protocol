@@ -1,4 +1,4 @@
-# Protocol v3.1 defaults
+# Protocol v3.1.1 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -65,6 +65,23 @@ Process type:                  Background
 Python default:                /opt/homebrew/bin/python3
 ```
 
+## Self-healing controller
+
+```text
+Public automation templates:   disabled
+Scheduled sweep:               every 15 minutes after canary
+Controller model:              pi/gpt-5.6-sol / medium / allow-all
+Concurrent controllers:        1
+Controller/claim TTL:          900 seconds
+Maximum controller wall time:  900 seconds; heartbeat cannot extend it
+Incident actions per turn:     3
+Archive/reaps per turn:        2
+Coordinator rotations/turn:    1
+Worker attempts/incident:      2, then owner escalation
+Coordinator recovery:          2 wake cycles + 1 bounded rotation, then escalation
+Kill-switch sentinel:          $HOME/.craft-agent/runtime/self-healing.disabled
+```
+
 ## Status IDs expected by the source workspace
 
 ```text
@@ -84,5 +101,7 @@ Recovery ledger:               1
 Completion certificates:       1
 Worker leases:                 1
 Observable job receipts:       1
+Recovery incidents:            1
+Recovery controller lease:     1
 Labels config:                 1
 ```

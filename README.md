@@ -1,10 +1,10 @@
-# Craft Agents Multi-Agent Orchestration Protocol v3.1 — Complete Standalone Guide
+# Craft Agents Multi-Agent Orchestration Protocol v3.1.1 — Complete Standalone Guide
 
 [![Protocol tests](https://github.com/razumv/craft-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/razumv/craft-protocol/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-**Snapshot:** 2026-08-08 23:05 Europe/Warsaw
+**Snapshot:** 2026-08-09 09:02 Europe/Warsaw
 **Audience:** operators and contributors building safer coordinator/worker/auditor control planes with Craft Agents.
 **Purpose:** preserve work, prevent split-brain, detect stalls deterministically, rotate coordinators safely, gate irreversible actions, and accept completion only from immutable evidence.
 
@@ -20,7 +20,7 @@ cd craft-protocol
 ./install.sh          # dry-run; no files changed
 ```
 
-Review the plan, then use `./install.sh --apply`. Merge `config/labels.config.json` manually rather than replacing an existing label configuration.
+Review the plan, then use `./install.sh --apply`. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. The v3.1.1 self-healing automations are additive and ship disabled; review [the self-healing guide](docs/SELF-HEALING-v3.1.1.md) and merge the template only after a report-only canary.
 
 ---
 
@@ -37,6 +37,9 @@ graph LR
     W2 --> L
     A --> L
     L --> D[Deterministic watchdog]
+    D --> I[Idempotent recovery incidents]
+    I --> H[Bounded recovery controller]
+    H --> C
     C --> R[Recovery ledger]
     A --> X[Completion certificate]
     X --> C
@@ -48,7 +51,8 @@ graph LR
 - **Coordinator:** persistent project/scope controller. Exactly one authoritative coordinator per scope.
 - **Worker:** disposable implementation attempt in a unique worktree.
 - **Auditor:** disposable skeptical, read-only attempt in its own unique worktree.
-- **Watchdog:** deterministic, non-LLM reconciliation. It detects drift and performs only preservation-safe cleanup.
+- **Watchdog:** deterministic, non-LLM reconciliation. It detects drift, emits idempotent incidents, and performs only preservation-safe cleanup.
+- **Recovery controller:** short-lived, bounded agentic session. It wakes/reconciles coordinators and may clean only fully preservation-proven terminal lanes; it never decides owner gates.
 
 ### Sources of truth
 
@@ -141,6 +145,7 @@ scripts/
   owner-gate.py
   recovery-ledger.py
   completion-certificate.py
+  recovery-incident.py
   worker-lease.py
   observable-job.py
   worker-watchdog.py
@@ -151,14 +156,18 @@ scripts/
 skills/
   coordinator-lifecycle-protocol/SKILL.md
   worker-completion-protocol/SKILL.md
+  self-healing-controller/SKILL.md
 config/
   labels.config.json
+  self-healing.automations.template.json
   launchd.watchdog.template.plist
 tests/
   test_worker_reliability.py
   test_orchestration_v31.py
+  test_self_healing_v311.py
 docs/
   PROTOCOL-v3.1.md
+  SELF-HEALING-v3.1.1.md
   CURRENT-DEFAULTS.md
 tools/
   generate-manifest.sh

@@ -6,6 +6,8 @@
 **Платформа реализации:** macOS + Craft Agents; Codex как основной provider, Claude как fallback.
 **Главный принцип:** **preserve before terminate**.
 
+> Patch extension `v3.1.1` adds opt-in deterministic recovery incidents and a bounded agentic controller without changing v3.1 runtime schemas or authority. See [SELF-HEALING-v3.1.1.md](SELF-HEALING-v3.1.1.md).
+
 ---
 
 ## 1. Какие проблемы решает протокол
