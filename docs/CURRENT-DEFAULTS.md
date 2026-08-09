@@ -73,6 +73,7 @@ Scheduled sweep:               every 15 minutes after canary
 Controller model:              pi/gpt-5.6-sol / medium / allow-all
 Concurrent controllers:        1
 Controller/claim TTL:          900 seconds
+Maximum controller wall time:  900 seconds; heartbeat cannot extend it
 Incident actions per turn:     3
 Archive/reaps per turn:        2
 Coordinator rotations/turn:    1

@@ -98,23 +98,26 @@ class SelfHealingV311Test(unittest.TestCase):
     def test_claim_cas(self):
         self.manifest("coord"); self.registry(leaseExpiresAt=self.now-1); self.cli("detect","--apply")
         _,rows=self.cli("list","--state","open"); iid=rows["incidents"][0]["incidentId"]
+        self.cli("controller-claim","--session","c1")
         self.cli("claim","--incident",iid,"--controller","c1")
         for controller in ("c1","c2"):
             cp,_=self.cli("claim","--incident",iid,"--controller",controller,ok=False); self.assertNotEqual(cp.returncode,0)
     def test_expired_claim_cannot_mutate_or_revive(self):
         self.manifest("coord"); self.registry(leaseExpiresAt=self.now-1); self.cli("detect","--apply")
         _,rows=self.cli("list","--state","open"); iid=rows["incidents"][0]["incidentId"]
+        self.cli("controller-claim","--session","c1")
         self.cli("claim","--incident",iid,"--controller","c1","--ttl","0")
         for command in (("heartbeat","--ttl","900"),("resolve","--evidence-kind","test","--evidence","no"),("defer","--reason","no"),("escalate","--reason","no"),("claim","--ttl","900")):
             cp,_=self.cli(command[0],"--incident",iid,"--controller","c1",*command[1:],ok=False)
             self.assertNotEqual(cp.returncode,0)
         self.cli("detect","--apply")
+        self.cli("controller-release","--session","c1"); self.cli("controller-claim","--session","c2")
         _,row=self.cli("claim","--incident",iid,"--controller","c2")
         self.assertEqual(row["state"],"claimed")
     def test_kill_switch_blocks_incident_heartbeat_and_mutation(self):
         self.manifest("coord"); self.registry(leaseExpiresAt=self.now-1); self.cli("detect","--apply")
         _,rows=self.cli("list","--state","open"); iid=rows["incidents"][0]["incidentId"]
-        self.cli("claim","--incident",iid,"--controller","c1")
+        self.cli("controller-claim","--session","c1"); self.cli("claim","--incident",iid,"--controller","c1")
         self.runtime.mkdir(parents=True,exist_ok=True); (self.runtime/"self-healing.disabled").touch()
         for command in (("heartbeat","--ttl","900"),("defer","--reason","no")):
             cp,_=self.cli(command[0],"--incident",iid,"--controller","c1",*command[1:],ok=False)
@@ -122,7 +125,7 @@ class SelfHealingV311Test(unittest.TestCase):
     def test_cooldown_and_mutation_owner_guard(self):
         self.manifest("coord"); self.registry(leaseExpiresAt=self.now-1); self.cli("detect","--apply")
         _,rows=self.cli("list","--state","open"); iid=rows["incidents"][0]["incidentId"]
-        self.cli("claim","--incident",iid,"--controller","c0")
+        self.cli("controller-claim","--session","c0"); self.cli("claim","--incident",iid,"--controller","c0")
         cp,_=self.cli("defer","--incident",iid,"--controller","wrong","--reason","wait",ok=False); self.assertNotEqual(cp.returncode,0)
         self.cli("defer","--incident",iid,"--controller","c0","--reason","wait","--cooldown","3600")
         cp,_=self.cli("claim","--incident",iid,"--controller","c1",ok=False); self.assertNotEqual(cp.returncode,0)
@@ -130,6 +133,7 @@ class SelfHealingV311Test(unittest.TestCase):
         self.manifest("coord"); self.registry(leaseExpiresAt=self.now-1); self.cli("detect","--apply")
         _,rows=self.cli("list","--state","open"); iid=rows["incidents"][0]["incidentId"]
         for controller,stage in (("c1","wake-1"),("c2","wake-2"),("c3","rotation")):
+            self.cli("controller-claim","--session",controller)
             _,row=self.cli("claim","--incident",iid,"--controller",controller)
             self.assertEqual(row["state"],"claimed"); self.assertEqual(row["claimStage"],stage)
             if stage.startswith("wake"):
@@ -138,7 +142,8 @@ class SelfHealingV311Test(unittest.TestCase):
                 self.assertNotIn("wake-coordinator",row["claimAllowedActions"])
                 self.assertIn("bridge-rotation-on-attempt-3",row["claimAllowedActions"])
             self.cli("defer","--incident",iid,"--controller",controller,"--reason","retry","--cooldown","0")
-            self.cli("detect","--apply")
+            self.cli("controller-release","--session",controller); self.cli("detect","--apply")
+        self.cli("controller-claim","--session","c4")
         _,row=self.cli("claim","--incident",iid,"--controller","c4")
         self.assertEqual(row["state"],"escalated"); self.assertEqual(row["recoveryAttempts"],3)
     def test_condition_cleared_resolves(self):
@@ -155,6 +160,14 @@ class SelfHealingV311Test(unittest.TestCase):
         # Release is the sole fail-safe mutation allowed under the kill switch.
         self.cli("controller-release","--session","c1")
         cp,_=self.cli("controller-claim","--session","c2",ok=False); self.assertNotEqual(cp.returncode,0)
+    def test_controller_max_runtime_blocks_incident_actions(self):
+        self.env["CRAFT_RECOVERY_CONTROLLER_MAX_RUNTIME_SECONDS"]="0"
+        self.manifest("coord"); self.registry(leaseExpiresAt=self.now-1); self.cli("detect","--apply")
+        _,rows=self.cli("list","--state","open"); iid=rows["incidents"][0]["incidentId"]
+        self.cli("controller-claim","--session","c1")
+        for command,args in (("controller-heartbeat",("--session","c1")),("claim",("--incident",iid,"--controller","c1"))):
+            cp,_=self.cli(command,*args,ok=False); self.assertNotEqual(cp.returncode,0)
+        self.cli("controller-release","--session","c1")
     def test_expired_controller_cannot_revive_but_can_release(self):
         self.cli("controller-claim","--session","c1","--ttl","0")
         for command in ("controller-heartbeat","controller-claim"):
@@ -163,8 +176,18 @@ class SelfHealingV311Test(unittest.TestCase):
         _,row=self.cli("controller-claim","--session","c1")
         self.assertEqual(row["sessionId"],"c1")
     def test_cwd_collision_is_critical(self):
-        self.base(); self.manifest("worker"); self.lease(cwdCollision={"with":"w2"})
+        self.base(); self.manifest("worker"); self.lease(cwdCollisionSessions=["worker","w2"])
         _,d=self.cli("detect"); row=[x for x in d["observations"] if x["kind"]=="cwd-collision"][0]
         self.assertEqual(row["severity"],"critical"); self.assertIn("hard-refusal",row["allowedActions"])
+    def test_reconcile_collision_emits_incidents(self):
+        self.base(); shared="/tmp/shared-cwd"
+        for sid in ("w1","w2"):
+            self.manifest(sid,cwd=shared,labels=["agent-role::worker","parent-session::coord"])
+            self.lease(sid,state="running",worktree=shared)
+        cp=subprocess.run([str(SCRIPTS/"worker-lease.py"),"reconcile","--apply"],env=self.env,text=True,capture_output=True)
+        self.assertEqual(cp.returncode,0,cp.stderr)
+        self.assertEqual(set((json.loads((self.runtime/"worker-leases/w1.json").read_text()))["cwdCollisionSessions"]),{"w1","w2"})
+        _,d=self.cli("detect"); rows=[x for x in d["observations"] if x["kind"]=="cwd-collision"]
+        self.assertEqual({x["sessionId"] for x in rows},{"w1","w2"})
 
 if __name__ == "__main__": unittest.main()

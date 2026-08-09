@@ -24,6 +24,7 @@ TRANSFER_STUCK_SECONDS = int(os.environ.get("CRAFT_TRANSFER_STUCK_SECONDS", "180
 CLAIM_TTL_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CLAIM_TTL_SECONDS", "900"))
 MAX_ATTEMPTS = int(os.environ.get("CRAFT_RECOVERY_MAX_ATTEMPTS", "2"))
 COORDINATOR_MAX_ATTEMPTS = int(os.environ.get("CRAFT_COORDINATOR_RECOVERY_MAX_ATTEMPTS", "3"))
+MAX_CONTROLLER_RUNTIME_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CONTROLLER_MAX_RUNTIME_SECONDS", "900"))
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 ACTION_MATRIX = {
     "coordinator-not-live": ["owner-escalation"],
@@ -169,8 +170,10 @@ def collect_observations():
             out.append(observation("project-mapping-conflict", "critical", parent_project, sid,
                 {"authoritativeParentProject": parent_project, "childLabelProject": explicit_project,
                  "parentSessionId": lease.get("parentSessionId"), "worktree": lease.get("worktree")}))
-        if lease.get("cwdCollision"):
-            out.append(observation("cwd-collision", "critical", project, sid, {**evidence, "cwdCollision": lease.get("cwdCollision")}))
+        collision_sessions = lease.get("cwdCollisionSessions") or lease.get("cwdCollision")
+        if collision_sessions:
+            out.append(observation("cwd-collision", "critical", project, sid,
+                {**evidence, "cwdCollisionSessions": collision_sessions}))
         if not ambiguous_parent and state == "handoff-ready" and role != "auditor" and lease.get("preservationState") not in {"pushed", "merged"}:
             out.append(observation("preservation-unknown", "high", project, sid, evidence))
 
@@ -260,8 +263,18 @@ def claim_actions(row, stage):
     if stage == "rotation": return ["preserve-snapshot", "bridge-rotation-on-attempt-3", "owner-escalation"]
     return row.get("allowedActions") or ["report-only"]
 
+def require_active_controller(controller):
+    now = now_ms()
+    active = common.read_json(CONTROLLER) or {}
+    if active.get("sessionId") != controller: fail("active controller owner mismatch")
+    if int(active.get("leaseExpiresAt") or 0) <= now: fail("controller lease expired")
+    deadline = int(active.get("maxRuntimeExpiresAt") or (int(active.get("claimedAt") or 0) + MAX_CONTROLLER_RUNTIME_SECONDS*1000))
+    if deadline <= now: fail("controller maximum runtime exceeded")
+    return active
+
 def require_claim(row, controller):
     if DISABLED.exists(): fail("self-healing kill switch is active")
+    require_active_controller(controller)
     if row.get("state") != "claimed" or row.get("claimOwner") != controller:
         fail("incident claim owner/state mismatch")
     if int(row.get("claimExpiresAt") or 0) <= now_ms(): fail("incident claim expired")
@@ -270,6 +283,7 @@ def claim(args):
     now = now_ms()
     def action(row):
         if DISABLED.exists(): fail("self-healing kill switch is active")
+        require_active_controller(args.controller)
         if row.get("state") == "claimed":
             if int(row.get("claimExpiresAt") or 0) <= now:
                 fail("incident claim expired; run deterministic detect --apply before reclaim")
@@ -335,8 +349,10 @@ def controller_claim(args):
             fail("controller already active; use controller-heartbeat, not reclaim")
         if row.get("sessionId") and expiry > now:
             fail(f"controller already active: {row.get('sessionId')}")
+        deadline = now + MAX_CONTROLLER_RUNTIME_SECONDS*1000
         row = {"schemaVersion": SCHEMA, "sessionId": args.session, "claimedAt": now,
-               "lastHeartbeatAt": now, "leaseExpiresAt": now+args.ttl*1000}
+               "lastHeartbeatAt": now, "maxRuntimeExpiresAt": deadline,
+               "leaseExpiresAt": min(now+args.ttl*1000, deadline)}
         common.atomic_json(CONTROLLER, row); return row
 
 def controller_heartbeat(args):
@@ -346,7 +362,10 @@ def controller_heartbeat(args):
         row = common.read_json(CONTROLLER) or {}
         if row.get("sessionId") != args.session: fail("controller owner mismatch")
         if int(row.get("leaseExpiresAt") or 0) <= now: fail("controller lease expired")
-        row.update(lastHeartbeatAt=now, leaseExpiresAt=now+args.ttl*1000)
+        deadline = int(row.get("maxRuntimeExpiresAt") or (int(row.get("claimedAt") or 0) + MAX_CONTROLLER_RUNTIME_SECONDS*1000))
+        if deadline <= now: fail("controller maximum runtime exceeded")
+        row.update(lastHeartbeatAt=now, maxRuntimeExpiresAt=deadline,
+                   leaseExpiresAt=min(now+args.ttl*1000, deadline))
         common.atomic_json(CONTROLLER, row)
     return row
 
