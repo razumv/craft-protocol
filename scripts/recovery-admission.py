@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import time
 from typing import Any
@@ -32,9 +33,14 @@ STATE = Path(os.environ.get("CRAFT_ADMISSION_STATE", RUNTIME / "self-healing/adm
 LOCK = Path(os.environ.get("CRAFT_ADMISSION_LOCK", RUNTIME / "self-healing/admission.lock")).expanduser()
 DISABLED = Path(os.environ.get("CRAFT_SELF_HEALING_DISABLED", RUNTIME / "self-healing.disabled")).expanduser()
 AUTOMATION_ID = os.environ.get("CRAFT_RECOVERY_NOTIFIER_AUTOMATION_ID", "a321-notifier")
+CONTROLLER_HARNESS = Path(os.environ.get("CRAFT_CONTROLLER_HARNESS", Path(__file__).with_name("controller-harness.py"))).expanduser()
 MAX_INCIDENTS = int(os.environ.get("CRAFT_RECOVERY_ADMISSION_MAX_INCIDENTS", "3"))
 ARM_TTL_SECONDS = int(os.environ.get("CRAFT_RECOVERY_ARM_TTL_SECONDS", "180"))
 COOLDOWN_SECONDS = int(os.environ.get("CRAFT_RECOVERY_ADMISSION_COOLDOWN_SECONDS", "900"))
+# No supported Craft pre-fire claim exists in the current public interface.
+# Synthetic support is test-only; production cannot be enabled by an env assertion.
+PREFIRE_CLAIM_SUPPORTED = (os.environ.get("CRAFT_TEST_MODE") == "1" and
+                           os.environ.get("CRAFT_SCHEDULER_PREFIRE_CLAIM_SUPPORTED") == "1")
 NOW_MS = lambda: int(os.environ.get("CRAFT_TEST_NOW_MS", "0")) or int(time.time() * 1000)
 BLOCKED_KINDS = {"owner-gate-blocked", "cwd-collision", "project-mapping-conflict", "ambiguous-coordinator-owner", "preservation-unknown"}
 WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "job-exit-unreported", "heavy-lock-wait"}
@@ -81,17 +87,38 @@ def require_persistent_controller(session_id: str) -> dict[str, Any]:
     if row.get("sessionStatus") in {"done", "cancelled", "error"}: raise ValueError("persistent controller is terminal")
     if label_value(row, "agent-role::") != "recovery-controller": raise ValueError("session is not recovery-controller")
     if label_value(row, "controller-mode::") != "persistent": raise ValueError("controller is not marked persistent")
+    try:
+        cp=subprocess.run([str(CONTROLLER_HARNESS),"report"],text=True,capture_output=True,timeout=10)
+        report=json.loads(cp.stdout); matches=[r for r in report.get("rows",[]) if r.get("sessionId")==session_id]
+    except Exception as exc: raise ValueError(f"controller harness proof unavailable: {exc}")
+    if cp.returncode or not report.get("healthy") or len(matches)!=1 or matches[0].get("state")!="active" or matches[0].get("sessionRole")!="recovery-controller":
+        raise ValueError("persistent controller harness is not uniquely live/proven")
     return row
 
 
+def live_scope_blocked(row: dict[str, Any], all_rows: list[dict[str, Any]]) -> bool:
+    project=row.get("project"); session=row.get("sessionId"); work_unit=row.get("workUnit")
+    registry=read_json(COORDINATORS/f"{project}.json") if project else None
+    if registry and registry.get("state") in {"hold","needs-owner"}: return True
+    for blocker in all_rows:
+        if blocker.get("state") not in {"open","claimed","deferred"} or blocker.get("kind") not in BLOCKED_KINDS: continue
+        same_scope=(session and blocker.get("sessionId")==session) or (project and blocker.get("project")==project)
+        if same_scope: return True
+    if project and work_unit:
+        for path in (RUNTIME/"owner-gates"/str(project)).glob("*.json"):
+            gate=read_json(path) or {}
+            if gate.get("state")=="open" and str(gate.get("workUnit") or "")==str(work_unit): return True
+    return False
+
+
 def incidents() -> list[dict[str, Any]]:
+    all_rows=[r for p in sorted(INCIDENTS.glob("*.json")) if (r:=read_json(p))]
     rows=[]
-    for path in sorted(INCIDENTS.glob("*.json")):
-        row=read_json(path)
-        if not row or row.get("state") != "open": continue
+    for row in all_rows:
+        if row.get("state") != "open": continue
         if row.get("kind") in BLOCKED_KINDS: continue
         if row.get("kind") not in WAKE_KINDS: continue
-        if not row.get("sessionId"): continue
+        if not row.get("sessionId") or live_scope_blocked(row,all_rows): continue
         rows.append(row)
     order={"critical":0,"high":1,"medium":2,"low":3,"info":4}
     rows.sort(key=lambda r:(order.get(str(r.get("severity")),9),int(r.get("firstSeenAt") or 0),str(r.get("incidentId"))))
@@ -145,6 +172,24 @@ def load_config() -> dict[str, Any]:
     return row
 
 
+def install_guard(args: argparse.Namespace) -> int:
+    template=read_json(Path(args.template).expanduser())
+    if not template: raise ValueError("automation template missing or invalid")
+    candidates=[r for r in template.get("automations",{}).get("SchedulerTick",[]) if r.get("id")==AUTOMATION_ID]
+    if len(candidates)!=1: raise ValueError("template must contain exactly one notifier")
+    config=read_json(CONFIG) or {"version":2,"automations":{}}
+    if config.get("version")!=2 or not isinstance(config.get("automations"),dict): raise ValueError("existing automations config invalid")
+    sched=config["automations"].setdefault("SchedulerTick",[]); matches=[r for r in sched if r.get("id")==AUTOMATION_ID]
+    if len(matches)>1: raise ValueError("duplicate recovery notifier automation id")
+    if not matches: sched.insert(0,json.loads(json.dumps(candidates[0])))
+    for rows in config["automations"].values():
+        if not isinstance(rows,list): continue
+        for row in rows:
+            if isinstance(row,dict) and row.get("id") in {AUTOMATION_ID,"a31101","a31102"}: row["enabled"]=False
+    if args.apply: atomic_json(CONFIG,config)
+    print(json.dumps({"schemaVersion":1,"applied":args.apply,"notifierCount":1,"legacyDisabled":True},indent=2)); return 0
+
+
 def set_matcher(*,enabled: bool, cron: str | None=None, prompt: str | None=None) -> None:
     config=load_config(); sched=config["automations"].setdefault("SchedulerTick",[])
     found=None
@@ -169,6 +214,10 @@ def next_minute(now_ms: int) -> dt.datetime:
 
 def reconcile_state(state: dict[str, Any] | None, now: int, apply: bool) -> tuple[dict[str, Any] | None,list[str]]:
     events=[]
+    if state and state.get("phase") == "prepared":
+        if apply: set_matcher(enabled=False)
+        state.update(phase="blocked",blockedAt=now,reason="incomplete-arm-transaction")
+        return state,["incomplete-arm-disabled"]
     if not state or state.get("phase") not in {"armed","notified"}: return state,events
     runs=[r for r in history_rows() if int(r.get("ts") or 0) >= int(state.get("armedAt") or 0)]
     if len(runs)>1:
@@ -210,6 +259,9 @@ def tick(args: argparse.Namespace) -> int:
         if DISABLED.exists() and not args.ignore_kill_switch:
             out={"schemaVersion":1,"applied":False,"state":{"phase":"idle"},"reason":"kill-switch-active","actionableCount":len(rows)}
             print(json.dumps(out,indent=2)); return 2
+        if args.apply and not PREFIRE_CLAIM_SUPPORTED:
+            out={"schemaVersion":1,"applied":False,"state":{"phase":"blocked"},"reason":"scheduler-prefire-claim-unsupported","actionableCount":len(rows)}
+            print(json.dumps(out,indent=2)); return 2
         require_persistent_controller(args.controller_session)
         fp=fingerprint(rows)
         old=state or {}
@@ -226,8 +278,29 @@ def tick(args: argparse.Namespace) -> int:
              "armedAt":now,"scheduledFor":int(when.timestamp()*1000),"armExpiresAt":int(when.timestamp()*1000)+ARM_TTL_SECONDS*1000,
              "historyBaseline":len(history_rows()),"lastFingerprint":fp,"cooldownUntil":now+COOLDOWN_SECONDS*1000}
         if args.apply:
-            set_matcher(enabled=True,cron=cron,prompt=prompt); atomic_json(STATE,new)
+            prepared={**new,"phase":"prepared","preparedAt":now}
+            atomic_json(STATE,prepared)
+            try:
+                set_matcher(enabled=True,cron=cron,prompt=prompt)
+                atomic_json(STATE,new)
+            except Exception:
+                try:set_matcher(enabled=False)
+                finally:raise
         print(json.dumps({"schemaVersion":1,"applied":args.apply,"state":new,"events":events},indent=2)); return 0
+
+
+def disarm(args: argparse.Namespace) -> int:
+    if not DISABLED.exists() and not args.force: raise ValueError("kill switch is not active; refusing unforced disarm")
+    now=NOW_MS(); LOCK.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    with LOCK.open("a+") as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        state=read_json(STATE) or {"schemaVersion":1,"phase":"idle"}
+        if args.apply:
+            set_matcher(enabled=False)
+            if state.get("phase") in {"armed","prepared"}:
+                state.update(phase="blocked",blockedAt=now,reason="kill-switch-disarm")
+            atomic_json(STATE,state)
+    print(json.dumps({"schemaVersion":1,"applied":args.apply,"state":state,"disabled":True},indent=2)); return 0
 
 
 def reset(args: argparse.Namespace) -> int:
@@ -244,6 +317,8 @@ def reset(args: argparse.Namespace) -> int:
 def main() -> int:
     p=argparse.ArgumentParser(description=__doc__); sub=p.add_subparsers(dest="command",required=True)
     q=sub.add_parser("report"); q.set_defaults(func=report)
+    q=sub.add_parser("install-guard"); q.add_argument("--template",required=True); q.add_argument("--apply",action="store_true"); q.set_defaults(func=install_guard)
+    q=sub.add_parser("disarm"); q.add_argument("--apply",action="store_true"); q.add_argument("--force",action="store_true"); q.set_defaults(func=disarm)
     q=sub.add_parser("tick"); q.add_argument("--controller-session",required=True); q.add_argument("--apply",action="store_true"); q.add_argument("--ignore-kill-switch",action="store_true",help=argparse.SUPPRESS); q.set_defaults(func=tick)
     q=sub.add_parser("reset"); q.add_argument("--apply",action="store_true"); q.add_argument("--force",action="store_true"); q.set_defaults(func=reset)
     args=p.parse_args()

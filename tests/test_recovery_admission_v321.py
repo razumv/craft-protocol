@@ -12,8 +12,12 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory(); self.root=Path(self.tmp.name)
         self.workspace=self.root/"workspace"; self.runtime=self.root/"runtime"; self.sessions=self.workspace/"sessions"
         self.config=self.workspace/"automations.json"; self.history=self.workspace/"automations-history.jsonl"
+        self.harness=self.root/"controller-harness.py"
+        self.harness.write_text('#!/bin/sh\necho \'{"healthy":true,"rows":[{"sessionId":"controller","sessionRole":"recovery-controller","state":"active"}]}\'\n')
+        self.harness.chmod(0o755)
         self.env={**os.environ,"CRAFT_WORKSPACE":str(self.workspace),"CRAFT_RUNTIME":str(self.runtime),
-          "CRAFT_SESSIONS":str(self.sessions),"CRAFT_TEST_NOW_MS":str(NOW),"CRAFT_RECOVERY_ARM_TTL_SECONDS":"60"}
+          "CRAFT_SESSIONS":str(self.sessions),"CRAFT_TEST_NOW_MS":str(NOW),"CRAFT_RECOVERY_ARM_TTL_SECONDS":"60",
+          "CRAFT_CONTROLLER_HARNESS":str(self.harness),"CRAFT_TEST_MODE":"1","CRAFT_SCHEDULER_PREFIRE_CLAIM_SUPPORTED":"1"}
         self.put(self.config,{"version":2,"automations":{"SchedulerTick":[{"id":"a321-notifier","enabled":False,"cron":"0 0 1 1 *","timezone":"UTC","labels":["agent-role::recovery-notifier"],"actions":[{"type":"prompt","prompt":"disabled"}]}]}})
         self.manifest("controller")
     def tearDown(self): self.tmp.cleanup()
@@ -38,6 +42,10 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         self.incident(); (self.runtime/"self-healing.disabled").parent.mkdir(parents=True,exist_ok=True); (self.runtime/"self-healing.disabled").touch()
         cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False)
         self.assertNotEqual(cp.returncode,0); self.assertEqual(row["reason"],"kill-switch-active"); self.assertFalse(self.matcher()["enabled"])
+    def test_unsupported_scheduler_prefire_claim_blocks_apply(self):
+        self.incident(); env={k:v for k,v in self.env.items() if k not in {"CRAFT_TEST_MODE","CRAFT_SCHEDULER_PREFIRE_CLAIM_SUPPORTED"}}
+        cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False,env=env)
+        self.assertEqual(row["reason"],"scheduler-prefire-claim-unsupported"); self.assertFalse(self.matcher()["enabled"])
     def test_no_incident_creates_no_session_trigger(self):
         _,row=self.cli("tick","--controller-session","controller","--apply")
         self.assertEqual(row["reason"],"no-actionable-incidents"); self.assertFalse(self.matcher()["enabled"])
@@ -71,6 +79,21 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         env={**self.env,"CRAFT_TEST_NOW_MS":str(NOW+121000)}
         cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False,env=env)
         self.assertEqual(row["state"]["reason"],"armed-window-expired-without-execution"); self.assertFalse(self.matcher()["enabled"])
+    def test_kill_switch_disarms_armed_matcher(self):
+        self.incident(); self.cli("tick","--controller-session","controller","--apply")
+        (self.runtime/"self-healing.disabled").touch()
+        _,row=self.cli("disarm","--apply"); self.assertEqual(row["state"]["reason"],"kill-switch-disarm"); self.assertFalse(self.matcher()["enabled"])
+    def test_prepared_transaction_is_disabled_and_blocked(self):
+        self.incident(); self.put(self.runtime/"self-healing/admission.json",{"phase":"prepared","armedAt":NOW})
+        config=json.loads(self.config.read_text()); config["automations"]["SchedulerTick"][0]["enabled"]=True; self.put(self.config,config)
+        cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False)
+        self.assertEqual(row["state"]["reason"],"incomplete-arm-transaction"); self.assertFalse(self.matcher()["enabled"])
+    def test_install_guard_upserts_notifier_and_disables_legacy(self):
+        self.put(self.config,{"version":2,"automations":{"SchedulerTick":[{"id":"a31101","enabled":True,"actions":[{"type":"prompt","prompt":"legacy"}]}]}})
+        template=self.root/"template.json"; self.put(template,{"version":2,"automations":{"SchedulerTick":[{"id":"a321-notifier","enabled":False,"actions":[{"type":"prompt","prompt":"disabled"}]}]}})
+        self.cli("install-guard","--template",str(template),"--apply")
+        rows=json.loads(self.config.read_text())["automations"]["SchedulerTick"]
+        self.assertEqual(sum(r.get("id")=="a321-notifier" for r in rows),1); self.assertTrue(all(not r.get("enabled",True) for r in rows))
     def test_duplicate_automation_id_refused(self):
         config=json.loads(self.config.read_text()); config["automations"]["SchedulerTick"].append(dict(config["automations"]["SchedulerTick"][0])); self.put(self.config,config); self.incident()
         cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False)

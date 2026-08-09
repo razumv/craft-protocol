@@ -93,7 +93,8 @@ Public automation templates:   disabled by default
 Legacy recurring prompts:      permanently disabled
 Admission supervisor:          deterministic, before any LLM session
 Admission interval:            300 seconds; report-only under kill switch
-Notifier schedule:             one exact admitted UTC minute only
+Production admission:          blocked; Craft pre-fire claim unsupported
+Notifier schedule:             disabled; synthetic exact-minute tests only
 Persistent controllers:        exactly 1 reusable session
 Notifier model:                pi/gpt-5.4-mini / allow-all
 Controller model:              pi/gpt-5.6-sol / high / allow-all

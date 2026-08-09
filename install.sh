@@ -91,6 +91,11 @@ if (( APPLY )); then
   sed "s|__HOME__|$HOME|g" "$ROOT/config/launchd.admission.template.plist" > "$ADMISSION_PLIST_DST"
   chmod 700 "$SCRIPTS"/*.py "$SCRIPTS"/*.sh
   chmod 600 "$PLIST_DST" "$ADMISSION_PLIST_DST"
+  backup_existing "$WORKSPACE/automations.json"
+  "$PYTHON" "$SCRIPTS/recovery-admission.py" install-guard \
+    --template "$ROOT/config/self-healing.automations.template.json" --apply
+  : > "$RUNTIME/self-healing.disabled"
+  chmod 600 "$RUNTIME/self-healing.disabled"
 fi
 
 echo

@@ -13,6 +13,7 @@ LOG="$CRAFT_HOME/logs/recovery-admission.log"
 mkdir -p "${LOG:h}" "$RUNTIME/self-healing"
 
 if [[ -e "$RUNTIME/self-healing.disabled" ]]; then
+  "$PYTHON" "$SCRIPT" disarm --apply >> "$LOG" 2>&1
   "$PYTHON" "$SCRIPT" report >> "$LOG" 2>&1
   exit $?
 fi

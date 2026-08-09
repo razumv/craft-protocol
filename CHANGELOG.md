@@ -17,8 +17,10 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ### Operational result
 
-- healthy steady state uses exactly one persistent recovery controller and creates zero recurring controller sessions;
-- the notifier matcher is disabled except for one deterministically admitted UTC minute and is disabled again after one durable history receipt;
+- healthy report-only state uses exactly one persistent recovery controller and creates zero recurring controller sessions;
+- current Craft builds remain hard-blocked from arming the notifier because no supported scheduler pre-fire idempotency claim exists;
+- install/upgrade neutralizes legacy recovery prompts, restores the kill switch, and installs exactly one disabled notifier;
+- prepared/armed transaction recovery, kill-switch disarm, and notifier lifecycle mechanics are tested for future supported integration;
 - any duplicate/missed execution or cleanup ambiguity blocks rollout and preserves the kill switch;
 - deterministic incident detection, owner-gate refusal, bounded actions, and v3.2.0 delivery-role separation remain unchanged.
 

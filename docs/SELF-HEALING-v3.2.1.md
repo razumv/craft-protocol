@@ -14,7 +14,7 @@ graph LR
   P --> R[Archive-first notifier cleanup]
 ```
 
-A recurring recovery controller is permanently disabled. The only scheduler prompt is a disabled notifier template. `recovery-admission.py` atomically enables it for one exact UTC minute only after deterministic admission.
+A recurring recovery controller is permanently disabled. The only scheduler prompt is a disabled notifier template. On the current Craft public interface, `recovery-admission.py` **cannot arm it** because Craft exposes no supported pre-fire idempotency claim. This is an intentional production hard refusal, not an operator-togglable flag.
 
 ## Admission rules
 
@@ -34,7 +34,9 @@ The supervisor writes mode-0600 atomic state with the incident IDs, evidence fin
 
 Craft hot-reloads the documented `automations.json` workspace configuration and appends durable execution receipts to `automations-history.jsonl`.
 
-On the next supervisor tick:
+The prepared/armed transaction and receipt reconciler are covered synthetically for future integration. Before enabling the matcher, a durable `prepared` journal is written; incomplete transactions synchronously disable the matcher and block. The kill-switch path acquires the admission lock and disables any prepared/armed matcher.
+
+Once Craft provides a supported pre-fire claim, the next supervisor tick will reconcile:
 
 - **one receipt:** disable the matcher and record the notifier session ID;
 - **zero receipts after expiry:** disable and enter `blocked`;
@@ -76,11 +78,11 @@ recovery-admission.py reset --apply
 3. Keep `self-healing.disabled` present during report-only canaries.
 4. Observe at least two real 15-minute intervals with zero new sessions.
 5. Create and label exactly one persistent controller.
-6. Remove the kill switch only for one admitted no-op notifier canary.
-7. Require exactly one notifier receipt/session, exactly one controller delivery, archive-before-reap, and zero notifier process/receipt residue.
-8. Run one exact stale-coordinator wake canary and verify lease/evidence renewal without project mutation.
-9. Repeat for two intervals with persistent-controller count exactly one and no session/process growth.
-10. Any missed/duplicate execution or cleanup ambiguity restores the kill switch and blocks rollout.
+6. **Current stop:** keep the kill switch present and the PR draft. Production `tick --apply` returns `scheduler-prefire-claim-unsupported`.
+7. Upgrade Craft only when a documented pre-fire idempotency claim or supported addressable persistent-session API exists; do not infer support from package internals.
+8. Then implement/prove that capability and run one admitted no-op notifier canary.
+9. Require exactly one notifier receipt/session, exactly one controller delivery, archive-before-reap, and zero notifier process/receipt residue.
+10. Run one exact stale-coordinator wake canary, then two intervals with no session/process growth. Any missed/duplicate execution blocks rollout.
 
 ## Retained boundaries
 
