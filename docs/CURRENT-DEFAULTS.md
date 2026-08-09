@@ -93,10 +93,15 @@ Public automation templates:   disabled by default
 Legacy recurring prompts:      permanently disabled
 Admission supervisor:          deterministic, before any LLM session
 Admission interval:            300 seconds; report-only under kill switch
-Production admission:          blocked; Craft pre-fire claim unsupported
-Notifier schedule:             disabled; synthetic exact-minute tests only
+Production admission:          direct delivery only on exact configured runtime identity
+Direct capability:             available=true, version=1, automations:admissionDeliver
+Expected runtime version:      required deployment configuration; no package default
+Expected runtime commit:       required deployment configuration; no package default
+Runtime identity source:       automations:admissionCapabilities; never system:versions
+Workspace ID:                  required deployment configuration; no package default
+Server token:                  CRAFT_SERVER_TOKEN or owner-only CRAFT_SERVER_TOKEN_FILE
+Notifier schedule:             permanently disabled legacy guard; never armed by direct admission
 Persistent controllers:        exactly 1 reusable session
-Notifier model:                pi/gpt-5.4-mini / allow-all
 Controller model:              pi/gpt-5.6-sol / high / allow-all
 Controller/claim TTL:          900 seconds
 Maximum controller wall time:  900 seconds; heartbeat cannot extend it
@@ -132,6 +137,6 @@ Worker leases:                 1
 Observable job receipts:       1
 Recovery incidents:            1
 Recovery controller lease:     1
-Recovery admission receipt:    1
+Recovery admission receipt:    2 (prepared/direct-delivery receipt)
 Labels config:                 1
 ```

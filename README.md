@@ -20,7 +20,7 @@ cd craft-protocol
 ./install.sh          # dry-run; no files changed
 ```
 
-Review the plan, then use `./install.sh --apply`. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. Self-healing automations ship disabled. Protocol v3.2.1 permanently disables recurring controller prompts and adds deterministic pre-session admission mechanics backed by one persistent recovery controller. **Current Craft builds remain report-only:** no supported scheduler pre-fire idempotency claim exists, so production arming fails closed. Keep the kill switch present and review [the v3.2.1 admission guide](docs/SELF-HEALING-v3.2.1.md).
+Review the plan, then use `./install.sh --apply`. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. Self-healing scheduler automations ship permanently disabled. Protocol v3.2.1 can deliver one deterministic incident message directly to one persistent recovery controller only when authenticated `automations:admissionCapabilities` exactly matches the deployment's runtime version and runtime commit and advertises `automations:admissionDeliver`; unsupported or older Craft remains report-only/fail-closed. Keep the kill switch present until the explicit workspace ID, expected runtime version/commit, and owner-only server token are configured; review [the v3.2.1 admission guide](docs/SELF-HEALING-v3.2.1.md).
 
 ---
 

@@ -4,7 +4,7 @@
     "SchedulerTick": [
       {
         "id": "a321-notifier",
-        "name": "Protocol v3.2.1 admitted recovery notifier",
+        "name": "Protocol v3.2.1 legacy recovery notifier (permanently disabled)",
         "enabled": false,
         "cron": "0 0 1 1 *",
         "timezone": "UTC",
@@ -20,7 +20,7 @@
             "type": "prompt",
             "llmConnection": "chatgpt-plus",
             "model": "pi/gpt-5.4-mini",
-            "prompt": "DISABLED TEMPLATE. recovery-admission.py replaces this prompt only after deterministic pre-session admission."
+            "prompt": "DISABLED LEGACY TEMPLATE. Direct recovery admission delivery never enables SchedulerTick prompts."
           }
         ]
       },

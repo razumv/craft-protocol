@@ -8,13 +8,12 @@ Protocol v3.2.1 addresses a live defect in v3.1.1: every recurring recovery `Pro
 graph LR
   W[Deterministic watchdog] --> A[recovery-admission.py]
   A -->|no actionable incident| N[No LLM session]
-  A -->|one admitted batch| S[Exact-minute notifier]
-  S --> P[One persistent recovery controller]
+  A -->|version + capability verified| D[Authenticated direct delivery]
+  D --> P[One persistent recovery controller]
   P --> C[Exact coordinator wake/reconcile]
-  P --> R[Archive-first notifier cleanup]
 ```
 
-A recurring recovery controller is permanently disabled. The only scheduler prompt is a disabled notifier template. On the current Craft public interface, `recovery-admission.py` **cannot arm it** because Craft exposes no supported pre-fire idempotency claim. This is an intentional production hard refusal, not an operator-togglable flag.
+A recurring recovery controller is permanently disabled. The scheduler notifier remains a disabled legacy installation guard and is never armed by direct admission. Production delivery is available only through Craft's authenticated `automations:admissionDeliver` capability when its `automations:admissionCapabilities` response exactly matches the deployment's configured runtime version and runtime commit; every other server remains report-only/fail-closed.
 
 ## Admission rules
 
@@ -26,32 +25,22 @@ An incident batch is admitted only when all conditions hold:
 4. the configured persistent controller exists, is live, and has both `agent-role::recovery-controller` and `controller-mode::persistent`;
 5. no prior admission is armed, notified, or blocked;
 6. the incident fingerprint is outside cooldown;
-7. exactly one `a321-notifier` matcher exists and contains exactly one prompt action.
+7. `automation capabilities` (the `automations:admissionCapabilities` response) reports `available: true`, `version: 1`, `deliverChannel: "automations:admissionDeliver"`, and exact configured `runtimeVersion` and `runtimeCommit`; `system:versions` is not a runtime identity source;
+8. an explicit workspace ID is configured and the owner-only server token is available from `CRAFT_SERVER_TOKEN` or `CRAFT_SERVER_TOKEN_FILE`.
 
-The supervisor writes mode-0600 atomic state with the incident IDs, evidence fingerprint, controller session, scheduled minute, expiry, and history baseline. It never writes session JSONL/databases, discovers private RPC tokens, sends messages, spawns sessions, or kills processes.
+The supervisor writes mode-0600 atomic prepared state with the incident IDs, evidence fingerprint, controller session, deterministic delivery scope, and cooldown before calling Craft. It never writes session JSONL/databases, creates notifier sessions, enables/mutates a scheduler matcher on the direct path, or kills processes.
 
 ## One-shot execution proof
 
-Craft hot-reloads the documented `automations.json` workspace configuration and appends durable execution receipts to `automations-history.jsonl`.
+Before the delivery RPC, a durable `prepared` journal is written with a scope derived solely from the deterministic incident fingerprint. The request uses the same workspace, controller, matcher, action, occurrence, key, and message on every replay. If the process crashes before, during, or after the RPC, retrying returns Craft's original receipt through `duplicate`; only `delivered`, `queued`, or `duplicate` with a nonempty `messageId` moves state to `notified`. `busy` returns exit 75 and retains `prepared`; `blocked`, invalid replies, version mismatch, or missing capability enter a hard blocked state.
 
-The prepared/armed transaction and receipt reconciler are covered synthetically for future integration. Before enabling the matcher, a durable `prepared` journal is written; incomplete transactions synchronously disable the matcher and block. The kill-switch path acquires the admission lock and disables any prepared/armed matcher.
-
-Once Craft provides a supported pre-fire claim, the next supervisor tick will reconcile:
-
-- **one receipt:** disable the matcher and record the notifier session ID;
-- **zero receipts after expiry:** disable and enter `blocked`;
-- **more than one receipt:** disable and enter `blocked`;
-- **ambiguous/invalid config:** fail closed without arming.
-
-The exact cron includes minute, hour, day, and month in UTC. Even if disable reconciliation is delayed, it cannot match again during the year.
+The persisted success receipt contains the direct `messageId` and a null `notifierSessionId`. No SchedulerTick prompt, notifier execution history, or notifier cleanup exists on this path.
 
 ## Persistent controller and notifier
 
-The notifier is infrastructure transport only. Its first action registers its exact harness PID/start-token/command hash with `controller-harness.py`; registration failure stops before delivery. It then sends one admitted fingerprint, its own session ID, and incident-ID set to the one persistent controller, then stops. It must not inspect projects, claim incidents, contact coordinators, or spawn sessions.
+The direct-delivery target is the one existing persistent controller. Its session manifest and harness proof remain mandatory before delivery. No notifier is created, so no notifier harness registration, session mutation, archive, or reaping is authorized.
 
-Healthy transient bounds permit exactly one active persistent controller plus at most one active or terminal-awaiting-reap notifier. Duplicate controllers, duplicate notifiers, or more than one terminal recovery receipt fail health.
-
-The persistent controller applies only ledger-authorized recovery. It does not replace project coordinators or report routine status. It archives each notifier before exact guarded harness reaping. If archive/preservation/process identity cannot be proven, cleanup fails closed.
+The persistent controller applies only ledger-authorized recovery. It does not replace project coordinators or report routine status. Existing controller-harness PID/start-token/command-hash and archive-first preservation guards remain authoritative for any unrelated legacy cleanup.
 
 `controller-harness.py` retains PID/start-token/command-hash, app, PID-reuse, caller-binding, and tri-state process guards. No app restart/termination, PID guessing, SIGKILL, cwd inference, or private session mutation is permitted.
 
@@ -64,8 +53,10 @@ recovery-admission.py report
 # Dry-run admission decision
 recovery-admission.py tick --controller-session <persistent-session>
 
-# Production tick; kill switch must be absent
-recovery-admission.py tick --controller-session <persistent-session> --apply
+# Production tick; kill switch must be absent. These values have no package defaults.
+recovery-admission.py tick --controller-session <persistent-session> \\
+  --workspace-id <Craft-workspace-id> --expected-runtime-version <runtimeVersion> \\
+  --expected-runtime-commit <runtimeCommit> --apply
 
 # Owner/operator-reviewed recovery from blocked/notified state
 recovery-admission.py reset --apply
@@ -78,11 +69,9 @@ recovery-admission.py reset --apply
 3. Keep `self-healing.disabled` present during report-only canaries.
 4. Observe at least two real 15-minute intervals with zero new sessions.
 5. Create and label exactly one persistent controller.
-6. **Current stop:** keep the kill switch present and the PR draft. Production `tick --apply` returns `scheduler-prefire-claim-unsupported`.
-7. Upgrade Craft only when a documented pre-fire idempotency claim or supported addressable persistent-session API exists; do not infer support from package internals.
-8. Then implement/prove that capability and run one admitted no-op notifier canary.
-9. Require exactly one notifier receipt/session, exactly one controller delivery, archive-before-reap, and zero notifier process/receipt residue.
-10. Run one exact stale-coordinator wake canary, then two intervals with no session/process growth. Any missed/duplicate execution blocks rollout.
+6. Configure `sessionId`, `workspaceId`, `expectedRuntimeVersion`, and `expectedRuntimeCommit` in `$CRAFT_HOME/runtime/self-healing/persistent-controller.json`; optionally configure `serverUrl` there. Set `CRAFT_SERVER_TOKEN` in the service environment or write an owner-only (mode 0600) token file at `~/.config/craft-agent-headless/server-token`.
+7. Remove the kill switch only when authenticated `craft-cli automation capabilities` reports the accepted direct channel and exact configured `runtimeVersion` and `runtimeCommit`. Do not use `craft-cli versions` for this decision and do not infer support from package internals.
+8. Run one admitted stale-coordinator canary. Require one direct `messageId`, zero notifier sessions, and no session/process growth over two following intervals. Any busy retry is idempotent; any blocked/capability failure restores hard refusal.
 
 ## Retained boundaries
 

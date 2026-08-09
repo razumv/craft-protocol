@@ -1,116 +1,300 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
-import json, os, subprocess, sys, tempfile, unittest
+import json
+import os
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
 
-ROOT=Path(__file__).resolve().parents[1]
-TOOL=Path(os.environ.get("CRAFT_TEST_SCRIPTS",ROOT/"scripts"))/"recovery-admission.py"
-NOW=1786298100000
+ROOT = Path(__file__).resolve().parents[1]
+TOOL = Path(os.environ.get("CRAFT_TEST_SCRIPTS", ROOT / "scripts")) / "recovery-admission.py"
+NOW = 1786298100000
+TOKEN = "never-print-this-test-token"
+
+FAKE_CLI = r'''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+state_path = Path(sys.argv[1])
+args = sys.argv[2:]
+state = json.loads(state_path.read_text())
+state.setdefault("records", []).append(args)
+state["tokenMatched"] = state.get("tokenMatched", True) and os.environ.get("CRAFT_SERVER_TOKEN") == state["expectedToken"]
+state["serverUrl"] = os.environ.get("CRAFT_SERVER_URL")
+def save(): state_path.write_text(json.dumps(state))
+def output(value): save(); print(json.dumps(value)); raise SystemExit(0)
+if args == ["automation", "capabilities"]:
+    output(state["capabilities"])
+if args[:2] == ["automation", "deliver"]:
+    fields = {args[index]: args[index + 1] for index in range(2, len(args) - 1, 2) if args[index].startswith("--")}
+    scope = "|".join(fields[name] for name in ("--workspace", "--session", "--matcher", "--action", "--occurrence", "--key"))
+    state.setdefault("deliveryScopes", []).append(scope)
+    if state.get("busyOnce") and not state.get("busySeen"):
+        state["busySeen"] = True
+        output({"status": "busy", "messageId": ""})
+    if state.get("blocked"):
+        output({"status": "blocked", "messageId": ""})
+    if state.get("error"):
+        output({"status": "error", "messageId": ""})
+    receipt = state.setdefault("receipts", {}).get(scope)
+    if receipt:
+        output({"status": "duplicate", "messageId": receipt})
+    receipt = "msg-" + str(len(state["receipts"]) + 1)
+    state["receipts"][scope] = receipt
+    if state.get("crashAfterReceipt") and not state.get("crashed"):
+        state["crashed"] = True
+        save()
+        raise SystemExit(9)
+    output({"status": "delivered", "messageId": receipt})
+save()
+print(json.dumps({"status": "error"}))
+raise SystemExit(2)
+'''
+
 
 class RecoveryAdmissionV321Test(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory(); self.root=Path(self.tmp.name)
-        self.workspace=self.root/"workspace"; self.runtime=self.root/"runtime"; self.sessions=self.workspace/"sessions"
-        self.config=self.workspace/"automations.json"; self.history=self.workspace/"automations-history.jsonl"
-        self.harness=self.root/"controller-harness.py"
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.workspace = self.root / "workspace"
+        self.runtime = self.root / "runtime"
+        self.sessions = self.workspace / "sessions"
+        self.config = self.workspace / "automations.json"
+        self.harness = self.root / "controller-harness.py"
         self.harness.write_text('#!/bin/sh\necho \'{"healthy":true,"rows":[{"sessionId":"controller","sessionRole":"recovery-controller","state":"active"}]}\'\n')
         self.harness.chmod(0o755)
-        self.env={**os.environ,"CRAFT_WORKSPACE":str(self.workspace),"CRAFT_RUNTIME":str(self.runtime),
-          "CRAFT_SESSIONS":str(self.sessions),"CRAFT_TEST_NOW_MS":str(NOW),"CRAFT_RECOVERY_ARM_TTL_SECONDS":"60",
-          "CRAFT_CONTROLLER_HARNESS":str(self.harness),"CRAFT_TEST_INJECT_PREFIRE":"1"}
-        self.put(self.config,{"version":2,"automations":{"SchedulerTick":[{"id":"a321-notifier","enabled":False,"cron":"0 0 1 1 *","timezone":"UTC","labels":["agent-role::recovery-notifier"],"actions":[{"type":"prompt","prompt":"disabled"}]}]}})
+        self.fake_cli = self.root / "fake-craft-cli.py"
+        self.fake_cli.write_text(FAKE_CLI)
+        self.fake_cli.chmod(0o755)
+        self.fake_state = self.root / "fake-cli-state.json"
+        self.put(self.fake_state, {"expectedToken": TOKEN,
+                                  "capabilities": {"available": True, "version": 1, "deliverChannel": "automations:admissionDeliver",
+                                                   "runtimeVersion": "2026.8.10", "runtimeCommit": "runtime-commit-1"}})
+        self.env = {**os.environ, "CRAFT_WORKSPACE": str(self.workspace), "CRAFT_RUNTIME": str(self.runtime),
+                    "CRAFT_SESSIONS": str(self.sessions), "CRAFT_TEST_NOW_MS": str(NOW),
+                    "CRAFT_CONTROLLER_HARNESS": str(self.harness), "CRAFT_RPC_CLI": f"{sys.executable} {self.fake_cli} {self.fake_state}",
+                    "CRAFT_SERVER_TOKEN": TOKEN, "CRAFT_SERVER_URL": "https://craft.example.test",
+                    "CRAFT_WORKSPACE_ID": "workspace-7", "CRAFT_EXPECTED_RUNTIME_VERSION": "2026.8.10",
+                    "CRAFT_EXPECTED_RUNTIME_COMMIT": "runtime-commit-1"}
+        self.put(self.config, {"version": 2, "automations": {"SchedulerTick": [{"id": "a321-notifier", "enabled": False,
+                 "actions": [{"type": "prompt", "prompt": "disabled"}]}]}})
         self.manifest("controller")
-    def tearDown(self): self.tmp.cleanup()
-    def put(self,path,value): path.parent.mkdir(parents=True,exist_ok=True); path.write_text(json.dumps(value)+"\n")
-    def manifest(self,sid,role="recovery-controller",mode="persistent",archived=False,status="todo"):
-        labels=[f"agent-role::{role}"]
-        if mode: labels.append(f"controller-mode::{mode}")
-        self.put(self.sessions/sid/"session.jsonl",{"id":sid,"labels":labels,"isArchived":archived,"sessionStatus":status})
-    def incident(self,iid="i1",kind="coordinator-lease-stale",state="open",session="coord"):
-        self.put(self.runtime/"recovery-incidents"/f"{iid}.json",{"incidentId":iid,"kind":kind,"state":state,"sessionId":session,"severity":"high","firstSeenAt":1,"evidenceFingerprint":"ef"+iid})
-    def cli(self,*args,ok=True,env=None):
-        run_env=env or self.env
-        if run_env.get("CRAFT_TEST_INJECT_PREFIRE")=="1":
-            wrapper=("import importlib.util,sys; p=sys.argv[1]; spec=importlib.util.spec_from_file_location('admission_under_test',p); "
-                     "m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); m.PREFIRE_CLAIM_SUPPORTED=True; "
-                     "sys.argv=[p]+sys.argv[2:]; raise SystemExit(m.main())")
-            command=[sys.executable,"-c",wrapper,str(TOOL),*args]
-        else: command=[str(TOOL),*args]
-        cp=subprocess.run(command,env=run_env,text=True,capture_output=True)
-        if ok and cp.returncode:self.fail(cp.stdout+cp.stderr)
-        return cp,json.loads(cp.stdout)
-    def matcher(self): return json.loads(self.config.read_text())["automations"]["SchedulerTick"][0]
 
-    def test_report_only_never_arms(self):
-        self.incident(); _,row=self.cli("report")
-        self.assertEqual(row["actionableCount"],1); self.assertFalse(self.matcher()["enabled"])
-        self.assertFalse((self.runtime/"self-healing/admission.json").exists())
-    def test_kill_switch_blocks_before_config_mutation(self):
-        self.incident(); (self.runtime/"self-healing.disabled").parent.mkdir(parents=True,exist_ok=True); (self.runtime/"self-healing.disabled").touch()
-        cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False)
-        self.assertNotEqual(cp.returncode,0); self.assertEqual(row["reason"],"kill-switch-active"); self.assertFalse(self.matcher()["enabled"])
-    def test_unsupported_scheduler_prefire_claim_blocks_apply(self):
-        self.incident(); env={k:v for k,v in self.env.items() if k!="CRAFT_TEST_INJECT_PREFIRE"}
-        cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False,env=env)
-        self.assertEqual(row["reason"],"scheduler-prefire-claim-unsupported"); self.assertFalse(self.matcher()["enabled"])
-    def test_no_incident_creates_no_session_trigger(self):
-        _,row=self.cli("tick","--controller-session","controller","--apply")
-        self.assertEqual(row["reason"],"no-actionable-incidents"); self.assertFalse(self.matcher()["enabled"])
-    def test_arm_exact_minute_and_receipt(self):
-        self.incident(); _,row=self.cli("tick","--controller-session","controller","--apply")
-        self.assertEqual(row["state"]["phase"],"armed"); self.assertTrue(self.matcher()["enabled"])
-        self.assertEqual(self.matcher()["cron"],"56 17 9 8 *")
-        self.assertIn("i1",self.matcher()["actions"][0]["prompt"])
-        self.assertEqual(json.loads((self.runtime/"self-healing/admission.json").read_text())["fingerprint"],row["state"]["fingerprint"])
-    def test_owner_gate_and_preservation_unknown_are_not_actionable(self):
-        self.incident("g","owner-gate-blocked"); self.incident("p","preservation-unknown")
-        _,row=self.cli("report"); self.assertEqual(row["actionableCount"],0)
-    def test_requires_exact_persistent_controller(self):
-        self.incident(); self.manifest("controller",mode=None)
-        cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False)
-        self.assertIn("not marked persistent",row["error"]); self.assertFalse(self.matcher()["enabled"])
-    def test_execution_history_disables_matcher(self):
-        self.incident(); _,armed=self.cli("tick","--controller-session","controller","--apply")
-        self.history.write_text(json.dumps({"id":"a321-notifier","ts":NOW+60000,"ok":True,"sessionId":"notifier"})+"\n")
-        env={**self.env,"CRAFT_TEST_NOW_MS":str(NOW+70000)}
-        _,row=self.cli("tick","--controller-session","controller","--apply",env=env)
-        self.assertEqual(row["state"]["phase"],"notified"); self.assertFalse(self.matcher()["enabled"]); self.assertEqual(row["state"]["notifierSessionId"],"notifier")
-    def test_duplicate_execution_fails_closed(self):
-        self.incident(); self.cli("tick","--controller-session","controller","--apply")
-        self.history.write_text("\n".join(json.dumps({"id":"a321-notifier","ts":NOW+60000+i,"ok":True,"sessionId":f"n{i}"}) for i in (1,2))+"\n")
-        env={**self.env,"CRAFT_TEST_NOW_MS":str(NOW+70000)}
-        cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False,env=env)
-        self.assertEqual(row["state"]["phase"],"blocked"); self.assertFalse(self.matcher()["enabled"])
-    def test_missed_window_fails_closed(self):
-        self.incident(); self.cli("tick","--controller-session","controller","--apply")
-        env={**self.env,"CRAFT_TEST_NOW_MS":str(NOW+121000)}
-        cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False,env=env)
-        self.assertEqual(row["state"]["reason"],"armed-window-expired-without-execution"); self.assertFalse(self.matcher()["enabled"])
-    def test_kill_switch_disarms_armed_matcher(self):
-        self.incident(); self.cli("tick","--controller-session","controller","--apply")
-        (self.runtime/"self-healing.disabled").touch()
-        _,row=self.cli("disarm","--apply"); self.assertEqual(row["state"]["reason"],"kill-switch-disarm"); self.assertFalse(self.matcher()["enabled"])
-    def test_prepared_transaction_is_disabled_and_blocked(self):
-        self.incident(); self.put(self.runtime/"self-healing/admission.json",{"phase":"prepared","armedAt":NOW})
-        config=json.loads(self.config.read_text()); config["automations"]["SchedulerTick"][0]["enabled"]=True; self.put(self.config,config)
-        cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False)
-        self.assertEqual(row["state"]["reason"],"incomplete-arm-transaction"); self.assertFalse(self.matcher()["enabled"])
-    def test_install_guard_upserts_notifier_and_disables_legacy(self):
-        self.put(self.config,{"version":2,"automations":{"SchedulerTick":[{"id":"a31101","enabled":True,"actions":[{"type":"prompt","prompt":"legacy"}]}]}})
-        template=self.root/"template.json"; self.put(template,{"version":2,"automations":{"SchedulerTick":[{"id":"a321-notifier","enabled":False,"actions":[{"type":"prompt","prompt":"disabled"}]}]}})
-        self.cli("install-guard","--template",str(template),"--apply")
-        rows=json.loads(self.config.read_text())["automations"]["SchedulerTick"]
-        self.assertEqual(sum(r.get("id")=="a321-notifier" for r in rows),1); self.assertTrue(all(not r.get("enabled",True) for r in rows))
-    def test_duplicate_automation_id_refused(self):
-        config=json.loads(self.config.read_text()); config["automations"]["SchedulerTick"].append(dict(config["automations"]["SchedulerTick"][0])); self.put(self.config,config); self.incident()
-        cp,row=self.cli("tick","--controller-session","controller","--apply",ok=False)
-        self.assertIn("duplicate",row["error"])
-    def test_health_classifies_child_progress_and_stall(self):
-        self.manifest("coord-a",role="coordinator",mode=None); self.manifest("coord-b",role="coordinator",mode=None)
-        self.put(self.runtime/"coordinators/a.json",{"coordinatorSessionId":"coord-a","state":"authoritative","lastHeartbeatAt":NOW-7200000,"leaseExpiresAt":NOW-3600000,"activeChildren":["worker"]})
-        self.put(self.runtime/"coordinators/b.json",{"coordinatorSessionId":"coord-b","state":"authoritative","lastHeartbeatAt":NOW-7200000,"leaseExpiresAt":NOW-3600000,"activeChildren":[]})
-        self.put(self.runtime/"worker-leases/worker.json",{"sessionId":"worker","state":"active","lastHeartbeatAt":NOW-60000})
-        _,row=self.cli("report"); health={r["project"]:r["health"] for r in row["coordinatorHealth"]}
-        self.assertEqual(health,{"a":"child-active","b":"stalled"}); self.assertEqual(row["healthSummary"]["child-active"],1)
+    def tearDown(self):
+        self.tmp.cleanup()
 
-if __name__=="__main__": unittest.main()
+    def put(self, path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value) + "\n")
+
+    def fake(self):
+        return json.loads(self.fake_state.read_text())
+
+    def mutate_fake(self, **changes):
+        row = self.fake()
+        row.update(changes)
+        self.put(self.fake_state, row)
+
+    def manifest(self, sid, role="recovery-controller", mode="persistent", archived=False, status="todo"):
+        labels = [f"agent-role::{role}"]
+        if mode:
+            labels.append(f"controller-mode::{mode}")
+        self.put(self.sessions / sid / "session.jsonl", {"id": sid, "labels": labels, "isArchived": archived, "sessionStatus": status})
+
+    def incident(self, iid="i1", kind="coordinator-lease-stale", state="open", session="coord", project=None, work_unit=None):
+        row = {"incidentId": iid, "kind": kind, "state": state, "sessionId": session, "severity": "high", "firstSeenAt": 1,
+               "evidenceFingerprint": "ef" + iid}
+        if project:
+            row["project"] = project
+        if work_unit:
+            row["workUnit"] = work_unit
+        self.put(self.runtime / "recovery-incidents" / f"{iid}.json", row)
+
+    def cli(self, *args, ok=True, env=None):
+        cp = subprocess.run([sys.executable, str(TOOL), *args], env=env or self.env, text=True, capture_output=True)
+        if ok and cp.returncode:
+            self.fail(cp.stdout + cp.stderr)
+        return cp, json.loads(cp.stdout)
+
+    def apply(self, *, ok=True, env=None):
+        return self.cli("tick", "--controller-session", "controller", "--apply", ok=ok, env=env)
+
+    def delivery_calls(self):
+        return [record for record in self.fake().get("records", []) if record[:2] == ["automation", "deliver"]]
+
+    def state(self):
+        return json.loads((self.runtime / "self-healing" / "admission.json").read_text())
+
+    def test_report_only_never_calls_cli_or_creates_state(self):
+        self.incident()
+        _, row = self.cli("report")
+        self.assertEqual(row["actionableCount"], 1)
+        self.assertEqual(self.fake().get("records"), None)
+        self.assertFalse((self.runtime / "self-healing" / "admission.json").exists())
+
+    def test_no_incident_does_not_deliver_or_mutate_automation_config(self):
+        before = self.config.read_bytes()
+        _, row = self.apply()
+        self.assertEqual(row["reason"], "no-actionable-incidents")
+        self.assertEqual(self.delivery_calls(), [])
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertFalse((self.runtime / "self-healing" / "admission.json").exists())
+
+    def test_absent_runtime_identity_hard_blocks_without_delivery(self):
+        self.incident()
+        self.mutate_fake(capabilities={"available": True, "version": 1, "deliverChannel": "automations:admissionDeliver"})
+        cp, row = self.apply(ok=False)
+        self.assertEqual(cp.returncode, 2)
+        self.assertEqual(row["state"]["phase"], "blocked")
+        self.assertEqual(self.delivery_calls(), [])
+
+    def test_missing_workspace_id_fails_closed_without_delivery(self):
+        self.incident()
+        env = {key: value for key, value in self.env.items() if key != "CRAFT_WORKSPACE_ID"}
+        cp, row = self.apply(ok=False, env=env)
+        self.assertEqual(cp.returncode, 2)
+        self.assertIn("workspace ID", row["error"])
+        self.assertEqual(self.delivery_calls(), [])
+
+    def test_mismatched_runtime_version_hard_blocks_without_delivery(self):
+        self.incident()
+        self.mutate_fake(capabilities={"available": True, "version": 1, "deliverChannel": "automations:admissionDeliver",
+                                      "runtimeVersion": "2026.8.9", "runtimeCommit": "runtime-commit-1"})
+        cp, row = self.apply(ok=False)
+        self.assertEqual(cp.returncode, 2)
+        self.assertEqual(row["state"]["phase"], "blocked")
+        self.assertIn("runtime identity", row["state"]["reason"])
+        self.assertEqual(self.delivery_calls(), [])
+
+    def test_mismatched_runtime_commit_hard_blocks_without_delivery(self):
+        self.incident()
+        self.mutate_fake(capabilities={"available": True, "version": 1, "deliverChannel": "automations:admissionDeliver",
+                                      "runtimeVersion": "2026.8.10", "runtimeCommit": "other-commit"})
+        cp, row = self.apply(ok=False)
+        self.assertEqual(cp.returncode, 2)
+        self.assertEqual(row["state"]["phase"], "blocked")
+        self.assertEqual(self.delivery_calls(), [])
+
+    def test_absent_capability_hard_blocks_without_delivery(self):
+        self.incident()
+        self.mutate_fake(capabilities={"available": False, "version": 1, "deliverChannel": "automations:admissionDeliver"})
+        cp, row = self.apply(ok=False)
+        self.assertEqual(cp.returncode, 2)
+        self.assertEqual(row["state"]["phase"], "blocked")
+        self.assertEqual(self.delivery_calls(), [])
+
+    def test_delivers_only_to_exact_persistent_target_with_stable_scope(self):
+        self.incident("late", session="coord-a")
+        self.incident("first", session="coord-b")
+        before_config = self.config.read_bytes()
+        before_controller_manifest = (self.sessions / "controller" / "session.jsonl").read_bytes()
+        before_sessions = sorted(path.name for path in self.sessions.iterdir())
+        _, row = self.apply()
+        direct = row["state"]["directDelivery"]
+        self.assertEqual(row["state"]["phase"], "notified")
+        self.assertEqual(row["state"]["notifierSessionId"], None)
+        self.assertEqual(direct["controllerSessionId"], "controller")
+        self.assertEqual(direct["workspaceId"], "workspace-7")
+        self.assertEqual(len(self.delivery_calls()), 1)
+        call = self.delivery_calls()[0]
+        self.assertEqual(call[call.index("--session") + 1], "controller")
+        self.assertEqual(call[call.index("--workspace") + 1], "workspace-7")
+        self.assertEqual(self.config.read_bytes(), before_config)
+        self.assertEqual((self.sessions / "controller" / "session.jsonl").read_bytes(), before_controller_manifest)
+        self.assertEqual(sorted(path.name for path in self.sessions.iterdir()), before_sessions)
+        self.assertTrue(self.fake()["tokenMatched"])
+        self.assertEqual(self.fake()["serverUrl"], "https://craft.example.test")
+        self.assertNotIn(["versions"], self.fake()["records"])
+
+    def test_repeated_and_simultaneous_apply_have_one_receipt(self):
+        self.incident()
+        outcomes = []
+        def run():
+            outcomes.append(self.apply(ok=False)[0].returncode)
+        threads = [threading.Thread(target=run), threading.Thread(target=run)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertIn(0, outcomes)
+        self.assertTrue(all(code in {0, 75} for code in outcomes))
+        self.apply()
+        self.assertEqual(len(self.delivery_calls()), 1)
+        self.assertEqual(len(self.fake()["receipts"]), 1)
+        self.assertEqual(self.state()["directDelivery"]["messageId"], "msg-1")
+
+    def test_crash_prepared_replay_returns_original_message_receipt(self):
+        self.incident()
+        self.mutate_fake(crashAfterReceipt=True)
+        cp, row = self.apply(ok=False)
+        self.assertEqual(cp.returncode, 75)
+        self.assertEqual(row["state"]["phase"], "prepared")
+        prepared_scope = row["state"]["scope"]
+        self.mutate_fake(crashAfterReceipt=False)
+        _, row = self.apply()
+        self.assertEqual(row["state"]["phase"], "notified")
+        self.assertEqual(row["state"]["directDelivery"]["status"], "duplicate")
+        self.assertEqual(row["state"]["directDelivery"]["messageId"], "msg-1")
+        self.assertEqual(row["state"]["scope"], prepared_scope)
+        self.assertEqual(len(self.fake()["receipts"]), 1)
+
+    def test_busy_is_retriable_with_same_prepared_scope(self):
+        self.incident()
+        self.mutate_fake(busyOnce=True)
+        cp, row = self.apply(ok=False)
+        self.assertEqual(cp.returncode, 75)
+        self.assertEqual(row["state"]["phase"], "prepared")
+        scope = row["state"]["scope"]
+        _, row = self.apply()
+        self.assertEqual(row["state"]["phase"], "notified")
+        self.assertEqual(row["state"]["scope"], scope)
+        self.assertEqual(len(self.delivery_calls()), 2)
+
+    def test_server_blocked_response_hard_blocks(self):
+        self.incident()
+        self.mutate_fake(blocked=True)
+        cp, row = self.apply(ok=False)
+        self.assertEqual(cp.returncode, 2)
+        self.assertEqual(row["state"]["phase"], "blocked")
+        self.assertEqual(len(self.delivery_calls()), 1)
+
+    def test_server_error_response_hard_blocks(self):
+        self.incident()
+        self.mutate_fake(error=True)
+        cp, row = self.apply(ok=False)
+        self.assertEqual(cp.returncode, 2)
+        self.assertEqual(row["state"]["phase"], "blocked")
+        self.assertEqual(len(self.delivery_calls()), 1)
+
+    def test_token_never_appears_in_admission_output_or_state(self):
+        self.incident()
+        cp, row = self.apply()
+        material = cp.stdout + json.dumps(row) + (self.runtime / "self-healing" / "admission.json").read_text()
+        self.assertNotIn(TOKEN, material)
+        self.assertTrue(self.fake()["tokenMatched"])
+
+    def test_kill_switch_and_owner_gate_remain_authoritative(self):
+        self.incident("g", kind="owner-gate-blocked")
+        _, row = self.apply()
+        self.assertEqual(row["reason"], "no-actionable-incidents")
+        self.incident()
+        (self.runtime / "self-healing.disabled").parent.mkdir(parents=True, exist_ok=True)
+        (self.runtime / "self-healing.disabled").touch()
+        cp, row = self.apply(ok=False)
+        self.assertEqual(cp.returncode, 2)
+        self.assertEqual(row["reason"], "kill-switch-active")
+        self.assertEqual(self.delivery_calls(), [])
+
+    def test_requires_exact_live_persistent_controller(self):
+        self.incident()
+        self.manifest("controller", mode=None)
+        cp, row = self.apply(ok=False)
+        self.assertEqual(cp.returncode, 2)
+        self.assertIn("not marked persistent", row["error"])
+        self.assertEqual(self.delivery_calls(), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
