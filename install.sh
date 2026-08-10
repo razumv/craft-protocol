@@ -96,7 +96,7 @@ if (( APPLY )); then
     --template "$ROOT/config/self-healing.automations.template.json" --apply
   : > "$RUNTIME/self-healing.disabled"
   chmod 600 "$RUNTIME/self-healing.disabled"
-  echo "Direct recovery delivery remains disabled until persistent-controller.json explicitly provides sessionId, workspaceId, expectedRuntimeVersion, and expectedRuntimeCommit."
+  echo "Direct recovery delivery remains disabled until persistent-controller.json explicitly provides sessionId, workspaceId, expectedRuntimeVersion, expectedRuntimeCommit, a trusted serverUrl, and an absolute executable rpcCli."
   echo "Provide CRAFT_SERVER_TOKEN in the service environment or an owner-only token file; no token/version defaults are installed."
 fi
 

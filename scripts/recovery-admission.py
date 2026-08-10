@@ -281,7 +281,10 @@ def rpc_command() -> list[str]:
         raise AdmissionError("CRAFT_RPC_CLI is invalid") from exc
     if not command:
         raise AdmissionError("CRAFT_RPC_CLI is invalid")
-    return command
+    # All adapter responses are machine contracts. The standalone CLI defaults
+    # list-shaped results (notably `workspaces`) to a human table unless the
+    # global JSON flag precedes the command.
+    return command + ["--json"]
 
 
 def rpc_env(token: str) -> dict[str, str]:
@@ -291,7 +294,7 @@ def rpc_env(token: str) -> dict[str, str]:
     return env
 
 
-def rpc_json(args: list[str], token: str, *, delivery: bool = False) -> dict[str, Any]:
+def rpc_json(args: list[str], token: str, *, delivery: bool = False, expected_type: type = dict) -> Any:
     try:
         cp = subprocess.run(rpc_command() + args, text=True, capture_output=True, timeout=20, env=rpc_env(token))
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -306,10 +309,10 @@ def rpc_json(args: list[str], token: str, *, delivery: bool = False) -> dict[str
         if delivery:
             raise DeliveryUnknown("delivery outcome unavailable") from exc
         raise CapabilityError("Craft CLI capability response invalid") from exc
-    if not isinstance(value, dict):
+    if not isinstance(value, expected_type):
         if delivery:
             raise DeliveryUnknown("delivery outcome unavailable")
-        raise CapabilityError("Craft CLI capability response invalid")
+        raise CapabilityError("Craft CLI response type invalid")
     return value
 
 
@@ -327,6 +330,21 @@ def verify_capabilities(args: argparse.Namespace, token: str) -> None:
             capabilities.get("runtimeVersion") != expected_version or
             capabilities.get("runtimeCommit") != expected_commit):
         raise CapabilityError("Craft direct admission capability/runtime identity unavailable or mismatched")
+
+
+def verify_workspace_binding(configured_workspace_id: str, token: str, controller_manifest: dict[str, Any]) -> None:
+    rows = rpc_json(["workspaces"], token, expected_type=list)
+    matches = [row for row in rows if isinstance(row, dict) and row.get("id") == configured_workspace_id]
+    if len(matches) != 1:
+        raise CapabilityError("configured Craft workspace ID is unavailable or ambiguous")
+    try:
+        rpc_root = Path(str(matches[0]["rootPath"])).expanduser().resolve()
+        manifest_root = Path(str(controller_manifest["workspaceRootPath"])).expanduser().resolve()
+        configured_root = WORKSPACE.resolve()
+    except Exception as exc:
+        raise CapabilityError("controller workspace binding is invalid") from exc
+    if rpc_root != configured_root or manifest_root != configured_root:
+        raise CapabilityError("controller session and Craft workspace ID are not bound to the configured workspace")
 
 
 def direct_scope(fp: str) -> dict[str, str]:
@@ -394,7 +412,7 @@ def tick(args: argparse.Namespace) -> int:
         if state and state.get("phase") in {"notified", "blocked"}:
             print(json.dumps({"schemaVersion": 2, "applied": args.apply, "state": state}, indent=2))
             return 0 if state.get("phase") == "notified" else 2
-        if DISABLED.exists() and not args.ignore_kill_switch:
+        if DISABLED.exists():
             print(json.dumps({"schemaVersion": 2, "applied": False, "state": state or {"phase": "idle"}, "reason": "kill-switch-active"}, indent=2))
             return 2
         if state and state.get("phase") == "prepared":
@@ -417,13 +435,14 @@ def tick(args: argparse.Namespace) -> int:
                 print(json.dumps({"schemaVersion": 2, "applied": False, "state": state, "reason": "fingerprint-cooldown"}, indent=2))
                 return 0
             prepared = prepared_state(now, args.controller_session, workspace_id(args), fp, [str(row["incidentId"]) for row in rows])
-        require_persistent_controller(args.controller_session)
+        controller_manifest = require_persistent_controller(args.controller_session)
         if not args.apply:
             print(json.dumps({"schemaVersion": 2, "applied": False, "state": prepared}, indent=2))
             return 0
         try:
             token = server_token()
             verify_capabilities(args, token)
+            verify_workspace_binding(workspace_id(args), token, controller_manifest)
         except (AdmissionError, CapabilityError) as exc:
             blocked = hard_block(prepared, now, str(exc))
             atomic_json(STATE, blocked)
@@ -431,6 +450,14 @@ def tick(args: argparse.Namespace) -> int:
             return 2
         if state is None or state.get("phase") != "prepared":
             atomic_json(STATE, prepared)
+        # Linearization check immediately before the external delivery call. A
+        # kill switch created during capability/workspace discovery wins and
+        # leaves a durable blocked receipt without invoking admissionDeliver.
+        if DISABLED.exists():
+            blocked = hard_block(prepared, NOW_MS(), "kill-switch-active-before-delivery")
+            atomic_json(STATE, blocked)
+            print(json.dumps({"schemaVersion": 2, "applied": True, "state": blocked}, indent=2))
+            return 2
         try:
             receipt = deliver(prepared, token)
         except DeliveryUnknown:
@@ -499,7 +526,6 @@ def main() -> int:
     cmd.add_argument("--expected-runtime-version")
     cmd.add_argument("--expected-runtime-commit")
     cmd.add_argument("--apply", action="store_true")
-    cmd.add_argument("--ignore-kill-switch", action="store_true", help=argparse.SUPPRESS)
     cmd.set_defaults(func=tick)
     cmd = sub.add_parser("reset")
     cmd.add_argument("--apply", action="store_true")

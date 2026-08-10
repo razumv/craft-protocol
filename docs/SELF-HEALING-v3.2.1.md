@@ -69,7 +69,7 @@ recovery-admission.py reset --apply
 3. Keep `self-healing.disabled` present during report-only canaries.
 4. Observe at least two real 15-minute intervals with zero new sessions.
 5. Create and label exactly one persistent controller.
-6. Configure `sessionId`, `workspaceId`, `expectedRuntimeVersion`, and `expectedRuntimeCommit` in `$CRAFT_HOME/runtime/self-healing/persistent-controller.json`; optionally configure `serverUrl` there. Set `CRAFT_SERVER_TOKEN` in the service environment or write an owner-only (mode 0600) token file at `~/.config/craft-agent-headless/server-token`.
+6. Configure `sessionId`, `workspaceId`, `expectedRuntimeVersion`, `expectedRuntimeCommit`, the trusted `serverUrl`, and the absolute executable `rpcCli` path in `$CRAFT_HOME/runtime/self-healing/persistent-controller.json`. The periodic launcher refuses PATH-based CLI discovery and refuses non-TLS remote WebSocket URLs (`ws://` is accepted only for loopback). Set `CRAFT_SERVER_TOKEN` in the service environment or write an owner-only (mode 0600) token file at `~/.config/craft-agent-headless/server-token`.
 7. Remove the kill switch only when authenticated `craft-cli automation capabilities` reports the accepted direct channel and exact configured `runtimeVersion` and `runtimeCommit`. Do not use `craft-cli versions` for this decision and do not infer support from package internals.
 8. Run one admitted stale-coordinator canary. Require one direct `messageId`, zero notifier sessions, and no session/process growth over two following intervals. Any busy retry is idempotent; any blocked/capability failure restores hard refusal.
 

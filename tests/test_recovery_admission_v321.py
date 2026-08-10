@@ -18,15 +18,21 @@ FAKE_CLI = r'''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
 state_path = Path(sys.argv[1])
-args = sys.argv[2:]
+raw_args = sys.argv[2:]
 state = json.loads(state_path.read_text())
+state["allJson"] = state.get("allJson", True) and bool(raw_args) and raw_args[0] == "--json"
+args = raw_args[1:] if raw_args[:1] == ["--json"] else raw_args
 state.setdefault("records", []).append(args)
 state["tokenMatched"] = state.get("tokenMatched", True) and os.environ.get("CRAFT_SERVER_TOKEN") == state["expectedToken"]
 state["serverUrl"] = os.environ.get("CRAFT_SERVER_URL")
 def save(): state_path.write_text(json.dumps(state))
 def output(value): save(); print(json.dumps(value)); raise SystemExit(0)
 if args == ["automation", "capabilities"]:
+    if state.get("createKillSwitchAfterCapabilities"):
+        Path(state["createKillSwitchAfterCapabilities"]).touch()
     output(state["capabilities"])
+if args == ["workspaces"]:
+    output(state["workspaces"])
 if args[:2] == ["automation", "deliver"]:
     fields = {args[index]: args[index + 1] for index in range(2, len(args) - 1, 2) if args[index].startswith("--")}
     scope = "|".join(fields[name] for name in ("--workspace", "--session", "--matcher", "--action", "--occurrence", "--key"))
@@ -71,7 +77,8 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         self.fake_state = self.root / "fake-cli-state.json"
         self.put(self.fake_state, {"expectedToken": TOKEN,
                                   "capabilities": {"available": True, "version": 1, "deliverChannel": "automations:admissionDeliver",
-                                                   "runtimeVersion": "2026.8.10", "runtimeCommit": "runtime-commit-1"}})
+                                                   "runtimeVersion": "2026.8.10", "runtimeCommit": "runtime-commit-1"},
+                                  "workspaces": [{"id": "workspace-7", "rootPath": str(self.workspace)}]})
         self.env = {**os.environ, "CRAFT_WORKSPACE": str(self.workspace), "CRAFT_RUNTIME": str(self.runtime),
                     "CRAFT_SESSIONS": str(self.sessions), "CRAFT_TEST_NOW_MS": str(NOW),
                     "CRAFT_CONTROLLER_HARNESS": str(self.harness), "CRAFT_RPC_CLI": f"{sys.executable} {self.fake_cli} {self.fake_state}",
@@ -101,7 +108,8 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         labels = [f"agent-role::{role}"]
         if mode:
             labels.append(f"controller-mode::{mode}")
-        self.put(self.sessions / sid / "session.jsonl", {"id": sid, "labels": labels, "isArchived": archived, "sessionStatus": status})
+        self.put(self.sessions / sid / "session.jsonl", {"id": sid, "labels": labels, "isArchived": archived,
+                                                           "sessionStatus": status, "workspaceRootPath": str(self.workspace)})
 
     def incident(self, iid="i1", kind="coordinator-lease-stale", state="open", session="coord", project=None, work_unit=None):
         row = {"incidentId": iid, "kind": kind, "state": state, "sessionId": session, "severity": "high", "firstSeenAt": 1,
@@ -156,6 +164,23 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         cp, row = self.apply(ok=False, env=env)
         self.assertEqual(cp.returncode, 2)
         self.assertIn("workspace ID", row["error"])
+        self.assertEqual(self.delivery_calls(), [])
+
+    def test_workspace_id_and_controller_manifest_are_bound_to_configured_root(self):
+        self.incident()
+        self.mutate_fake(workspaces=[{"id": "workspace-7", "rootPath": str(self.root / "other-workspace")}])
+        cp, row = self.apply(ok=False)
+        self.assertEqual(cp.returncode, 2)
+        self.assertIn("not bound", row["state"]["reason"])
+        self.assertEqual(self.delivery_calls(), [])
+
+    def test_kill_switch_created_during_discovery_wins_before_delivery(self):
+        self.incident()
+        switch = self.runtime / "self-healing.disabled"
+        self.mutate_fake(createKillSwitchAfterCapabilities=str(switch))
+        cp, row = self.apply(ok=False)
+        self.assertEqual(cp.returncode, 2)
+        self.assertEqual(row["state"]["reason"], "kill-switch-active-before-delivery")
         self.assertEqual(self.delivery_calls(), [])
 
     def test_mismatched_runtime_version_hard_blocks_without_delivery(self):
@@ -274,6 +299,7 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         material = cp.stdout + json.dumps(row) + (self.runtime / "self-healing" / "admission.json").read_text()
         self.assertNotIn(TOKEN, material)
         self.assertTrue(self.fake()["tokenMatched"])
+        self.assertTrue(self.fake()["allJson"])
 
     def test_kill_switch_and_owner_gate_remain_authoritative(self):
         self.incident("g", kind="owner-gate-blocked")
@@ -286,6 +312,11 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         self.assertEqual(cp.returncode, 2)
         self.assertEqual(row["reason"], "kill-switch-active")
         self.assertEqual(self.delivery_calls(), [])
+        bypass = subprocess.run([sys.executable, str(TOOL), "tick", "--controller-session", "controller",
+                                 "--apply", "--ignore-kill-switch"], env=self.env, text=True, capture_output=True)
+        self.assertEqual(bypass.returncode, 2)
+        self.assertIn("unrecognized arguments", bypass.stderr)
+        self.assertEqual(self.delivery_calls(), [])
 
     def test_requires_exact_live_persistent_controller(self):
         self.incident()
@@ -294,6 +325,62 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         self.assertEqual(cp.returncode, 2)
         self.assertIn("not marked persistent", row["error"])
         self.assertEqual(self.delivery_calls(), [])
+
+
+class RecoveryAdmissionCronV321Test(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.craft = self.root / ".craft-agent"
+        self.runtime = self.craft / "runtime" / "self-healing"
+        self.scripts = self.craft / "scripts"
+        self.scripts.mkdir(parents=True)
+        self.runtime.mkdir(parents=True)
+        self.capture = self.root / "capture.json"
+        self.rpc_cli = self.root / "craft-cli"
+        self.rpc_cli.write_text("#!/bin/sh\nexit 0\n")
+        self.rpc_cli.chmod(0o700)
+        (self.scripts / "recovery-admission.py").write_text(
+            "import json,os,sys\n"
+            "open(os.environ['CRAFT_TEST_CAPTURE'],'w').write(json.dumps({"
+            "'rpcCli':os.environ.get('CRAFT_RPC_CLI'),'serverUrl':os.environ.get('CRAFT_SERVER_URL'),'args':sys.argv[1:]}))\n"
+        )
+        self.config = self.runtime / "persistent-controller.json"
+        self.value = {"sessionId": "controller", "workspaceId": "workspace-7",
+                      "expectedRuntimeVersion": "2026.8.10", "expectedRuntimeCommit": "commit-1",
+                      "serverUrl": "wss://craft.example.test:9100", "rpcCli": str(self.rpc_cli)}
+        self.config.write_text(json.dumps(self.value))
+        self.env = {**os.environ, "HOME": str(self.root), "CRAFT_HOME": str(self.craft),
+                    "CRAFT_PYTHON": sys.executable, "CRAFT_TEST_CAPTURE": str(self.capture)}
+        self.cron = ROOT / "scripts" / "recovery-admission-cron.sh"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_cron(self):
+        return subprocess.run(["/bin/zsh", str(self.cron)], env=self.env, text=True, capture_output=True)
+
+    def test_periodic_launcher_exports_exact_cli_and_secure_server(self):
+        cp = self.run_cron()
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        row = json.loads(self.capture.read_text())
+        self.assertEqual(row["rpcCli"], str(self.rpc_cli))
+        self.assertEqual(row["serverUrl"], "wss://craft.example.test:9100")
+        self.assertIn("--apply", row["args"])
+
+    def test_periodic_launcher_refuses_missing_cli_or_insecure_remote_ws(self):
+        for key, value in (("rpcCli", None), ("serverUrl", "ws://craft.example.test:9100")):
+            with self.subTest(key=key):
+                row = dict(self.value)
+                if value is None:
+                    row.pop(key)
+                else:
+                    row[key] = value
+                self.config.write_text(json.dumps(row))
+                self.capture.unlink(missing_ok=True)
+                cp = self.run_cron()
+                self.assertEqual(cp.returncode, 2)
+                self.assertFalse(self.capture.exists())
 
 
 if __name__ == "__main__":
