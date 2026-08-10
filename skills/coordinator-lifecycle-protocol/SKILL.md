@@ -30,8 +30,8 @@ Optimize for a completed product outcome, not for production of reports or addit
 6. Reuse immutable accepted evidence when exact SHA, inputs, environment, and claimed boundary are unchanged. Do not rerun it merely to create a newer report.
 7. Infrastructure detours get one safe recovery attempt or 20 minutes, whichever comes first. Then use an already-approved alternative or escalate one exact blocker. Never let Docker/Colima/browser/tooling repair replace the product task.
 8. Do not expand scope into unrelated pre-existing debt. Prove it is pre-existing and either use a bounded valid path or escalate it separately.
-9. Record material milestones—candidate, acceptance verdict, merge/deploy/readback—in project-local GitHub/runtime evidence. Do not send milestone, gate, progress, or completion reports to the owner-facing architecture session. No micro-statuses or ACK loops.
-10. Project coordinators are autonomous. The owner-facing session is a system architect/maintainer, not a supervisor. Contact it only for a genuinely owner-only decision that remains after applying the autonomous decision boundary, or when the owner explicitly requested status.
+9. Record material milestones—candidate, acceptance verdict, merge/deploy/readback, and owner-only gates—in project-local GitHub/runtime evidence. Do not send milestone, gate, progress, completion, archive, blocker, or decision-request messages to the owner-facing architecture session. No micro-statuses or ACK loops.
+10. Project coordinators are autonomous. The owner-facing session is a system architect/maintainer, not a supervisor. Contact it only in direct response to an explicit owner status/fact query or exact owner instruction. For an owner-only decision, write a durable scoped gate, hold only that scope, and continue independent executable lanes; the owner-facing session discovers it only when the owner asks.
 
 Risk tiers:
 
@@ -164,7 +164,7 @@ Before spawn, implementation, merge, or close, run the corresponding fail-closed
   --project <project-slug> --work-unit <unit> --action <spawn|implement|merge|close>
 ```
 
-A project-wide HOLD blocks all four actions. Only exact direct-owner `RESUME` may resolve a HOLD. Never translate, infer, or relay it.
+A project-wide HOLD blocks all four actions. Only exact direct-owner `RESUME` may resolve a HOLD. Never translate, infer, relay, or message it to the owner-facing architecture session; keep it durable and project-local until the owner queries or resolves it.
 
 `owner-gate.py` is reserved for the owner-only categories above. Never create it merely because a technical choice is Medium/High risk or because two reversible implementations exist. For reversible/evidence-backed choices, document the coordinator decision and proceed through the applicable acceptance tier.
 
@@ -235,7 +235,7 @@ Never use global process-tree guessing. Never run an unscoped active `--reap`.
 - Session paused on an unsolicited `SubmitPlan`: treat as a protocol stall. Send direct execute instruction once; if it cannot resume, archive/reap and replace in a fresh unique lane with an explicit `DO NOT SubmitPlan` task prompt.
 - Command timeout: inspect observable PID/log before declaring a stall.
 - Silent worker: after 15 minutes suspect; after 30 minutes without evidence, inspect git, preserve, archive/reap, and replace.
-- If `archive_session` refuses because a worker is stuck mid-turn, do not guess a PID. Preserve a patch/branch, require unique cwd/PID evidence, and escalate to the owner-facing infrastructure session. A shared cwd requires creation-time/process evidence or must remain untouched.
+- If `archive_session` refuses because a worker is stuck mid-turn, do not guess a PID. Preserve a patch/branch, record a durable scoped recovery incident/lease blocker, and continue independent lanes without messaging the owner-facing architecture session. A shared cwd requires creation-time/process evidence or must remain untouched.
 - Long job whose PID disappeared: terminal failure until its receipt/log proves success.
 
 ## 9. Registry and recovery ledger
@@ -249,7 +249,7 @@ session, role, work-unit, attempt, issue, worktree, branch/PR,
 dependencies, lease state, last evidence, preservation, verdict, next action
 ```
 
-At material state transitions only—dispatch, candidate handoff, terminal job, acceptance verdict, merge/gate change, or rotation—reconcile leases and snapshot. Do not perform full sweeps or send acknowledgements for routine heartbeats/messages. Archive/reap terminal attempts before any replacement.
+At material state transitions only—dispatch, candidate handoff, terminal job, acceptance verdict, merge/gate change, or rotation—reconcile leases and snapshot. All milestones, blockers, and gates stay in GitHub/runtime; do not send them to the owner-facing architecture session. Do not perform full sweeps or send acknowledgements for routine heartbeats/messages. Archive/reap terminal attempts before any replacement.
 
 ## 10. v3.1.1 self-healing integration
 

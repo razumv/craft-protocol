@@ -16,7 +16,7 @@ Craft Protocol v3.2.0 corrects a live role-inversion failure mode: an owner-faci
 - queries coordinators only when the owner explicitly asks for status or a specific fact;
 - maintains shared protocol/runtime safety when explicitly requested;
 - does **not** acknowledge routine coordinator messages, poll progress, approve normal phases, or micromanage project execution;
-- ignores unsolicited coordinator updates unless they contain an exact owner decision request.
+- ignores all unsolicited coordinator updates, including milestones, blockers, archive requests, and owner-decision requests; it discovers durable project gates only when the owner asks.
 
 ### Project coordinator
 
@@ -26,7 +26,7 @@ Craft Protocol v3.2.0 corrects a live role-inversion failure mode: an owner-faci
 - decides reversible or evidence-backed technical architecture, implementation alternatives, environment repair, terminal archive/reap, bounded correction, and executable-lane priority without opening an owner gate;
 - records the evidence and decision, then continues through the applicable risk-tier acceptance;
 - keeps candidate, verdict, gate, merge/deploy, and completion evidence project-local; it sends no unsolicited reports to the owner-facing architecture session;
-- contacts that session only for a genuinely owner-only decision remaining after the autonomous boundary, or in response to an explicit owner status request;
+- contacts that session only in direct response to an explicit owner status/fact query or exact owner instruction; owner-only decisions remain durable scoped gates and are not pushed as messages;
 - never treats architecture-session acknowledgement as permission to continue ordinary work.
 
 ### Worker/auditor
@@ -75,7 +75,7 @@ Acceptance: one focused independent audit, exact CI/readback, narrowly applicabl
 
 ## Gate autonomy
 
-A coordinator must not create an owner gate merely because multiple reversible implementations exist, an acceptance environment needs repair, or a technical decision is Medium/High risk. Evidence-backed technical choices are coordinator authority. A vague gate with no concrete owner-only category is invalid and must be resolved autonomously or narrowed. Owner gates remain fail-closed only for the owner-only categories listed above.
+A coordinator must not create an owner gate merely because multiple reversible implementations exist, an acceptance environment needs repair, or a technical decision is Medium/High risk. Evidence-backed technical choices are coordinator authority. A vague gate with no concrete owner-only category is invalid and must be resolved autonomously or narrowed. Owner gates remain fail-closed only for the owner-only categories listed above; they stay in project-local runtime and never generate unsolicited architecture-session messages.
 
 ## Anti-churn rules
 

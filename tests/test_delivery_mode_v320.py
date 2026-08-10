@@ -15,8 +15,10 @@ class DeliveryModeV320Tests(unittest.TestCase):
         self.assertIn("Coordinator Lifecycle Protocol v3.2.1", text)
         self.assertIn("Project coordinators are autonomous", text)
         self.assertIn("must never cancel or replace a direct owner-requested work unit", text)
-        self.assertIn("Do not send milestone, gate, progress, or completion reports", text)
+        self.assertIn("Do not send milestone, gate, progress, completion, archive, blocker, or decision-request messages", text)
         self.assertIn("system architect/maintainer, not a supervisor", text)
+        self.assertIn("only in direct response to an explicit owner status/fact query or exact owner instruction", text)
+        self.assertNotIn("Contact it only for a genuinely owner-only decision", text)
         self.assertNotIn("Audit is ON by default", text)
         self.assertNotIn("On every child message or owner interaction", text)
 
@@ -55,7 +57,7 @@ class DeliveryModeV320Tests(unittest.TestCase):
         self.assertIn("canonical v3.2.1", text)
         self.assertIn("protocol-version::3.2.1", text)
         self.assertIn("Никакого audit-of-audit", text)
-        self.assertIn("Не отправляй owner-facing architecture session никакие unsolicited milestone/gate/progress/completion reports", text)
+        self.assertIn("Не отправляй owner-facing architecture session никакие unsolicited milestone/gate/progress/completion/archive/blocker/decision-request сообщения", text)
 
     def test_public_guide_defines_tests_as_acceptance_not_product(self):
         readme = self.read("README.md")
@@ -64,6 +66,9 @@ class DeliveryModeV320Tests(unittest.TestCase):
         self.assertIn("Protocol v3.2.1", readme)
         self.assertIn("Tests, audits, reports, certificates, and gates are acceptance instruments", delivery)
         self.assertIn("Unsolicited reports, routine acknowledgements, and status polling are prohibited", delivery)
+        self.assertIn("ignores all unsolicited coordinator updates", delivery)
+        self.assertIn("owner-decision requests", delivery)
+        self.assertNotIn("unless they contain an exact owner decision request", delivery)
         self.assertNotIn("a terminal product milestone", delivery)
         self.assertIn("Audit-of-audit:                prohibited", defaults)
 
