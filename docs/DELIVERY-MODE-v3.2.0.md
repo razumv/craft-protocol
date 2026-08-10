@@ -6,7 +6,7 @@ Craft Protocol v3.2.0 corrects a live role-inversion failure mode: an owner-faci
 
 ### Human owner
 
-- chooses product priorities and substantive/irreversible decisions;
+- chooses product priorities and owner-only decisions: explicit HOLD, irreversible/destructive data effects, money/entitlements, production secrets, legal/privacy/security exceptions, high-blast-radius public release/deploy, and conflicts between direct owner priorities;
 - may request a project status or send a direction through the owner-facing session;
 - controls closed board states.
 
@@ -23,6 +23,8 @@ Craft Protocol v3.2.0 corrects a live role-inversion failure mode: an owner-faci
 - is the autonomous authoritative operator for one project scope;
 - chooses and drives the next GitHub-sourced product outcome;
 - reconciles its own workers, audits, CI, merge/readback, and preservation;
+- decides reversible or evidence-backed technical architecture, implementation alternatives, environment repair, terminal archive/reap, bounded correction, and executable-lane priority without opening an owner gate;
+- records the evidence and decision, then continues through the applicable risk-tier acceptance;
 - sends owner-facing messages only for a requested status, a terminal product milestone, or one exact owner blocker;
 - never treats infrastructure acknowledgement as permission to continue ordinary work.
 
@@ -68,7 +70,11 @@ Acceptance: exactly one focused independent auditor at the final immutable candi
 
 Money/entitlements, production/shared databases, migrations, irreversible/destructive actions, physical build/evidence, deployment, or release authority.
 
-Acceptance: one focused independent audit, exact CI/readback, owner gates, and completion certificate where required. High risk does not authorize audit-of-audit.
+Acceptance: one focused independent audit, exact CI/readback, narrowly applicable owner-only gates, and a completion certificate where required. Technical risk alone does not require an owner gate, and High risk does not authorize audit-of-audit.
+
+## Gate autonomy
+
+A coordinator must not create an owner gate merely because multiple reversible implementations exist, an acceptance environment needs repair, or a technical decision is Medium/High risk. Evidence-backed technical choices are coordinator authority. A vague gate with no concrete owner-only category is invalid and must be resolved autonomously or narrowed. Owner gates remain fail-closed only for the owner-only categories listed above.
 
 ## Anti-churn rules
 
@@ -89,7 +95,7 @@ A directly requested Core subscriptions integration must not be cancelled becaus
 
 v3.2.0 does not weaken:
 
-- owner HOLD/gates and direct authority for irreversible actions;
+- explicit owner HOLD, narrow owner-only gates, and direct authority for irreversible actions;
 - preservation-before-terminate and Craft app PID refusal;
 - fresh unique worktrees;
 - exact-head CI/readback and immutable evidence;

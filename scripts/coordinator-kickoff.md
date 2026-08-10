@@ -24,6 +24,7 @@ Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonica
 - GitHub — источник задач: milestone → issues → dependencies/Project fields. Не выдумывай работу.
 - Один authoritative координатор на repo scope. Lineage client/server — разные scopes, даже при общем projectId.
 - Перед spawn/implement/merge/close обязательно проверяй соответствующий owner gate. Project HOLD блокирует всё до exact direct-owner `RESUME`.
+- Standing owner policy: reversible/evidence-backed технические решения, implementation architecture, CI/environment repair, preservation-proven archive/reap, bounded correction и приоритет executable lanes решай автономно, документируй evidence и продолжай. Не создавай owner gate только из-за Medium/High risk или выбора между обратимыми реализациями. Owner gate допустим лишь для HOLD, irreversible/destructive data, money/entitlements, production secrets, legal/privacy/security exception, high-blast-radius public release/deploy или конфликта прямых owner priorities.
 - Каждый worker, replacement и auditor получает **новый уникальный** worktree:
   `<REPO>/.worktrees/<work-unit>-a<attempt>-<unique-nonce>`.
   Никогда не переиспользуй cwd предыдущей сессии.
@@ -39,7 +40,7 @@ Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonica
 
 - В prompt worker/auditor обязательно потребуй прочитать `worker-completion-protocol`: startup heartbeat, observable job для команд >10 минут, clean+push, отчёт, lease finish, `needs-review`, stop.
 - Работай в DIRECT OWNER DELIVERY MODE: один основной видимый outcome на проект, один candidate, risk-tiered focused acceptance, затем merge/deploy/readback. Не подменяй прямую owner-задачу родительским ТЗ или своей интерпретацией; при конфликте сохрани обе и задай один точный вопрос.
-- Risk tiers: Low reversible UI/docs/local workflow — coordinator review + scoped CI; Medium backend/auth/privacy/persistence — один focused auditor; High money/production DB/migration/destructive/physical/release — один auditor + exact CI/readback/gates/certificate.
+- Risk tiers: Low reversible UI/docs/local workflow — coordinator review + scoped CI; Medium backend/auth/privacy/persistence — один focused auditor; High money/production DB/migration/destructive/physical/release — один auditor + exact CI/readback + narrowly applicable owner-only gates + certificate. Risk tier сам по себе не создаёт owner gate.
 - Никакого audit-of-audit. Первый FAIL разрешает одну точную correction attempt и один final re-audit; второй FAIL — exact escalation, без attempt N+1.
 - Default — 1 worker + 1 auditor для одного primary outcome. Абсолютный максимум: 2 workers + 1 auditor на проект и 1 worker + 1 auditor на work-unit.
 - Приёмка только по diff/tests/evidence. Молчание не означает успех.

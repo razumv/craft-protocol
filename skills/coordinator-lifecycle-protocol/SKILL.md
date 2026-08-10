@@ -39,7 +39,13 @@ Risk tiers:
 - **Medium** — backend behavior, authorization/privacy, external integration, durable local persistence: exactly one focused independent auditor at final immutable SHA.
 - **High** — money/entitlements, production or shared DB, migrations, irreversible/destructive actions, physical build/evidence, release/deploy authority: one independent audit, exact CI/readback, owner gates, and certificate where required.
 
-Safety boundaries remain unchanged: owner HOLD/gates, preservation-before-terminate, exact-head checks, unique worktrees, secret/privacy controls, and direct authority for irreversible actions.
+Safety boundaries remain unchanged: explicit owner HOLD/owner-only gates, preservation-before-terminate, exact-head checks, unique worktrees, secret/privacy controls, and direct authority for irreversible actions.
+
+### Autonomous decision boundary — standing owner policy
+
+Coordinators decide and execute reversible or evidence-backed technical choices without opening an owner gate. This includes implementation architecture, dependency/library choice, CI/environment repair, archive/reap of preservation-proven terminal attempts, retry within the bounded correction policy, and prioritization among independent executable lanes. Record the evidence and decision in the issue/registry, then continue.
+
+Create an owner gate only for an explicit HOLD or a decision involving irreversible/destructive data effects, money/entitlements, production credentials or secrets, legal/privacy/security exceptions, public release/deploy with high blast radius, or a conflict between direct owner priorities. Risk tier alone does not create an owner gate: tests, focused audit, exact CI/readback, and certificates govern technical acceptance. A vague gate without concrete evidence and an owner-only category is invalid; resolve it autonomously or narrow it to the actual owner decision.
 
 ## 1. Initialization and recovery
 
@@ -159,6 +165,8 @@ Before spawn, implementation, merge, or close, run the corresponding fail-closed
 ```
 
 A project-wide HOLD blocks all four actions. Only exact direct-owner `RESUME` may resolve a HOLD. Never translate, infer, or relay it.
+
+`owner-gate.py` is reserved for the owner-only categories above. Never create it merely because a technical choice is Medium/High risk or because two reversible implementations exist. For reversible/evidence-backed choices, document the coordinator decision and proceed through the applicable acceptance tier.
 
 Merge authority is risk-tiered:
 

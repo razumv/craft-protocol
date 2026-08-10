@@ -28,6 +28,20 @@ class DeliveryModeV320Tests(unittest.TestCase):
         self.assertIn("One failed acceptance permits one root-cause correction", text)
         self.assertIn("A second failure escalates the exact blocker", text)
 
+    def test_reversible_evidence_backed_choices_are_coordinator_authority(self):
+        skill = self.read("skills/coordinator-lifecycle-protocol/SKILL.md")
+        delivery = self.read("docs/DELIVERY-MODE-v3.2.0.md")
+        kickoff = self.read("scripts/coordinator-kickoff.md")
+        self.assertIn("Coordinators decide and execute reversible or evidence-backed technical choices", skill)
+        self.assertIn("Risk tier alone does not create an owner gate", skill)
+        self.assertIn("A vague gate without concrete evidence and an owner-only category is invalid", skill)
+        self.assertIn("Evidence-backed technical choices are coordinator authority", delivery)
+        self.assertIn("Risk tier сам по себе не создаёт owner gate", kickoff)
+        for text in (skill, delivery):
+            self.assertIn("irreversible/destructive", text)
+            self.assertIn("money/entitlements", text)
+            self.assertTrue("production secrets" in text or "production credentials or secrets" in text)
+
     def test_worker_does_not_substitute_infrastructure_for_product(self):
         text = self.read("skills/worker-completion-protocol/SKILL.md")
         self.assertIn("Worker Completion Protocol v3.2.1", text)
