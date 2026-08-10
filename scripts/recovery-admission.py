@@ -53,6 +53,10 @@ class CapabilityError(AdmissionError):
     """The running Craft server is not the explicitly supported API."""
 
 
+class TransientRpcError(AdmissionError):
+    """Capability/workspace discovery transport failed before any delivery."""
+
+
 class DeliveryUnknown(AdmissionError):
     """The delivery process outcome is unknown and must be retried idempotently."""
 
@@ -326,19 +330,19 @@ def rpc_json(args: list[str], token: str, *, delivery: bool = False, expected_ty
     except (OSError, subprocess.TimeoutExpired) as exc:
         if delivery:
             raise DeliveryUnknown("delivery outcome unavailable") from exc
-        raise CapabilityError("Craft CLI unavailable") from exc
+        raise TransientRpcError("Craft CLI unavailable") from exc
     if cp.returncode and not delivery:
-        raise CapabilityError("Craft CLI rejected capability query")
+        raise TransientRpcError("Craft CLI rejected discovery query")
     try:
         value = json.loads(cp.stdout)
     except Exception as exc:
         if delivery:
             raise DeliveryUnknown("delivery outcome unavailable") from exc
-        raise CapabilityError("Craft CLI capability response invalid") from exc
+        raise TransientRpcError("Craft CLI discovery response invalid") from exc
     if not isinstance(value, expected_type):
         if delivery:
             raise DeliveryUnknown("delivery outcome unavailable")
-        raise CapabilityError("Craft CLI response type invalid")
+        raise TransientRpcError("Craft CLI discovery response type invalid")
     return value
 
 
@@ -485,6 +489,14 @@ def tick(args: argparse.Namespace) -> int:
             token = server_token()
             verify_capabilities(args, token)
             verify_workspace_binding(workspace_id(args), token, controller_manifest)
+        except TransientRpcError as exc:
+            # No delivery was attempted. Preserve the exact prepared scope and
+            # retry discovery on the next tick; runtime identity/content
+            # mismatches still hard-block through CapabilityError below.
+            atomic_json(STATE, prepared)
+            print(json.dumps({"schemaVersion": 2, "applied": True, "state": prepared,
+                              "reason": "discovery-retry", "detail": str(exc)}, indent=2))
+            return 75
         except (AdmissionError, CapabilityError) as exc:
             blocked = hard_block(prepared, now, str(exc))
             atomic_json(STATE, blocked)

@@ -28,6 +28,10 @@ state["serverUrl"] = os.environ.get("CRAFT_SERVER_URL")
 def save(): state_path.write_text(json.dumps(state))
 def output(value): save(); print(json.dumps(value)); raise SystemExit(0)
 if args == ["automation", "capabilities"]:
+    if state.get("rejectCapabilitiesOnce") and not state.get("capabilitiesRejected"):
+        state["capabilitiesRejected"] = True
+        save()
+        raise SystemExit(9)
     if state.get("createKillSwitchAfterCapabilities"):
         Path(state["createKillSwitchAfterCapabilities"]).touch()
     output(state["capabilities"])
@@ -288,6 +292,19 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         self.assertEqual(cp.returncode, 2)
         self.assertEqual(row["state"]["phase"], "blocked")
         self.assertEqual(self.delivery_calls(), [])
+
+    def test_transient_capability_cli_failure_retries_same_prepared_scope(self):
+        self.incident()
+        self.mutate_fake(rejectCapabilitiesOnce=True)
+        cp, row = self.apply(ok=False)
+        self.assertEqual(cp.returncode, 75)
+        self.assertEqual(row["state"]["phase"], "prepared")
+        scope = row["state"]["scope"]
+        cp, recovered = self.apply()
+        self.assertEqual(cp.returncode, 0)
+        self.assertEqual(recovered["state"]["scope"], scope)
+        self.assertEqual(recovered["state"]["phase"], "notified")
+        self.assertEqual(len(self.delivery_calls()), 1)
 
     def test_absent_capability_hard_blocks_without_delivery(self):
         self.incident()

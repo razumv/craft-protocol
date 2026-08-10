@@ -10,6 +10,7 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ### Fixed
 
+- pre-delivery Craft CLI/transport/JSON discovery failures now retain the exact prepared admission scope and retry with exit 75; authenticated capability/runtime identity mismatches remain hard-blocked.
 - watchdog now renews an exact live authoritative coordinator lease from a completed non-intermediate assistant turn, preventing false stale incidents when model-authored heartbeat commands are omitted; HOLD/rotation/non-live sessions remain untouched.
 - objectively cleared incidents reset their bounded recovery budget only after a five-minute/two-scan absence confirmation; admission pauses during confirmation, and transient observation gaps preserve the prior budget. A later confirmed recurrence starts at wake-1 instead of inheriting prior rotation/exhaustion.
 - coordinators may no longer represent prose-only external waiting as autonomous progress; auto-merge requires an enablement receipt and terminal external jobs are deduplicated from generic job-exit incidents.
