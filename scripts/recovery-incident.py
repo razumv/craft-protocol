@@ -15,6 +15,7 @@ spec = importlib.util.spec_from_file_location("orch_common", HERE / "orchestrati
 common = importlib.util.module_from_spec(spec); spec.loader.exec_module(common)  # type: ignore
 RUNTIME = common.RUNTIME
 INCIDENTS = RUNTIME / "recovery-incidents"
+EXTERNAL_WAITS = RUNTIME / "external-waits"
 SELF_HEALING = RUNTIME / "self-healing"
 LOCK = RUNTIME / "recovery-incidents.lock"
 CONTROLLER = SELF_HEALING / "controller.json"
@@ -39,6 +40,9 @@ ACTION_MATRIX = {
     "terminal-handoff-unconsumed": ["wake-coordinator", "verify-preservation", "archive-reap-if-proven", "release-slot"],
     "job-exit-unreported": ["inspect-receipt", "wake-coordinator"],
     "heavy-lock-wait": ["ack-receipt", "queue-after-lock", "wake-coordinator"],
+    "external-wait-terminal": ["inspect-receipt", "wake-coordinator", "continue-after-proved-success"],
+    "external-wait-unobserved": ["wake-coordinator", "attach-observer", "fail-closed"],
+    "external-wait-deadline": ["wake-coordinator", "inspect-external-state", "bounded-correction"],
     "cwd-collision": ["hard-refusal", "owner-escalation"],
     "project-mapping-conflict": ["hard-refusal", "owner-escalation"],
     "ambiguous-coordinator-owner": ["hard-refusal", "owner-escalation"],
@@ -180,8 +184,29 @@ def collect_observations():
         if not ambiguous_parent and state == "handoff-ready" and role != "auditor" and lease.get("preservationState") not in {"pushed", "merged"}:
             out.append(observation("preservation-unknown", "high", project, sid, evidence))
 
+    external_watcher_ids = set()
+    for p in EXTERNAL_WAITS.glob("*.json"):
+        wait = common.read_json(p) or {}
+        state = str(wait.get("state") or "")
+        watcher = str(wait.get("watcherSessionId") or "")
+        if watcher and state != "cleared":
+            external_watcher_ids.add(watcher)
+        kind = {"terminal": "external-wait-terminal", "unobserved": "external-wait-unobserved",
+                "deadline": "external-wait-deadline"}.get(state)
+        if not kind:
+            continue
+        evidence = {"waitId": wait.get("waitId") or p.stem, "waitKind": wait.get("kind"),
+                    "subject": wait.get("subject"), "state": state, "reason": wait.get("reason"),
+                    "deadlineAt": wait.get("deadlineAt"), "terminalExitCode": wait.get("terminalExitCode"),
+                    "jobId": wait.get("jobId")}
+        severity = "high" if state in {"unobserved", "deadline"} or wait.get("terminalExitCode") not in {0, None} else "medium"
+        out.append(observation(kind, severity, wait.get("project"), watcher, evidence,
+                               coordinatorSessionId=wait.get("coordinatorSessionId"), workUnit=wait.get("workUnit")))
+
     for p in (RUNTIME / "worker-jobs").glob("*.json"):
         job = common.read_json(p) or {}; sid = str(job.get("sessionId") or p.stem)
+        if sid in external_watcher_ids:
+            continue
         lease = common.read_json(RUNTIME / "worker-leases" / f"{sid}.json") or {}; manifest = manifests.get(sid, {})
         parent_session = str(lease.get("parentSessionId") or "")
         project = project_for_child(lease, manifest, owners, roots, ambiguous); code = job.get("exitCode")

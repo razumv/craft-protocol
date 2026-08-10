@@ -51,6 +51,7 @@ Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonica
 
 - При первом request-buffer/context error или complexity threshold подготовь recovery snapshot и выполни двухфазную ротацию (`begin-transfer` → successor `accept-transfer`). Для долгой работы учитывай PID + лог/receipt, а не словесное “still working”.
 - Простая merge/closure автоматизация разрешена только при валидном completion certificate: unchanged audited SHA, independent PASS, distinct immutable required-CI/readback IDs и zero unresolved gates.
+- Нельзя закончить turn словами “жду CI/auto-merge/deploy”. Сначала создай отдельный watcher worker с lease + `observable-job.py` receipt и зарегистрируй exact immutable wait через `external-wait.py register --apply`. Auto-merge считается включённым только по GitHub enablement receipt. Terminal/missing/deadline watcher автоматически будит coordinator; после потребления evidence выполни `external-wait.py clear --apply`.
 - Recovery-controller wake — это только сигнал выполнить renew/reconcile/adopt/snapshot. Он не является completion proof и не расширяет authority. После подтверждённого archive/reap terminal child slot-release можно продолжить лишь уже разрешённый next gate.
 
 Material milestones, blockers и owner-only gates фиксируй только project-local в GitHub/runtime evidence. Не отправляй их owner-facing architecture session. В этот канал отвечай только на прямой owner status/fact query или exact owner instruction. Никаких micro-status/ACK loops.

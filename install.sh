@@ -32,7 +32,7 @@ ADMISSION_PLIST_NAME="com.craft-protocol.recovery-admission.plist"
 files=(
   orchestration-common.py coordinator-registry.py coordinator-reconcile.py
   owner-gate.py recovery-ledger.py completion-certificate.py recovery-incident.py
-  worker-lease.py observable-job.py worker-watchdog.py post-archive-reaper.py
+  worker-lease.py observable-job.py external-wait.py worker-watchdog.py post-archive-reaper.py
   controller-harness.py recovery-admission.py
   scan-reapable-workers.py watchdog-cron.sh recovery-admission-cron.sh coordinator-kickoff.md
 )
@@ -116,7 +116,7 @@ if (( APPLY )); then
   (cd "$ROOT/tests" && CRAFT_TEST_SCRIPTS="$SCRIPTS" "$PYTHON" -m unittest -v \
     test_worker_reliability.py test_orchestration_v320.py test_self_healing_v311.py \
     test_delivery_mode_v320.py test_controller_harness_v321.py \
-    test_recovery_admission_v321.py)
+    test_recovery_admission_v321.py test_external_wait_v321.py)
   echo "Running watchdog dry-run..."
   "$PYTHON" "$SCRIPTS/worker-watchdog.py"
   echo "Install complete. Review output before enabling launchd."

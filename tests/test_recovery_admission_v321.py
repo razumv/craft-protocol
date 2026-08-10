@@ -163,6 +163,15 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         self.assertEqual(row["state"]["incidentIds"], ["current"])
         self.assertEqual(len(self.delivery_calls()), 1)
 
+    def test_external_wait_terminal_is_admitted_despite_watcher_preservation_unknown(self):
+        self.incident("wait", kind="external-wait-terminal", session="watcher", project="alpha", work_unit="325")
+        wait = json.loads((self.runtime / "recovery-incidents" / "wait.json").read_text())
+        wait["evidence"] = {"waitId": "pr-ci", "terminalExitCode": 0}
+        self.put(self.runtime / "recovery-incidents" / "wait.json", wait)
+        self.incident("preserve", kind="preservation-unknown", session="watcher", project="alpha", work_unit="325")
+        _, row = self.apply()
+        self.assertEqual(row["state"]["incidentIds"], ["wait"])
+
     def test_current_handoff_can_wake_to_verify_unknown_preservation(self):
         self.incident("handoff", kind="terminal-handoff-unconsumed", session="worker", project="alpha", work_unit="325")
         handoff = json.loads((self.runtime / "recovery-incidents" / "handoff.json").read_text())

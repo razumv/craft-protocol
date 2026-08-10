@@ -41,7 +41,7 @@ MAX_INCIDENTS = int(os.environ.get("CRAFT_RECOVERY_ADMISSION_MAX_INCIDENTS", "3"
 COOLDOWN_SECONDS = int(os.environ.get("CRAFT_RECOVERY_ADMISSION_COOLDOWN_SECONDS", "900"))
 NOW_MS = lambda: int(os.environ.get("CRAFT_TEST_NOW_MS", "0")) or int(time.time() * 1000)
 BLOCKED_KINDS = {"owner-gate-blocked", "cwd-collision", "project-mapping-conflict", "ambiguous-coordinator-owner", "preservation-unknown"}
-WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "job-exit-unreported", "heavy-lock-wait", "terminal-handoff-unconsumed"}
+WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "job-exit-unreported", "heavy-lock-wait", "terminal-handoff-unconsumed", "external-wait-terminal", "external-wait-unobserved", "external-wait-deadline"}
 SUCCESS_STATUSES = {"delivered", "queued", "duplicate"}
 
 
@@ -147,7 +147,8 @@ def live_scope_blocked(row: dict[str, Any], all_rows: list[dict[str, Any]]) -> b
             if session and blocker_session == session:
                 current_handoff = (row.get("kind") == "terminal-handoff-unconsumed" and
                                    (row.get("evidence") or {}).get("activeChild") is True)
-                if not current_handoff:
+                external_wait_wake = str(row.get("kind") or "").startswith("external-wait-")
+                if not current_handoff and not external_wait_wake:
                     return True
             continue
         # Identity/cwd conflicts block only the exact affected session. A

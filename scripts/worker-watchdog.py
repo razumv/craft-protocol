@@ -31,12 +31,15 @@ def main() -> int:
     if args.apply:
         archive += ["--apply", "--all", "--max-groups", str(args.max_groups)]
         leases += ["--apply"]
+    waits = [sys.executable, str(HERE / "external-wait.py"), "reconcile"]
     incidents = [sys.executable, str(HERE / "recovery-incident.py"), "detect"]
     if args.apply:
+        waits += ["--apply"]
         incidents += ["--apply"]
     report = {
         "archiveReaper": call(archive),
         "leaseReconcile": call(leases),
+        "externalWaits": call(waits),
         "coordinatorRegistry": call([sys.executable, str(HERE / "coordinator-registry.py"), "validate"]),
         "coordinatorMetadata": call([sys.executable, str(HERE / "coordinator-reconcile.py")]),
         "ownerGates": call([sys.executable, str(HERE / "owner-gate.py"), "inbox"]),
@@ -47,7 +50,7 @@ def main() -> int:
     # Runtime cleanup or incident-registry failures are fatal. Registry/metadata
     # non-zero means drift was detected and is surfaced; it never authorizes repair.
     fatal = any(report[key]["exitCode"] != 0 for key in
-                ("archiveReaper", "leaseReconcile", "controllerHarnesses", "recoveryIncidents"))
+                ("archiveReaper", "leaseReconcile", "externalWaits", "controllerHarnesses", "recoveryIncidents"))
     report["healthy"] = (not fatal and report["coordinatorRegistry"]["exitCode"] == 0
                          and report["coordinatorMetadata"]["exitCode"] == 0
                          and report["completionCertificates"]["exitCode"] == 0)

@@ -137,6 +137,27 @@ A plain “still working” is not evidence. Valid progress evidence is a new SH
 
 CI barriers spanning multiple workflows/runs must be keyed by distinct immutable run/job IDs and exact head SHA. Never count repeated polling observations as separate successes; deduplicate by run ID and require every named unique run to reach terminal success.
 
+### External waits are executable work
+
+Never end a turn with a prose-only statement such as “waiting for CI”, “auto-merge will continue”, “waiting for deployment”, or “resume when an external check finishes”. Before yielding, create a dedicated worker watcher with the required protocol labels/lease, start an `observable-job.py` command bound to the immutable run/job/head, and register it:
+
+```bash
+~/.craft-agent/scripts/external-wait.py register --apply \
+  --wait-id <stable-id> --project <project> --coordinator <coordinator-session> \
+  --work-unit <unit> --kind <github-actions|auto-merge|deployment|external-check> \
+  --subject <non-secret-immutable-run-or-head> --watcher-session <worker-session> \
+  --timeout <60..604800>
+```
+
+Registration fails closed unless the watcher has an exact live parent-bound worker/auditor lease and an active durable job receipt. The watchdog reconciles waits every five minutes. Terminal receipts, missing observers, and deadlines produce bounded coordinator wake incidents. After consuming exact terminal evidence, clear the wait; this also acknowledges its terminal job receipt:
+
+```bash
+~/.craft-agent/scripts/external-wait.py clear --apply \
+  --wait-id <stable-id> --coordinator <coordinator-session> --evidence <non-secret-receipt-summary>
+```
+
+Do not claim auto-merge from intent or branch settings: require a GitHub receipt proving it was enabled. If no such receipt exists, the coordinator remains responsible for merge after exact CI/audit gates. A wait without a registered observer is a protocol violation, not an idle state.
+
 For commands expected to exceed 10 minutes, require the observable job wrapper:
 
 ```bash

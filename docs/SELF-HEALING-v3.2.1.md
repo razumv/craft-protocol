@@ -21,7 +21,7 @@ An incident batch is admitted only when all conditions hold:
 
 1. the kill switch is absent;
 2. at least one open incident has an allowed wake action;
-3. owner gates, HOLDs, preservation-unknown, cwd/project conflicts, and ambiguous ownership are excluded;
+3. project HOLD/needs-owner remains project-wide; owner gates are exact-work-unit scoped; cwd/project conflicts are exact-session scoped; preservation-unknown forbids destructive inference but may admit a current-child or external-wait wake solely for verification;
 4. the configured persistent controller exists, is live, and has both `agent-role::recovery-controller` and `controller-mode::persistent`;
 5. no prior admission is armed, notified, or blocked;
 6. the incident fingerprint is outside cooldown;
@@ -41,6 +41,14 @@ The persisted success receipt contains the direct `messageId` and a null `notifi
 The direct-delivery target is the one existing persistent controller. Its session manifest and harness proof remain mandatory before delivery. No notifier is created, so no notifier harness registration, session mutation, archive, or reaping is authorized.
 
 The persistent controller applies only ledger-authorized recovery. It does not replace project coordinators or report routine status. Existing controller-harness PID/start-token/command-hash and archive-first preservation guards remain authoritative for any unrelated legacy cleanup.
+
+## Observable external waits
+
+CI, auto-merge, deployment, and other external barriers are work, not idle prose. `external-wait.py register --apply` requires an exact authoritative coordinator, a parent-bound live worker/auditor lease, and an active `observable-job.py` receipt. Records contain only non-secret immutable subjects such as run/job IDs and exact head SHAs.
+
+Registration and every transition are serialized by one runtime lock. The record binds the durable job-command hash and the live observer's PID, PPID, process start token, and process-command hash, so PID reuse or command substitution fails closed. The deterministic watchdog reconciles these records before incident detection. A terminal receipt emits `external-wait-terminal`; a missing/mismatched lease, job, process identity, or command emits `external-wait-unobserved`; an exceeded deadline emits `external-wait-deadline`. All three wake the existing coordinator through normal admission. Watched jobs are excluded from the generic `job-exit-unreported` path, so one external transition produces one semantic incident. Clearing requires the exact coordinator, a terminal observer receipt, and non-secret evidence. Because the wait and job are separate files, clear first writes a durable `clearing` journal, then acknowledges the job and finalizes `cleared`; a crash at either boundary is completed deterministically by the next watchdog reconciliation. Active, missing, or deadline-only waits cannot be cleared.
+
+A statement that auto-merge is expected is not evidence that auto-merge was configured. The coordinator must retain responsibility for merge unless an immutable GitHub receipt proves enablement.
 
 `controller-harness.py` retains PID/start-token/command-hash, app, PID-reuse, caller-binding, and tri-state process guards. No app restart/termination, PID guessing, SIGKILL, cwd inference, or private session mutation is permitted.
 

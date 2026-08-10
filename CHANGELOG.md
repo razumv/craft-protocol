@@ -4,8 +4,13 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+### Added
+
+- durable `external-wait.py` registration for CI, auto-merge, deployment, and external checks, requiring a live parent-bound watcher lease plus active observable-job receipt; PID/PPID/start-token/process-command and job-command identities remain bound under a serialized lock/CAS lifecycle, clear requires a terminal receipt and uses a crash-recoverable `clearing` journal across wait/job files, and watchdog reconciliation emits semantic wake incidents for terminal receipts, missing observers, and deadlines.
+
 ### Fixed
 
+- coordinators may no longer represent prose-only external waiting as autonomous progress; auto-merge requires an enablement receipt and terminal external jobs are deduplicated from generic job-exit incidents.
 - current `activeChildren` terminal handoffs now trigger an immediate bounded coordinator wake instead of waiting for the one-hour coordinator lease; historical terminal backlog remains non-actionable. Recovery blockers are scoped to the exact session/work unit so unrelated preservation evidence or owner gates cannot deadlock an entire project; unknown preservation permits wake-for-verification only.
 - post-archive reaping now treats every unarchived session role, including coordinators, as a live cwd owner; legacy archived workers sharing a repository-root cwd can no longer SIGTERM the live coordinator Pi subprocess.
 
