@@ -90,10 +90,11 @@ def provider_fields(manifest: dict[str, Any]) -> dict[str, Any]:
     connection = manifest.get("llmConnection")
     model = manifest.get("model")
     preferred = connection == PREFERRED_CONNECTION and model == PREFERRED_MODEL
+    fallback_since = None if preferred else common.now_ms()
     return {
         "connection": connection, "model": model, "preferredProvider": preferred,
-        "fallbackSince": None if preferred else common.now_ms(),
-        "fallbackExpiresAt": None if preferred else common.now_ms() + FALLBACK_TTL * 1000,
+        "fallbackSince": fallback_since,
+        "fallbackExpiresAt": None if fallback_since is None else fallback_since + FALLBACK_TTL * 1000,
     }
 
 
@@ -143,6 +144,58 @@ def cmd_renew(args: argparse.Namespace) -> int:
         now = common.now_ms(); value["lastHeartbeatAt"] = now; value["leaseExpiresAt"] = now + int(args.ttl) * 1000
         save(value)
     print(json.dumps({"ok": True, "record": value}, indent=2)); return 0
+
+
+def latest_completed_assistant_at(session_id: str) -> int:
+    path = common.SESSIONS / session_id / "session.jsonl"
+    latest = 0
+    try:
+        with path.open(encoding="utf-8", errors="ignore") as handle:
+            next(handle, None)  # header is metadata, not completed-turn evidence
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                if event.get("type") != "assistant" or event.get("isIntermediate"):
+                    continue
+                timestamp = int(event.get("timestamp") or 0)
+                latest = max(latest, timestamp)
+    except Exception:
+        return 0
+    return latest
+
+
+def cmd_reconcile_activity(args: argparse.Namespace) -> int:
+    now = common.now_ms(); rows = []; changed = []
+    with common.file_lock(LOCK):
+        for path in sorted(REGISTRY.glob("*.json")):
+            value = common.read_json(path)
+            if not value or value.get("state") != "authoritative":
+                continue
+            session_id = str(value.get("coordinatorSessionId") or "")
+            manifest = common.read_manifest(session_id)
+            if not common.session_live(manifest) or common.role_of(manifest) != "coordinator":
+                continue
+            activity_at = latest_completed_assistant_at(session_id)
+            previous = int(value.get("lastHeartbeatAt") or 0)
+            stored_ttl = int(value.get("leaseExpiresAt") or 0) - previous
+            ttl_ms = stored_ttl if 60_000 <= stored_ttl <= 604_800_000 else int(args.ttl) * 1000
+            eligible = activity_at > previous and now - activity_at <= ttl_ms
+            row = {"project": value.get("project"), "sessionId": session_id,
+                   "previousHeartbeatAt": previous, "activityAt": activity_at, "eligible": eligible}
+            if eligible:
+                value["lastHeartbeatAt"] = activity_at
+                value["leaseExpiresAt"] = activity_at + ttl_ms
+                value["activityRenewedAt"] = now
+                value["activityEvidenceAt"] = activity_at
+                if args.apply:
+                    save(value)
+                changed.append(str(value.get("project")))
+                row["leaseExpiresAt"] = value["leaseExpiresAt"]
+            rows.append(row)
+    print(json.dumps({"applied": args.apply, "changed": changed, "rows": rows}, ensure_ascii=False, indent=2))
+    return 0
 
 
 def cmd_begin_transfer(args: argparse.Namespace) -> int:
@@ -238,6 +291,7 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__); sub = p.add_subparsers(dest="command", required=True)
     c = sub.add_parser("claim"); c.add_argument("--project", required=True); c.add_argument("--session", required=True); c.add_argument("--project-id"); c.add_argument("--predecessor"); c.add_argument("--fallback-reason"); c.add_argument("--ttl", type=int, default=DEFAULT_TTL); c.set_defaults(func=cmd_claim)
     r = sub.add_parser("renew"); r.add_argument("--project", required=True); r.add_argument("--session", required=True); r.add_argument("--ttl", type=int, default=DEFAULT_TTL); r.set_defaults(func=cmd_renew)
+    ra = sub.add_parser("reconcile-activity"); ra.add_argument("--ttl", type=int, default=DEFAULT_TTL); ra.add_argument("--apply", action="store_true"); ra.set_defaults(func=cmd_reconcile_activity)
     b = sub.add_parser("begin-transfer"); b.add_argument("--project", required=True); b.add_argument("--session", required=True); b.add_argument("--successor", required=True); b.add_argument("--reason", required=True); b.set_defaults(func=cmd_begin_transfer)
     a = sub.add_parser("accept-transfer"); a.add_argument("--project", required=True); a.add_argument("--session", required=True); a.add_argument("--expected-generation", type=int); a.add_argument("--ttl", type=int, default=DEFAULT_TTL); a.set_defaults(func=cmd_accept_transfer)
     h = sub.add_parser("hold"); h.add_argument("--project", required=True); h.add_argument("--session", required=True); h.add_argument("--reason", required=True); h.set_defaults(func=cmd_hold)

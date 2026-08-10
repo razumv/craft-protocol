@@ -42,6 +42,10 @@ The direct-delivery target is the one existing persistent controller. Its sessio
 
 The persistent controller applies only ledger-authorized recovery. It does not replace project coordinators or report routine status. Existing controller-harness PID/start-token/command-hash and archive-first preservation guards remain authoritative for any unrelated legacy cleanup.
 
+Before registry validation and incident detection, the watchdog reconciles coordinator liveness from durable session evidence. Only a completed, non-intermediate assistant event newer than the recorded heartbeat may advance the lease of the exact live authoritative coordinator, and only within the existing TTL window. User/child messages, intermediate output, stale old events, HOLD, needs-owner, rotation, archived sessions, and identity mismatch cannot renew ownership. This prevents false stale incidents when a live coordinator omits its model-authored heartbeat command without converting passive session existence into liveness.
+
+When an observed incident condition disappears, the first missing scan writes `clearCandidateAt` and admission pauses for that incident. Only sustained absence for the configured confirmation interval (default five minutes, spanning another watchdog cycle) resolves it and resets the active attempt counter; recurrence before confirmation cancels the candidate and preserves the prior budget. Prior attempts remain in history. A later recurrence after confirmed clear starts a fresh wake-1/wake-2/rotation cycle instead of inheriting earlier exhaustion.
+
 ## Observable external waits
 
 CI, auto-merge, deployment, and other external barriers are work, not idle prose. `external-wait.py register --apply` requires an exact authoritative coordinator, a parent-bound live worker/auditor lease, and an active `observable-job.py` receipt. Records contain only non-secret immutable subjects such as run/job IDs and exact head SHAs.

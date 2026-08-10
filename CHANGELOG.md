@@ -10,6 +10,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ### Fixed
 
+- watchdog now renews an exact live authoritative coordinator lease from a completed non-intermediate assistant turn, preventing false stale incidents when model-authored heartbeat commands are omitted; HOLD/rotation/non-live sessions remain untouched.
+- objectively cleared incidents reset their bounded recovery budget only after a five-minute/two-scan absence confirmation; admission pauses during confirmation, and transient observation gaps preserve the prior budget. A later confirmed recurrence starts at wake-1 instead of inheriting prior rotation/exhaustion.
 - coordinators may no longer represent prose-only external waiting as autonomous progress; auto-merge requires an enablement receipt and terminal external jobs are deduplicated from generic job-exit incidents.
 - current `activeChildren` terminal handoffs now trigger an immediate bounded coordinator wake instead of waiting for the one-hour coordinator lease; historical terminal backlog remains non-actionable. Recovery blockers are scoped to the exact session/work unit so unrelated preservation evidence or owner gates cannot deadlock an entire project; unknown preservation permits wake-for-verification only.
 - post-archive reaping now treats every unarchived session role, including coordinators, as a live cwd owner; legacy archived workers sharing a repository-root cwd can no longer SIGTERM the live coordinator Pi subprocess.

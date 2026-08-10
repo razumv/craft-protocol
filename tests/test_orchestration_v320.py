@@ -6,7 +6,8 @@ import tempfile
 import time
 import unittest
 
-SCRIPTS = Path(os.environ.get("CRAFT_TEST_SCRIPTS", Path.home() / ".craft-agent/scripts"))
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = Path(os.environ.get("CRAFT_TEST_SCRIPTS", ROOT / "scripts"))
 
 class OrchestrationV320Test(unittest.TestCase):
     def setUp(self):
@@ -38,6 +39,33 @@ class OrchestrationV320Test(unittest.TestCase):
 
     def test_01_claim_and_renew(self):
         self.manifest("c1"); self.claim(); self.exec_tool("coordinator-registry.py","renew","--project","demo","--session","c1")
+    def test_01b_completed_assistant_activity_renews_exact_owner(self):
+        self.env["CRAFT_COORDINATOR_TTL_SECONDS"] = "60"
+        self.manifest("c1"); self.claim()
+        path = self.runtime / "coordinators/demo.json"; row = json.loads(path.read_text())
+        activity = int(time.time() * 1000)
+        row["lastHeartbeatAt"] = activity - 120_000; row["leaseExpiresAt"] = activity - 60_000
+        path.write_text(json.dumps(row) + "\n")
+        with (self.sessions / "c1/session.jsonl").open("a") as handle:
+            handle.write(json.dumps({"type": "assistant", "timestamp": activity - 1, "isIntermediate": True, "content": "working"}) + "\n")
+            handle.write(json.dumps({"type": "assistant", "timestamp": activity, "content": "completed turn"}) + "\n")
+        report = json.loads(self.exec_tool("coordinator-registry.py", "reconcile-activity", "--apply").stdout)
+        self.assertEqual(report["changed"], ["demo"])
+        renewed = json.loads(path.read_text())
+        self.assertEqual(renewed["lastHeartbeatAt"], activity)
+        self.assertEqual(renewed["leaseExpiresAt"], activity + 60_000)
+        self.assertEqual(renewed["activityEvidenceAt"], activity)
+
+    def test_01c_intermediate_or_old_activity_does_not_renew(self):
+        self.env["CRAFT_COORDINATOR_TTL_SECONDS"] = "60"
+        self.manifest("c1"); self.claim()
+        path = self.runtime / "coordinators/demo.json"; before = json.loads(path.read_text())
+        with (self.sessions / "c1/session.jsonl").open("a") as handle:
+            handle.write(json.dumps({"type": "assistant", "timestamp": int(time.time() * 1000), "isIntermediate": True}) + "\n")
+        report = json.loads(self.exec_tool("coordinator-registry.py", "reconcile-activity", "--apply").stdout)
+        self.assertEqual(report["changed"], [])
+        self.assertEqual(json.loads(path.read_text())["lastHeartbeatAt"], before["lastHeartbeatAt"])
+
     def test_02_split_brain_refused(self):
         self.manifest("c1"); self.manifest("c2"); self.claim(); p=self.exec_tool("coordinator-registry.py","claim","--project","demo","--session","c2",ok=False); self.assertEqual(p.returncode,3)
     def test_03_two_phase_transfer(self):
@@ -45,7 +73,9 @@ class OrchestrationV320Test(unittest.TestCase):
     def test_04_interrupted_transfer_blocks_second(self):
         self.manifest("c1"); self.manifest("c2"); self.manifest("c3"); self.claim(); self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c2","--reason","x"); p=self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c3","--reason","y",ok=False); self.assertNotEqual(p.returncode,0)
     def test_05_fallback_ttl_detected(self):
-        self.manifest("c1",model="claude",connection="claude"); self.claim(); r=json.loads((self.runtime/"coordinators/demo.json").read_text()); r["fallbackExpiresAt"]=0; (self.runtime/"coordinators/demo.json").write_text(json.dumps(r)); p=self.exec_tool("coordinator-registry.py","inspect","--project","demo",ok=False); self.assertIn("fallback-ttl-expired",p.stdout)
+        self.manifest("c1",model="claude",connection="claude"); self.claim(); r=json.loads((self.runtime/"coordinators/demo.json").read_text())
+        self.assertEqual(r["fallbackExpiresAt"]-r["fallbackSince"],1000)
+        r["fallbackExpiresAt"]=0; (self.runtime/"coordinators/demo.json").write_text(json.dumps(r)); p=self.exec_tool("coordinator-registry.py","inspect","--project","demo",ok=False); self.assertIn("fallback-ttl-expired",p.stdout)
     def test_06_archived_owner_detected(self):
         m=self.manifest("c1"); self.claim(); m["isArchived"]=True; (self.sessions/"c1/session.jsonl").write_text(json.dumps(m)+"\n"); p=self.exec_tool("coordinator-registry.py","inspect","--project","demo",ok=False); self.assertIn("owner-not-live",p.stdout)
     def test_07_hold_blocks_spawn(self):

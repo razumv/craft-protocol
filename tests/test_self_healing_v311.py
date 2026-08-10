@@ -13,7 +13,7 @@ class SelfHealingV311Test(unittest.TestCase):
         self.runtime = self.home / "runtime"; self.sessions = self.home / "sessions"
         self.env = {**os.environ, "CRAFT_RUNTIME": str(self.runtime), "CRAFT_SESSIONS": str(self.sessions),
                     "CRAFT_WORKSPACE": str(self.home / "workspace"), "CRAFT_RECOVERY_MAX_ATTEMPTS": "2",
-                    "CRAFT_COORDINATOR_RECOVERY_MAX_ATTEMPTS": "3"}
+                    "CRAFT_COORDINATOR_RECOVERY_MAX_ATTEMPTS": "3", "CRAFT_RECOVERY_CLEAR_CONFIRM_SECONDS": "0"}
         self.now = int(time.time()*1000)
     def tearDown(self): self.tmp.cleanup()
     def put(self, path, value):
@@ -160,6 +160,48 @@ class SelfHealingV311Test(unittest.TestCase):
         self.manifest("coord"); self.registry(leaseExpiresAt=self.now-1); self.cli("detect","--apply")
         self.registry(leaseExpiresAt=self.now+60000); self.cli("detect","--apply")
         _,rows=self.cli("list","--state","resolved"); self.assertEqual(rows["count"],1)
+
+    def test_transient_observation_gap_cannot_reset_attempt_budget(self):
+        base=self.now+10_000
+        self.env["CRAFT_RECOVERY_CLEAR_CONFIRM_SECONDS"]="300"
+        self.env["CRAFT_TEST_NOW_MS"]=str(base)
+        self.manifest("coord"); self.registry(leaseExpiresAt=base-1); self.cli("detect","--apply")
+        _,rows=self.cli("list","--state","open"); iid=rows["incidents"][0]["incidentId"]
+        self.cli("controller-claim","--session","c1")
+        _,first=self.cli("claim","--incident",iid,"--controller","c1")
+        self.assertEqual(first["recoveryAttempts"],1)
+        self.cli("defer","--incident",iid,"--controller","c1","--reason","wait","--cooldown","0")
+        self.cli("controller-release","--session","c1")
+        self.registry(leaseExpiresAt=base+60_000); self.cli("detect","--apply")
+        pending=json.loads((self.runtime/"recovery-incidents"/f"{iid}.json").read_text())
+        self.assertEqual(pending["recoveryAttempts"],1)
+        self.assertEqual(pending["clearCandidateAt"],base)
+        self.env["CRAFT_TEST_NOW_MS"]=str(base+1_000)
+        self.registry(leaseExpiresAt=base); self.cli("detect","--apply")
+        reopened=json.loads((self.runtime/"recovery-incidents"/f"{iid}.json").read_text())
+        self.assertNotIn("clearCandidateAt",reopened)
+        self.assertEqual(reopened["recoveryAttempts"],1)
+        self.cli("controller-claim","--session","c2")
+        _,second=self.cli("claim","--incident",iid,"--controller","c2")
+        self.assertEqual(second["recoveryAttempts"],2)
+        self.assertEqual(second["claimStage"],"wake-2")
+
+    def test_cleared_then_reopened_condition_gets_fresh_wake_budget(self):
+        self.manifest("coord"); self.registry(leaseExpiresAt=self.now-1); self.cli("detect","--apply")
+        _,rows=self.cli("list","--state","open"); iid=rows["incidents"][0]["incidentId"]
+        self.cli("controller-claim","--session","c1")
+        _,first=self.cli("claim","--incident",iid,"--controller","c1")
+        self.assertEqual(first["claimStage"],"wake-1")
+        self.cli("defer","--incident",iid,"--controller","c1","--reason","wait","--cooldown","0")
+        self.cli("controller-release","--session","c1")
+        self.registry(leaseExpiresAt=self.now+60000); self.cli("detect","--apply")
+        _,resolved=self.cli("list","--state","resolved")
+        self.assertEqual(resolved["incidents"][0]["recoveryAttempts"],0)
+        self.registry(leaseExpiresAt=self.now-1); self.cli("detect","--apply")
+        self.cli("controller-claim","--session","c2")
+        _,reopened=self.cli("claim","--incident",iid,"--controller","c2")
+        self.assertEqual(reopened["recoveryAttempts"],1)
+        self.assertEqual(reopened["claimStage"],"wake-1")
     def test_controller_lock_and_kill_switch(self):
         _,first=self.cli("controller-claim","--session","c1")
         _,renewed=self.cli("controller-heartbeat","--session","c1")

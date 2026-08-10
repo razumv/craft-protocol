@@ -26,6 +26,7 @@ CLAIM_TTL_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CLAIM_TTL_SECONDS", "900"
 MAX_ATTEMPTS = int(os.environ.get("CRAFT_RECOVERY_MAX_ATTEMPTS", "2"))
 COORDINATOR_MAX_ATTEMPTS = int(os.environ.get("CRAFT_COORDINATOR_RECOVERY_MAX_ATTEMPTS", "3"))
 MAX_CONTROLLER_RUNTIME_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CONTROLLER_MAX_RUNTIME_SECONDS", "900"))
+CLEAR_CONFIRM_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CLEAR_CONFIRM_SECONDS", "300"))
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 ACTION_MATRIX = {
     "coordinator-not-live": ["owner-escalation"],
@@ -241,6 +242,10 @@ def detect(apply=False):
                        "lastActionAt": None, "cooldownUntil": None, "resolutionEvidence": None, "history": []}
             else:
                 row = {**old, **obs, "lastSeenAt": now}
+                if old.get("clearCandidateAt") is not None:
+                    row.pop("clearCandidateAt", None)
+                    row.setdefault("history", []).append({"at": now, "action": "condition-clear-cancelled",
+                                                          "candidateAt": old.get("clearCandidateAt")})
                 if row.get("state") == "claimed" and int(row.get("claimExpiresAt") or 0) <= now:
                     row.update(state="open", claimOwner=None, claimExpiresAt=None)
                     row.setdefault("history", []).append({"at": now, "action": "claim-expired"})
@@ -248,14 +253,34 @@ def detect(apply=False):
                     row.update(state="open", cooldownUntil=None)
                     row.setdefault("history", []).append({"at": now, "action": "cooldown-expired"})
                 if row.get("state") == "resolved":
-                    row.update(state="open", resolutionEvidence=None)
-                    row.setdefault("history", []).append({"at": now, "action": "condition-reopened", "fingerprint": fp})
+                    # A condition that objectively cleared ended the prior
+                    # bounded recovery cycle. A later recurrence starts with a
+                    # fresh wake-1 budget rather than inheriting rotation/exhaustion.
+                    row.update(state="open", resolutionEvidence=None, recoveryAttempts=0,
+                               claimOwner=None, claimExpiresAt=None, claimStage=None,
+                               claimAllowedActions=None, lastActionAt=None, cooldownUntil=None)
+                    row.setdefault("history", []).append({"at": now, "action": "condition-reopened",
+                                                          "fingerprint": fp, "freshRecoveryCycle": True})
             common.atomic_json(incident_path(iid), row); changed.append(iid)
         for iid, row in existing.items():
             if iid in seen or row.get("state") == "resolved": continue
+            candidate_at = int(row.get("clearCandidateAt") or 0)
+            if not candidate_at:
+                candidate_at = now
+                row["clearCandidateAt"] = candidate_at
+                row.setdefault("history", []).append({"at": now, "action": "condition-clear-candidate"})
+            if now - candidate_at < CLEAR_CONFIRM_SECONDS * 1000:
+                common.atomic_json(incident_path(iid), row); changed.append(iid)
+                continue
+            previous_attempts = int(row.get("recoveryAttempts") or 0)
+            row.pop("clearCandidateAt", None)
             row.update(state="resolved", lastSeenAt=now, claimOwner=None, claimExpiresAt=None,
+                       recoveryAttempts=0, claimStage=None, claimAllowedActions=None,
+                       lastActionAt=None, cooldownUntil=None,
                        resolutionEvidence={"kind": "condition-cleared", "at": now})
-            row.setdefault("history", []).append({"at": now, "action": "condition-cleared"})
+            row.setdefault("history", []).append({"at": now, "action": "condition-cleared",
+                                                  "clearCandidateAt": candidate_at,
+                                                  "completedRecoveryAttempts": previous_attempts})
             common.atomic_json(incident_path(iid), row); changed.append(iid)
     rows = read_incidents()
     return {"schemaVersion": SCHEMA, "apply": True, "disabled": DISABLED.exists(),
@@ -312,6 +337,8 @@ def claim(args):
     def action(row):
         if DISABLED.exists(): fail("self-healing kill switch is active")
         require_active_controller(args.controller)
+        if row.get("clearCandidateAt") is not None:
+            fail("incident is awaiting clear confirmation")
         if row.get("state") == "claimed":
             if int(row.get("claimExpiresAt") or 0) <= now:
                 fail("incident claim expired; run deterministic detect --apply before reclaim")
@@ -343,6 +370,7 @@ def resolve(args):
     now = now_ms()
     def action(row):
         require_claim(row, args.controller)
+        row.pop("clearCandidateAt", None)
         row.update(state="resolved", claimOwner=None, claimExpiresAt=None, cooldownUntil=None,
                    resolutionEvidence={"kind": args.evidence_kind, "detail": args.evidence, "at": now})
         row.setdefault("history", []).append({"at": now, "action": "resolved", "evidence": args.evidence})

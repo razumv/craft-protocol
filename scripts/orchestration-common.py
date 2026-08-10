@@ -19,7 +19,7 @@ RUNTIME = Path(os.environ.get("CRAFT_RUNTIME", HOME / ".craft-agent/runtime")).e
 
 
 def now_ms() -> int:
-    return int(time.time() * 1000)
+    return int(os.environ.get("CRAFT_TEST_NOW_MS", "0")) or int(time.time() * 1000)
 
 
 def read_json(path: Path) -> dict[str, Any] | None:

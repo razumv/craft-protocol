@@ -167,7 +167,8 @@ def incidents() -> list[dict[str, Any]]:
     all_rows = [row for path in sorted(INCIDENTS.glob("*.json")) if (row := read_json(path))]
     rows = []
     for row in all_rows:
-        if row.get("state") != "open" or row.get("kind") in BLOCKED_KINDS or row.get("kind") not in WAKE_KINDS:
+        if (row.get("state") != "open" or row.get("clearCandidateAt") is not None or
+                row.get("kind") in BLOCKED_KINDS or row.get("kind") not in WAKE_KINDS):
             continue
         # Only a handoff from the coordinator registry's current activeChildren
         # is an immediate wake. Historical terminal leases remain report-only so

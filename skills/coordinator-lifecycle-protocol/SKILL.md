@@ -131,7 +131,9 @@ Runtime lease:
 ~/.craft-agent/runtime/worker-leases/<session-id>.json
 ```
 
-It is disposable active state. The watchdog removes it, the PID fallback, and job receipt when the session is archived or absent.
+It is disposable active state. The watchdog removes it, the PID fallback, and job receipt when the session is archived or absent. Explicit coordinator `renew` remains required at material transitions. As a deterministic liveness fallback, watchdog reconciliation may advance an exact live authoritative lease from a newer completed, non-intermediate assistant turn; intermediate text, user/child messages, archived sessions, HOLD, needs-owner, and rotation never renew ownership.
+
+A recovery condition ends its bounded attempt cycle only after sustained absence across the deterministic clear-confirmation interval; the first missing scan pauses admission, and recurrence before confirmation preserves the current budget. After confirmed clear, a later recurrence starts again at wake-1; prior rotation/exhaustion remains in history but cannot skip the new cycle.
 
 A plain “still working” is not evidence. Valid progress evidence is a new SHA, changed artifact/log, test result, active child PID with increasing output, or completed phase.
 

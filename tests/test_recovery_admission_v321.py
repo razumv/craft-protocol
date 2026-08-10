@@ -142,6 +142,15 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         self.assertEqual(self.fake().get("records"), None)
         self.assertFalse((self.runtime / "self-healing" / "admission.json").exists())
 
+    def test_pending_clear_incident_is_not_admitted(self):
+        self.incident("pending")
+        path = self.runtime / "recovery-incidents/pending.json"
+        row = json.loads(path.read_text()); row["clearCandidateAt"] = NOW
+        self.put(path, row)
+        _, report = self.apply()
+        self.assertEqual(report["reason"], "no-actionable-incidents")
+        self.assertEqual(self.delivery_calls(), [])
+
     def test_no_incident_does_not_deliver_or_mutate_automation_config(self):
         before = self.config.read_bytes()
         _, row = self.apply()
