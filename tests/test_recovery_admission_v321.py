@@ -233,6 +233,23 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         self.assertEqual(self.fake()["serverUrl"], "https://craft.example.test")
         self.assertNotIn(["versions"], self.fake()["records"])
 
+    def test_notified_cycle_rearms_after_cooldown_with_fresh_scope(self):
+        self.incident()
+        _, first = self.apply()
+        first_scope = first["state"]["scope"]
+        first_message = first["state"]["directDelivery"]["messageId"]
+        _, cooling = self.apply()
+        self.assertEqual(cooling["reason"], "fingerprint-cooldown")
+        self.assertEqual(len(self.delivery_calls()), 1)
+        later = dict(self.env)
+        later["CRAFT_TEST_NOW_MS"] = str(NOW + 900_001)
+        _, second = self.apply(env=later)
+        self.assertEqual(second["state"]["phase"], "notified")
+        self.assertNotEqual(second["state"]["scope"], first_scope)
+        self.assertNotEqual(second["state"]["directDelivery"]["messageId"], first_message)
+        self.assertEqual(len(self.delivery_calls()), 2)
+        self.assertEqual(len(self.fake()["receipts"]), 2)
+
     def test_repeated_and_simultaneous_apply_have_one_receipt(self):
         self.incident()
         outcomes = []

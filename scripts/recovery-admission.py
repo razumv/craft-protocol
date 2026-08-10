@@ -347,8 +347,10 @@ def verify_workspace_binding(configured_workspace_id: str, token: str, controlle
         raise CapabilityError("controller session and Craft workspace ID are not bound to the configured workspace")
 
 
-def direct_scope(fp: str) -> dict[str, str]:
-    scope = f"recovery-admission-{fp}"
+def direct_scope(fp: str, prepared_at: int) -> dict[str, str]:
+    # A prepared cycle is stable across crash retries, while a later cooldown
+    # cycle for the same unresolved fingerprint must produce a fresh wake.
+    scope = f"recovery-admission-{fp}-{prepared_at}"
     return {"matcherId": AUTOMATION_ID, "actionId": DIRECT_ACTION_ID, "occurrenceId": scope, "key": scope}
 
 
@@ -359,7 +361,7 @@ def direct_message(fp: str, ids: list[str]) -> str:
 def prepared_state(now: int, controller: str, workspace: str, fp: str, ids: list[str]) -> dict[str, Any]:
     return {"schemaVersion": 2, "phase": "prepared", "mode": "direct-delivery", "preparedAt": now,
             "controllerSessionId": controller, "workspaceId": workspace, "fingerprint": fp, "incidentIds": ids,
-            "scope": direct_scope(fp), "message": direct_message(fp, ids), "lastFingerprint": fp,
+            "scope": direct_scope(fp, now), "message": direct_message(fp, ids), "lastFingerprint": fp,
             "cooldownUntil": now + COOLDOWN_SECONDS * 1000}
 
 
@@ -409,9 +411,23 @@ def tick(args: argparse.Namespace) -> int:
                 atomic_json(STATE, blocked)
             print(json.dumps({"schemaVersion": 2, "applied": args.apply, "state": blocked}, indent=2))
             return 2
-        if state and state.get("phase") in {"notified", "blocked"}:
+        if state and state.get("phase") == "blocked":
             print(json.dumps({"schemaVersion": 2, "applied": args.apply, "state": state}, indent=2))
-            return 0 if state.get("phase") == "notified" else 2
+            return 2
+        if state and state.get("phase") == "notified":
+            current_rows = incidents()
+            current_fp = fingerprint(current_rows) if current_rows else None
+            same_fingerprint_cooling = (current_fp == state.get("lastFingerprint") and
+                                        now < int(state.get("cooldownUntil") or 0))
+            if same_fingerprint_cooling:
+                print(json.dumps({"schemaVersion": 2, "applied": False, "state": state,
+                                  "reason": "fingerprint-cooldown"}, indent=2))
+                return 0
+            state = {"schemaVersion": 2, "phase": "idle", "rearmedAt": now,
+                     "previousPhase": "notified", "lastFingerprint": state.get("lastFingerprint"),
+                     "cooldownUntil": state.get("cooldownUntil")}
+            if args.apply:
+                atomic_json(STATE, state)
         if DISABLED.exists():
             print(json.dumps({"schemaVersion": 2, "applied": False, "state": state or {"phase": "idle"}, "reason": "kill-switch-active"}, indent=2))
             return 2

@@ -7,7 +7,7 @@ All notable changes are documented here. The project follows [Semantic Versionin
 ### Changed
 
 - recovery admission now uses one authenticated, idempotent `automations:admissionDeliver` RPC directly to the proven persistent controller only when `automations:admissionCapabilities` exactly matches explicit runtime version/commit configuration and reports capability version 1; `system:versions` is not used for runtime identity; unsupported servers remain report-only/fail-closed;
-- replaced scheduler arming/receipt reconciliation with an atomic prepared direct-delivery receipt, duplicate-safe replay, busy retry (exit 75), and hard refusal for blocked/capability errors; no notifier sessions or session JSONL/database mutations occur;
+- replaced scheduler arming/receipt reconciliation with an atomic prepared direct-delivery receipt, duplicate-safe replay, busy retry (exit 75), and hard refusal for blocked/capability errors; notified cycles now re-arm after cooldown or fingerprint change with a fresh per-cycle idempotency scope, preventing permanent recovery stalls while preserving crash deduplication; no notifier sessions or session JSONL/database mutations occur;
 - require an explicit workspace ID, runtime version, runtime commit, trusted server URL, absolute executable RPC CLI, and an environment or owner-only token-file credential; bind the controller manifest root to the server workspace ID, recheck the absolute kill switch at the delivery linearization point, refuse PATH discovery and non-TLS remote WebSockets, force machine-JSON CLI responses, and expose no hidden/manual kill-switch bypass; package defaults contain no server URL, token, workspace ID, runtime version, runtime commit, or CLI path.
 
 ## [3.2.1] — 2026-08-09
