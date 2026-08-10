@@ -4,6 +4,10 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+### Fixed
+
+- post-archive reaping now treats every unarchived session role, including coordinators, as a live cwd owner; legacy archived workers sharing a repository-root cwd can no longer SIGTERM the live coordinator Pi subprocess.
+
 ### Changed
 
 - standing owner policy now delegates reversible and evidence-backed technical choices, implementation architecture, environment repair, preservation-proven archive/reap, bounded correction, and executable-lane priority to authoritative coordinators; owner gates are reserved for explicit HOLD and narrow irreversible/high-blast-radius owner-only categories;

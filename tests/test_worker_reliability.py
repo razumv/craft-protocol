@@ -6,7 +6,8 @@ import tempfile
 import time
 import unittest
 
-SCRIPTS = Path(os.environ.get("CRAFT_TEST_SCRIPTS", Path.home() / ".craft-agent/scripts"))
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = Path(os.environ.get("CRAFT_TEST_SCRIPTS", ROOT / "scripts"))
 
 
 class ReliabilityToolsTest(unittest.TestCase):
@@ -154,6 +155,19 @@ class ReliabilityToolsTest(unittest.TestCase):
                 break
             time.sleep(0.05)
         self.assertEqual(value1.get("exitCode"), 0)
+
+    def test_live_coordinator_blocks_reap_of_archived_worker_sharing_cwd(self):
+        code = (
+            "import importlib.util,tempfile,pathlib;"
+            f"p='{SCRIPTS / 'post-archive-reaper.py'}';"
+            "s=importlib.util.spec_from_file_location('r',p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+            "cwd=str(pathlib.Path(tempfile.mkdtemp()).resolve());"
+            "rows={'coord':{'id':'coord','workingDirectory':cwd,'isArchived':False,'labels':['agent-role::coordinator']},"
+            "'worker':{'id':'worker','workingDirectory':cwd,'isArchived':True,'labels':['agent-role::worker']}};"
+            "active,archived=m.classify_session_cwds(rows);"
+            "assert active=={cwd:['coord']},active;assert archived=={cwd:['worker']},archived"
+        )
+        subprocess.run(["python3", "-c", code], env=self.env, check=True, timeout=20)
 
     def test_archived_absent_and_clean_auditor_lanes_are_reap_safe(self):
         code = (

@@ -130,6 +130,27 @@ def remove_runtime(session_id: str) -> None:
             pass
 
 
+def classify_session_cwds(all_manifests: dict[str, dict[str, Any]]) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Index every live session as a cwd owner; only archived workers/auditors are reap targets.
+
+    Coordinators commonly use the repository root, which legacy workers may
+    also have used. Excluding a live coordinator from the ownership index lets
+    cwd-based process discovery SIGTERM the coordinator's Pi subprocess while
+    reaping an archived worker.
+    """
+    active_by_cwd: dict[str, list[str]] = {}
+    archived_by_cwd: dict[str, list[str]] = {}
+    for sid, manifest in all_manifests.items():
+        cwd = worktree_of(manifest)
+        if not cwd:
+            continue
+        if not manifest.get("isArchived"):
+            active_by_cwd.setdefault(cwd, []).append(sid)
+        elif role_of(manifest) in ROLES:
+            archived_by_cwd.setdefault(cwd, []).append(sid)
+    return active_by_cwd, archived_by_cwd
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true")
@@ -142,16 +163,7 @@ def main() -> int:
         parser.error("--apply requires --all or --session")
 
     all_manifests = manifests()
-    active_by_cwd: dict[str, list[str]] = {}
-    archived_by_cwd: dict[str, list[str]] = {}
-    for sid, manifest in all_manifests.items():
-        if role_of(manifest) not in ROLES:
-            continue
-        cwd = worktree_of(manifest)
-        if not cwd:
-            continue
-        target = archived_by_cwd if manifest.get("isArchived") else active_by_cwd
-        target.setdefault(cwd, []).append(sid)
+    active_by_cwd, archived_by_cwd = classify_session_cwds(all_manifests)
 
     pid_map = cwd_pids()
     rows = []
