@@ -15,7 +15,8 @@ class DeliveryModeV320Tests(unittest.TestCase):
         self.assertIn("Coordinator Lifecycle Protocol v3.2.1", text)
         self.assertIn("Project coordinators are autonomous", text)
         self.assertIn("must never cancel or replace a direct owner-requested work unit", text)
-        self.assertIn("Do not send routine updates to the owner-facing infrastructure session", text)
+        self.assertIn("Do not send milestone, gate, progress, or completion reports", text)
+        self.assertIn("system architect/maintainer, not a supervisor", text)
         self.assertNotIn("Audit is ON by default", text)
         self.assertNotIn("On every child message or owner interaction", text)
 
@@ -54,7 +55,7 @@ class DeliveryModeV320Tests(unittest.TestCase):
         self.assertIn("canonical v3.2.1", text)
         self.assertIn("protocol-version::3.2.1", text)
         self.assertIn("Никакого audit-of-audit", text)
-        self.assertIn("Не отправляй routine updates owner-facing infrastructure session", text)
+        self.assertIn("Не отправляй owner-facing architecture session никакие unsolicited milestone/gate/progress/completion reports", text)
 
     def test_public_guide_defines_tests_as_acceptance_not_product(self):
         readme = self.read("README.md")
@@ -62,7 +63,8 @@ class DeliveryModeV320Tests(unittest.TestCase):
         defaults = self.read("docs/CURRENT-DEFAULTS.md")
         self.assertIn("Protocol v3.2.1", readme)
         self.assertIn("Tests, audits, reports, certificates, and gates are acceptance instruments", delivery)
-        self.assertIn("Routine acknowledgements and status polling are prohibited", delivery)
+        self.assertIn("Unsolicited reports, routine acknowledgements, and status polling are prohibited", delivery)
+        self.assertNotIn("a terminal product milestone", delivery)
         self.assertIn("Audit-of-audit:                prohibited", defaults)
 
 

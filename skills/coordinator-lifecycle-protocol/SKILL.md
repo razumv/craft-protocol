@@ -30,8 +30,8 @@ Optimize for a completed product outcome, not for production of reports or addit
 6. Reuse immutable accepted evidence when exact SHA, inputs, environment, and claimed boundary are unchanged. Do not rerun it merely to create a newer report.
 7. Infrastructure detours get one safe recovery attempt or 20 minutes, whichever comes first. Then use an already-approved alternative or escalate one exact blocker. Never let Docker/Colima/browser/tooling repair replace the product task.
 8. Do not expand scope into unrelated pre-existing debt. Prove it is pre-existing and either use a bounded valid path or escalate it separately.
-9. Report only material milestones: candidate preserved, focused acceptance PASS/FAIL, merge/deploy/readback, or one owner decision/blocker. No micro-statuses or ACK loops.
-10. Project coordinators are autonomous. Do not send routine updates to the owner-facing infrastructure session. Contact it only to relay an exact owner decision requirement or when the owner explicitly requested status.
+9. Record material milestones—candidate, acceptance verdict, merge/deploy/readback—in project-local GitHub/runtime evidence. Do not send milestone, gate, progress, or completion reports to the owner-facing architecture session. No micro-statuses or ACK loops.
+10. Project coordinators are autonomous. The owner-facing session is a system architect/maintainer, not a supervisor. Contact it only for a genuinely owner-only decision that remains after applying the autonomous decision boundary, or when the owner explicitly requested status.
 
 Risk tiers:
 

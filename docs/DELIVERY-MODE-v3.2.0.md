@@ -25,8 +25,9 @@ Craft Protocol v3.2.0 corrects a live role-inversion failure mode: an owner-faci
 - reconciles its own workers, audits, CI, merge/readback, and preservation;
 - decides reversible or evidence-backed technical architecture, implementation alternatives, environment repair, terminal archive/reap, bounded correction, and executable-lane priority without opening an owner gate;
 - records the evidence and decision, then continues through the applicable risk-tier acceptance;
-- sends owner-facing messages only for a requested status, a terminal product milestone, or one exact owner blocker;
-- never treats infrastructure acknowledgement as permission to continue ordinary work.
+- keeps candidate, verdict, gate, merge/deploy, and completion evidence project-local; it sends no unsolicited reports to the owner-facing architecture session;
+- contacts that session only for a genuinely owner-only decision remaining after the autonomous boundary, or in response to an explicit owner status request;
+- never treats architecture-session acknowledgement as permission to continue ordinary work.
 
 ### Worker/auditor
 
@@ -84,8 +85,8 @@ A coordinator must not create an owner gate merely because multiple reversible i
 4. No audit-of-audit, evidence-only successor issue, new framework, ADR, or measurement method without a concrete candidate defect.
 5. Infrastructure recovery gets one safe attempt or 20 minutes, then an approved alternative or one exact escalation.
 6. Unrelated pre-existing debt does not enter the product lane.
-7. Reports are limited to candidate, verdict, merge/deploy/readback, or exact owner blocker.
-8. Routine acknowledgements and status polling are prohibited across the owner-facing/coordinator boundary.
+7. Candidate, verdict, merge/deploy/readback, gate, and completion reports remain project-local; they are not pushed to the owner-facing architecture session.
+8. Unsolicited reports, routine acknowledgements, and status polling are prohibited across the owner-facing/coordinator boundary.
 
 ## Non-regression example
 
