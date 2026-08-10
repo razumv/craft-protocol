@@ -215,7 +215,7 @@ def collect_observations():
         ev = {"exitCode": code, "jobId": job.get("jobId") or sid,
               "endedAt": job.get("finishedAt") or job.get("endedAt"),
               "reportedAt": job.get("reportedAt"), "logPath": job.get("logPath"), "heavy": job.get("heavy")}
-        if code == 75:
+        if code == 75 and not job.get("reportedAt"):
             out.append(observation("heavy-lock-wait", "medium", project, sid, ev, coordinatorSessionId=lease.get("parentSessionId")))
         elif code is not None and not job.get("reportedAt"):
             out.append(observation("job-exit-unreported", "medium", project, sid, ev, coordinatorSessionId=lease.get("parentSessionId")))

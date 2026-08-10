@@ -83,6 +83,11 @@ class SelfHealingV311Test(unittest.TestCase):
         self.put(self.runtime/"worker-jobs"/"worker.json",{"sessionId":"worker","jobId":"j","exitCode":75,"endedAt":self.now})
         _,d=self.cli("detect"); row=[x for x in d["observations"] if x["kind"]=="heavy-lock-wait"][0]
         self.assertIn("queue-after-lock",row["allowedActions"])
+    def test_acknowledged_exit_75_is_not_replayed(self):
+        self.base(); self.manifest("worker"); self.lease()
+        self.put(self.runtime/"worker-jobs"/"worker.json",{"sessionId":"worker","jobId":"j","exitCode":75,"endedAt":self.now,"reportedAt":self.now+1})
+        _,d=self.cli("detect")
+        self.assertFalse([x for x in d["observations"] if x["kind"]=="heavy-lock-wait"])
     def test_unreported_exit_zero(self):
         self.base(); self.manifest("worker"); self.lease()
         self.put(self.runtime/"worker-jobs"/"worker.json",{"sessionId":"worker","jobId":"j","exitCode":0,"endedAt":self.now})
