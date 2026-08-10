@@ -36,7 +36,7 @@ ACTION_MATRIX = {
     "worker-suspect": ["inspect-progress", "wake-coordinator"],
     "worker-stalled": ["inspect-progress", "preserve", "archive-reap-if-proven", "request-replacement"],
     "worker-error": ["inspect-error", "preserve", "archive-reap-if-proven", "request-replacement"],
-    "terminal-handoff-unconsumed": ["verify-preservation", "archive-reap-if-proven", "release-slot"],
+    "terminal-handoff-unconsumed": ["wake-coordinator", "verify-preservation", "archive-reap-if-proven", "release-slot"],
     "job-exit-unreported": ["inspect-receipt", "wake-coordinator"],
     "heavy-lock-wait": ["ack-receipt", "queue-after-lock", "wake-coordinator"],
     "cwd-collision": ["hard-refusal", "owner-escalation"],
@@ -155,12 +155,15 @@ def collect_observations():
         parent_session = str(lease.get("parentSessionId") or "")
         parent_project = owners.get(parent_session)
         ambiguous_parent = ambiguous.get(parent_session)
+        active_child = bool(project and sid in (records.get(project, {}).get("activeChildren") or []))
         evidence = {"state": state, "phase": lease.get("phase"), "lastHeartbeatAt": lease.get("lastHeartbeatAt"),
-                    "preservationState": lease.get("preservationState"), "worktree": lease.get("worktree"), "role": role}
+                    "preservationState": lease.get("preservationState"), "worktree": lease.get("worktree"), "role": role,
+                    "activeChild": active_child}
         kind = {"suspect": "worker-suspect", "stalled": "worker-stalled", "error": "worker-error",
                 "handoff-ready": "terminal-handoff-unconsumed"}.get(state)
         if kind and not ambiguous_parent:
-            out.append(observation(kind, "high" if state in {"stalled", "error"} else "medium", project, sid, evidence,
+            severity = "high" if state in {"stalled", "error"} or (state == "handoff-ready" and active_child) else "medium"
+            out.append(observation(kind, severity, project, sid, evidence,
                                    coordinatorSessionId=lease.get("parentSessionId"), workUnit=lease.get("workUnit")))
         if ambiguous_parent:
             out.append(observation("project-mapping-conflict", "critical", None, sid,

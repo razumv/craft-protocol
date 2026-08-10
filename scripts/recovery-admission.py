@@ -41,7 +41,7 @@ MAX_INCIDENTS = int(os.environ.get("CRAFT_RECOVERY_ADMISSION_MAX_INCIDENTS", "3"
 COOLDOWN_SECONDS = int(os.environ.get("CRAFT_RECOVERY_ADMISSION_COOLDOWN_SECONDS", "900"))
 NOW_MS = lambda: int(os.environ.get("CRAFT_TEST_NOW_MS", "0")) or int(time.time() * 1000)
 BLOCKED_KINDS = {"owner-gate-blocked", "cwd-collision", "project-mapping-conflict", "ambiguous-coordinator-owner", "preservation-unknown"}
-WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "job-exit-unreported", "heavy-lock-wait"}
+WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "job-exit-unreported", "heavy-lock-wait", "terminal-handoff-unconsumed"}
 SUCCESS_STATUSES = {"delivered", "queued", "duplicate"}
 
 
@@ -132,8 +132,27 @@ def live_scope_blocked(row: dict[str, Any], all_rows: list[dict[str, Any]]) -> b
     for blocker in all_rows:
         if blocker.get("state") not in {"open", "claimed", "deferred"} or blocker.get("kind") not in BLOCKED_KINDS:
             continue
-        same_scope = (session and blocker.get("sessionId") == session) or (project and blocker.get("project") == project)
-        if same_scope:
+        kind = blocker.get("kind")
+        blocker_session = blocker.get("sessionId")
+        blocker_work_unit = blocker.get("workUnit") or (blocker.get("evidence") or {}).get("workUnit")
+        # Owner gates are lane-scoped; unrelated executable lanes continue.
+        if kind == "owner-gate-blocked":
+            if project and blocker.get("project") == project and work_unit and str(blocker_work_unit or "") == str(work_unit):
+                return True
+            continue
+        # Unknown preservation forbids cleanup/replacement inference, but a
+        # current active-child handoff may wake its coordinator solely to
+        # verify preservation and consume the handoff.
+        if kind == "preservation-unknown":
+            if session and blocker_session == session:
+                current_handoff = (row.get("kind") == "terminal-handoff-unconsumed" and
+                                   (row.get("evidence") or {}).get("activeChild") is True)
+                if not current_handoff:
+                    return True
+            continue
+        # Identity/cwd conflicts block only the exact affected session. A
+        # project-wide block requires the authoritative registry state above.
+        if session and blocker_session == session:
             return True
     if project and work_unit:
         for path in (RUNTIME / "owner-gates" / str(project)).glob("*.json"):
@@ -148,6 +167,11 @@ def incidents() -> list[dict[str, Any]]:
     rows = []
     for row in all_rows:
         if row.get("state") != "open" or row.get("kind") in BLOCKED_KINDS or row.get("kind") not in WAKE_KINDS:
+            continue
+        # Only a handoff from the coordinator registry's current activeChildren
+        # is an immediate wake. Historical terminal leases remain report-only so
+        # legacy backlog cannot starve current recovery work.
+        if row.get("kind") == "terminal-handoff-unconsumed" and (row.get("evidence") or {}).get("activeChild") is not True:
             continue
         if not row.get("sessionId") or live_scope_blocked(row, all_rows):
             continue

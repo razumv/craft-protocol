@@ -253,7 +253,7 @@ At material state transitions only—dispatch, candidate handoff, terminal job, 
 
 ## 10. v3.1.1 self-healing integration
 
-The deterministic watchdog emits incidents; it never performs agentic recovery. A bounded recovery controller may wake you with an exact incident. Treat that message as a wake/reconciliation signal, never as completion or expanded authority.
+The deterministic watchdog emits incidents; it never performs agentic recovery. A bounded recovery controller may wake you with an exact incident. Treat that message as a wake/reconciliation signal, never as completion or expanded authority. A `handoff-ready` lease for a child still listed in the authoritative registry's `activeChildren` is an immediate wake condition; it must not wait for the coordinator's one-hour lease expiry. Historical terminal leases that are no longer registered active remain report-only.
 
 On a recovery-controller message:
 

@@ -68,6 +68,16 @@ class SelfHealingV311Test(unittest.TestCase):
     def test_terminal_pushed_omits_unknown(self):
         self.base(); self.manifest("worker"); self.lease(state="handoff-ready",preservationState="pushed")
         _,d=self.cli("detect"); self.assertEqual([x["kind"] for x in d["observations"]],["terminal-handoff-unconsumed"])
+        self.assertFalse(d["observations"][0]["evidence"]["activeChild"])
+
+    def test_current_active_child_handoff_is_high_severity_wake(self):
+        self.manifest("coord",cwd="/tmp/project"); self.registry(activeChildren=["worker"])
+        self.manifest("worker"); self.lease(state="handoff-ready",preservationState="pushed")
+        _,d=self.cli("detect"); row=d["observations"][0]
+        self.assertEqual(row["kind"],"terminal-handoff-unconsumed")
+        self.assertEqual(row["severity"],"high")
+        self.assertTrue(row["evidence"]["activeChild"])
+        self.assertIn("wake-coordinator",row["allowedActions"])
     def test_exit_75_is_contention(self):
         self.base(); self.manifest("worker"); self.lease()
         self.put(self.runtime/"worker-jobs"/"worker.json",{"sessionId":"worker","jobId":"j","exitCode":75,"endedAt":self.now})

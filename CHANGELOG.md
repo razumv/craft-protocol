@@ -6,6 +6,7 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ### Fixed
 
+- current `activeChildren` terminal handoffs now trigger an immediate bounded coordinator wake instead of waiting for the one-hour coordinator lease; historical terminal backlog remains non-actionable. Recovery blockers are scoped to the exact session/work unit so unrelated preservation evidence or owner gates cannot deadlock an entire project; unknown preservation permits wake-for-verification only.
 - post-archive reaping now treats every unarchived session role, including coordinators, as a live cwd owner; legacy archived workers sharing a repository-root cwd can no longer SIGTERM the live coordinator Pi subprocess.
 
 ### Changed

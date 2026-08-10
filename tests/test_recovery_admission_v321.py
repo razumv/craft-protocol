@@ -150,6 +150,75 @@ class RecoveryAdmissionV321Test(unittest.TestCase):
         self.assertEqual(self.config.read_bytes(), before)
         self.assertFalse((self.runtime / "self-healing" / "admission.json").exists())
 
+    def test_only_current_active_child_terminal_handoff_is_admitted(self):
+        self.incident("old", kind="terminal-handoff-unconsumed", session="old-worker")
+        old = json.loads((self.runtime / "recovery-incidents" / "old.json").read_text())
+        old["evidence"] = {"activeChild": False}
+        self.put(self.runtime / "recovery-incidents" / "old.json", old)
+        self.incident("current", kind="terminal-handoff-unconsumed", session="current-worker")
+        current = json.loads((self.runtime / "recovery-incidents" / "current.json").read_text())
+        current["evidence"] = {"activeChild": True}
+        self.put(self.runtime / "recovery-incidents" / "current.json", current)
+        _, row = self.apply()
+        self.assertEqual(row["state"]["incidentIds"], ["current"])
+        self.assertEqual(len(self.delivery_calls()), 1)
+
+    def test_current_handoff_can_wake_to_verify_unknown_preservation(self):
+        self.incident("handoff", kind="terminal-handoff-unconsumed", session="worker", project="alpha", work_unit="325")
+        handoff = json.loads((self.runtime / "recovery-incidents" / "handoff.json").read_text())
+        handoff["evidence"] = {"activeChild": True}
+        self.put(self.runtime / "recovery-incidents" / "handoff.json", handoff)
+        self.incident("preserve", kind="preservation-unknown", session="worker", project="alpha", work_unit="325")
+        _, row = self.apply()
+        self.assertEqual(row["state"]["incidentIds"], ["handoff"])
+
+    def test_unrelated_project_blockers_do_not_deadlock_executable_lane(self):
+        self.incident("wake", session="coord", project="alpha", work_unit="next")
+        self.incident("preserve", kind="preservation-unknown", session="other-worker", project="alpha", work_unit="old")
+        self.incident("gate", kind="owner-gate-blocked", session="gated-worker", project="alpha", work_unit="gated")
+        gate = json.loads((self.runtime / "recovery-incidents" / "gate.json").read_text())
+        gate["evidence"] = {"workUnit": "gated"}
+        self.put(self.runtime / "recovery-incidents" / "gate.json", gate)
+        _, row = self.apply()
+        self.assertEqual(row["state"]["incidentIds"], ["wake"])
+
+    def test_exact_work_unit_owner_gate_still_blocks_handoff(self):
+        self.incident("handoff", kind="terminal-handoff-unconsumed", session="worker", project="alpha", work_unit="325")
+        handoff = json.loads((self.runtime / "recovery-incidents" / "handoff.json").read_text())
+        handoff["evidence"] = {"activeChild": True}
+        self.put(self.runtime / "recovery-incidents" / "handoff.json", handoff)
+        self.incident("gate", kind="owner-gate-blocked", session="gate", project="alpha", work_unit="325")
+        gate = json.loads((self.runtime / "recovery-incidents" / "gate.json").read_text())
+        gate["evidence"] = {"workUnit": "325"}
+        self.put(self.runtime / "recovery-incidents" / "gate.json", gate)
+        _, row = self.apply()
+        self.assertEqual(row["reason"], "no-actionable-incidents")
+
+    def test_registry_hold_blocks_entire_project(self):
+        self.put(self.runtime / "coordinators" / "alpha.json", {"project": "alpha", "state": "hold"})
+        self.incident("wake", session="coord", project="alpha")
+        _, row = self.apply()
+        self.assertEqual(row["reason"], "no-actionable-incidents")
+
+    def test_same_session_cwd_collision_blocks_delivery(self):
+        self.incident("wake", session="coord", project="alpha")
+        self.incident("collision", kind="cwd-collision", session="coord", project="alpha")
+        _, row = self.apply()
+        self.assertEqual(row["reason"], "no-actionable-incidents")
+
+    def test_same_session_mapping_conflict_blocks_delivery(self):
+        self.incident("wake", session="coord", project="alpha")
+        self.incident("mapping", kind="project-mapping-conflict", session="coord", project="alpha")
+        _, row = self.apply()
+        self.assertEqual(row["reason"], "no-actionable-incidents")
+
+    def test_other_session_identity_conflict_does_not_block_lane(self):
+        self.incident("wake", session="coord", project="alpha")
+        self.incident("collision", kind="cwd-collision", session="other", project="alpha")
+        self.incident("mapping", kind="project-mapping-conflict", session="other-two", project="alpha")
+        _, row = self.apply()
+        self.assertEqual(row["state"]["incidentIds"], ["wake"])
+
     def test_absent_runtime_identity_hard_blocks_without_delivery(self):
         self.incident()
         self.mutate_fake(capabilities={"available": True, "version": 1, "deliverChannel": "automations:admissionDeliver"})
