@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TOOL = Path(os.environ.get("CRAFT_TEST_SCRIPTS", ROOT / "scripts")) / "recovery-admission.py"
 NOW = 1786429000000
 TOKEN = "never-print-this-test-token"
-RUNTIME_VERSION = "0.11.4"
-RUNTIME_COMMIT = "f8679cdcf47688a5a44e0fb9436ab2d6856d583f"
+RUNTIME_VERSION = "0.11.4-admission.db51340"
+RUNTIME_COMMIT = "db51340bfd4595178316f048b17c6cca552b2ad5"
 WIRE_FIXTURE = json.loads((ROOT / "tests/fixtures/admission-v2-wire.json").read_text())
 
 FAKE_CLI = r'''#!/usr/bin/env python3

@@ -20,7 +20,7 @@ cd craft-protocol
 ./install.sh          # dry-run; no files changed
 ```
 
-Install/start the separately reviewed capability-v2 Craft runtime correction `f8679cdcf47688a5a44e0fb9436ab2d6856d583f` (atop base `2889c0a051fe3859842123efb440e8a7ad63193e`) first, then review the Protocol plan and use `./install.sh --apply`. The Protocol installer restores the kill switch before its first payload copy. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. Self-healing scheduler automations ship permanently disabled. Protocol v3.2.2 requires authenticated admission capability v2 with exact runtime version/commit pinning, durable delivery inspection, and one guarded recovery CAS. Outstanding messages are coalesced until runtime-proven consumption; plain `queued` is never success. Routine stale/current-handoff/terminal-wait events go directly to the exact authoritative coordinator generation, while complex or destructive recovery remains controller-bound/fail-closed. Keep the kill switch present until the explicit workspace ID, expected runtime version/commit, and owner-only server token are configured; review [the v3.2.2 admission guide](docs/SELF-HEALING-v3.2.2.md).
+Install/start the separately reviewed capability-v2 Craft runtime correction `db51340bfd4595178316f048b17c6cca552b2ad5` (atop base `2889c0a051fe3859842123efb440e8a7ad63193e`) first, then review the Protocol plan and use `./install.sh --apply`. The Protocol installer restores the kill switch before its first payload copy. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. Self-healing scheduler automations ship permanently disabled. Protocol v3.2.2 requires authenticated admission capability v2 with exact runtime version/commit pinning, durable delivery inspection, and one guarded recovery CAS. Outstanding messages are coalesced until runtime-proven consumption; plain `queued` is never success. Routine stale/current-handoff/terminal-wait events go directly to the exact authoritative coordinator generation, while complex or destructive recovery remains controller-bound/fail-closed. Keep the kill switch present until the explicit workspace ID, expected runtime version/commit, and owner-only server token are configured; review [the v3.2.2 admission guide](docs/SELF-HEALING-v3.2.2.md).
 
 ---
 
@@ -250,8 +250,8 @@ Before admission activation, keep the kill switch present and run:
 CRAFT_SERVER_URL=<trusted-url> CRAFT_RPC_CLI=<absolute-cli> \
   ~/.craft-agent/scripts/recovery-admission.py verify-runtime \
   --workspace-id <workspace-id> \
-  --expected-runtime-version 0.11.4 \
-  --expected-runtime-commit f8679cdcf47688a5a44e0fb9436ab2d6856d583f
+  --expected-runtime-version 0.11.4-admission.db51340 \
+  --expected-runtime-commit db51340bfd4595178316f048b17c6cca552b2ad5
 ```
 
 Require `verified: true` and the exact reviewed runtime identity. Protocol-first activation, launchd admission activation before verification, and kill-switch removal before canary approval are prohibited.

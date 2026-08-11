@@ -134,11 +134,11 @@ fi
 
 echo
 echo "MANDATORY RUNTIME-FIRST ACTIVATION GATE:"
-echo "  1. Install/start corrected capability-v2 runtime f8679cdcf47688a5a44e0fb9436ab2d6856d583f first."
+echo "  1. Install/start corrected capability-v2 runtime db51340bfd4595178316f048b17c6cca552b2ad5 first."
 echo "  2. Keep '$RUNTIME/self-healing.disabled' present."
 echo "  3. Verify exact identity before launchd activation or kill-switch removal:"
 echo "     CRAFT_SERVER_URL=<trusted-url> CRAFT_RPC_CLI=<absolute-cli> $SCRIPTS/recovery-admission.py verify-runtime \\"
-echo "       --workspace-id <workspace-id> --expected-runtime-version 0.11.4 --expected-runtime-commit f8679cdcf47688a5a44e0fb9436ab2d6856d583f"
+echo "       --workspace-id <workspace-id> --expected-runtime-version 0.11.4-admission.db51340 --expected-runtime-commit db51340bfd4595178316f048b17c6cca552b2ad5"
 echo "  4. Activate report-only launchd only after verified=true; remove the kill switch only after reviewed canary approval."
 
 echo
