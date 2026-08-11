@@ -3,7 +3,7 @@ name: worker-completion-protocol
 description: "Mandatory worker/auditor lifecycle: startup lease heartbeat, observable long jobs, git preservation, structured handoff, needs-review, and safe stop."
 ---
 
-# Worker Completion Protocol v3.2.2
+# Worker Completion Protocol v3.3.0
 
 You are a disposable worker or auditor. Your session owns exactly one work-unit attempt in a unique worktree. Silent stops are protocol failures. You run in `permissionMode: allow-all` even when your task is a read-only audit, because reporting/status updates require session tools.
 
@@ -15,7 +15,7 @@ You are a disposable worker or auditor. Your session owns exactly one work-unit 
 - Stay inside changed-path scope. Do not repair unrelated pre-existing debt unless it is an unavoidable dependency and the coordinator explicitly accepts the narrow expansion.
 - An infrastructure/tooling blocker gets one safe recovery attempt or 20 minutes. Then use the approved alternative or report one exact blocker; do not spend the work unit repairing Docker, Colima, browsers, CI, or local environment.
 - Produce one clean candidate. Do not add evidence-only frameworks, ADRs, broad reports, or tests unrelated to the frozen acceptance boundary.
-- Send no micro-progress messages or acknowledgements. Internal lease heartbeats remain required, but message the coordinator only for a material blocker or the terminal structured handoff.
+- Send no micro-progress messages or acknowledgements. Internal lease heartbeats remain required. Report progress, candidates, verdicts, blockers, and the terminal handoff to the **durable coordinator inbox** (`coordinator-inbox.py`), never as a direct chat message that could steer an active coordinator turn.
 - A correction worker fixes only the exact failed acceptance root cause. It must not reopen accepted unchanged evidence or broaden the work unit.
 
 ## Step 0 — identify and start the lease
@@ -72,31 +72,36 @@ git push -u origin HEAD
 
 The status must be clean and push must succeed. If blocked, preserve useful work on an explicit backup branch and report exactly what remains incomplete.
 
-## Structured terminal report
+## Structured terminal report (durable inbox)
 
-Send one `send_agent_message` to the coordinator:
+Submit your report to the durable coordinator inbox. It is coalesced and consumed on
+the coordinator's own schedule, so a report storm can never extend an active
+coordinator turn. Your assignment package carries the `--project`, `--coordinator`
+session id, and `--generation`; they must match your lease and the authoritative
+registry or the submission is refused.
 
-```text
-STATUS: done | needs-rework | blocked
-WORK-UNIT: <id>
-ATTEMPT: <N>
-BRANCH: <branch>   PR: <url or none>
-DONE:
-- <verified facts>
-NOT DONE / OPEN:
-- <remaining work and reason>
-FILES: <key files>
-VERIFY: <commands and exact results>
-PRESERVATION: clean + pushed at <SHA/ref>
-LEASE/JOB: <last phase; observable job exit if any>
+```bash
+~/.craft-agent/scripts/coordinator-inbox.py submit --apply \
+  --project <project> --coordinator <coordinator-session-id> --generation <N> \
+  --sender <your-session-id> --work-unit <id> --attempt <N> \
+  --kind terminal-handoff \
+  --subject "done | needs-rework | blocked — <one-line verified outcome>" \
+  --evidence "branch:<branch>" --evidence "pr:<url or none>" \
+  --evidence "preservation:clean+pushed@<SHA/ref>" \
+  --evidence "verify:<command → exact result>"
 ```
 
-No “should work.” Report evidence only.
+Choose the exact `--kind`: `progress` for a heartbeat-worthy phase, `candidate` for a
+produced candidate, `audit-verdict` for an auditor decision, `blocker` for a material
+blocker, `observer-terminal` for an external-wait watcher's terminal receipt, and
+`terminal-handoff` for the final worker handoff. Evidence references must be
+non-secret and project/workspace-local. No “should work.” Report evidence only. Never
+downgrade a terminal/blocker report with a later progress report.
 
 ## Terminal sequence
 
 1. Preserve and verify git.
-2. Send the structured report.
+2. Submit the structured `terminal-handoff` inbox report.
 3. Mark the lease terminal:
 
 ```bash
@@ -105,6 +110,10 @@ No “should work.” Report evidence only.
 
 4. Set session status to `needs-review`.
 5. Stop. Do not resume or accept rework in this session.
+
+An adopted v3.2.2 worker that still sends a direct `send_agent_message` is not broken:
+the runtime queue-only fallback protects the active coordinator and the report is not
+dropped. New workers always use the durable inbox.
 
 The status change may trigger a bounded v3.1.1 recovery controller. It may verify preservation and archive/reap the terminal lane if the coordinator missed the handoff. This does not change your authority or permit further work.
 
@@ -124,7 +133,7 @@ The coordinator archives the session first; the deterministic watchdog then remo
 - Startup lease heartbeat.
 - Evidence heartbeats or observable job for long work; no micro-status chat.
 - Clean + pushed git.
-- Structured coordinator report.
+- Structured durable inbox report (`coordinator-inbox.py submit`), not direct chat.
 - Lease `handoff-ready`.
 - Session `needs-review`.
 - Stop permanently.

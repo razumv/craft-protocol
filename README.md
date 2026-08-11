@@ -1,4 +1,4 @@
-# Craft Agents Multi-Agent Orchestration Protocol v3.2.2 — Complete Standalone Guide
+# Craft Agents Multi-Agent Orchestration Protocol v3.3.0 — Complete Standalone Guide
 
 [![Protocol tests](https://github.com/razumv/craft-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/razumv/craft-protocol/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -20,7 +20,7 @@ cd craft-protocol
 ./install.sh          # dry-run; no files changed
 ```
 
-Install/start the separately reviewed capability-v2 Craft runtime correction `db51340bfd4595178316f048b17c6cca552b2ad5` (atop base `2889c0a051fe3859842123efb440e8a7ad63193e`) first, then review the Protocol plan and use `./install.sh --apply`. The Protocol installer restores the kill switch before its first payload copy. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. Self-healing scheduler automations ship permanently disabled. Protocol v3.2.2 requires authenticated admission capability v2 with exact runtime version/commit pinning, durable delivery inspection, and one guarded recovery CAS. Outstanding messages are coalesced until runtime-proven consumption; plain `queued` is never success. Routine stale/current-handoff/terminal-wait events go directly to the exact authoritative coordinator generation, while complex or destructive recovery remains controller-bound/fail-closed. Keep the kill switch present until the explicit workspace ID, expected runtime version/commit, and owner-only server token are configured; review [the v3.2.2 admission guide](docs/SELF-HEALING-v3.2.2.md).
+Install/start the separately reviewed capability-v2 Craft runtime correction `db51340bfd4595178316f048b17c6cca552b2ad5` (atop base `2889c0a051fe3859842123efb440e8a7ad63193e`) first, then review the Protocol plan and use `./install.sh --apply`. The Protocol installer restores the kill switch before its first payload copy. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. Self-healing scheduler automations ship permanently disabled. Protocol v3.2.2 requires authenticated admission capability v2 with exact runtime version/commit pinning, durable delivery inspection, and one guarded recovery CAS. Outstanding messages are coalesced until runtime-proven consumption; plain `queued` is never success. Routine stale/current-handoff/terminal-wait events go directly to the exact authoritative coordinator generation, while complex or destructive recovery remains controller-bound/fail-closed. Keep the kill switch present until the explicit workspace ID, expected runtime version/commit, and owner-only server token are configured; review [the v3.2.2 admission guide](docs/SELF-HEALING-v3.2.2.md). Protocol v3.3.0 adds, on top of that unchanged admission lane, a durable coordinator inbox, a per-project product-status snapshot with an owner-facing aggregate report, and observer-bound commitments so report storms cannot extend a coordinator turn and every future wait has a durable observer; review [the v3.3.0 coordinator inbox guide](docs/PROTOCOL-v3.3.md).
 
 ---
 
@@ -177,8 +177,10 @@ tests/
   test_delivery_mode_v320.py
   test_controller_harness_v321.py
   test_recovery_admission_v322.py
+  test_coordinator_v330.py
 docs/
   PROTOCOL-v3.1.md
+  PROTOCOL-v3.3.md
   SELF-HEALING-v3.1.1.md
   SELF-HEALING-v3.2.1.md
   SELF-HEALING-v3.2.2.md
@@ -234,7 +236,7 @@ The installer defaults to dry-run. It prints planned destinations and performs n
 
 The installer:
 
-1. creates/restores mode-0600 `~/.craft-agent/runtime/self-healing.disabled` before copying any v3.2.2 payload;
+1. creates/restores mode-0600 `~/.craft-agent/runtime/self-healing.disabled` before copying any v3.3.0 payload;
 2. backs up overwritten protocol files into a timestamped directory;
 3. installs scripts under `~/.craft-agent/scripts`;
 4. installs canonical skills under the selected workspace;

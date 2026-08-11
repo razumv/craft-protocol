@@ -1,4 +1,4 @@
-# Protocol v3.2.2 defaults
+# Protocol v3.3.0 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -101,7 +101,7 @@ Recovery transition:           previous generation must equal request; resulting
 Recovery CAS busy:              exit 75 retry; does not spend the single correction attempt
 Outstanding envelope:          one per target generation; meaningful incident changes coalesce in place
 Stuck processing deadline:     1800 seconds by default; one guarded recovery attempt, then blocked
-Direct coordinator lane:       stale/current handoff/terminal wait only; exact authoritative generation
+Direct coordinator lane:       stale/current handoff/terminal wait and v3.3.0 inbox/status/commitment wakes; exact authoritative generation
 Expected runtime version:      required deployment configuration; no package default
 Expected runtime commit:       required deployment configuration; no package default
 Runtime identity source:       automations:admissionCapabilities; never system:versions
@@ -121,8 +121,30 @@ Controller harness invariant:  exactly 1 persistent active; zero stale receipts
 Harness identity:              PID + process start token + command SHA-256
 Notifier cleanup:              archive first; exact guarded reap only
 Kill-switch sentinel:          $HOME/.craft-agent/runtime/self-healing.disabled
-Installer first mutation:      create/restore kill switch before copying v3.2.2 payload
+Installer first mutation:      create/restore kill switch before copying v3.3.0 payload
 Activation order:              runtime f8679cdc first → Protocol → verify-runtime → report-only → canary approval
+```
+
+## Coordinator inbox, product status, and commitments (v3.3.0)
+
+```text
+Inbox storage:                 ~/.craft-agent/runtime/coordinator-inbox/<project>/<event-key>.json
+Inbox claims:                  ~/.craft-agent/runtime/coordinator-inbox-claims/<project>.json
+Report kinds:                  progress, candidate, audit-verdict, terminal-handoff, blocker, observer-terminal
+Waking kinds:                  terminal-handoff, audit-verdict, blocker, observer-terminal
+Coalescing key:                project + generation + sender + work-unit + attempt + kind
+Claim TTL:                     900 seconds; unacked items return on expiry; no report deleted on claim
+Ack evidence:                  same token/generation + published status revision or exact terminal evidence
+Status storage:                ~/.craft-agent/runtime/coordinator-status/<project>.json
+Status next actions:           up to 3 ordered; each needs trigger + required evidence + success/failure branch
+Status classifications:        verified, executing, waiting-observed, blocked, stale, contradictory
+Commitment storage:            ~/.craft-agent/runtime/coordinator-commitments/<project>/<id>.json
+Commitment bindings:           worker-lease, external-wait, owner-gate, scheduled-review
+Commitment deadline range:     60..604800 seconds
+Owner aggregate report:        coordinator-status.py report --all --format markdown|json
+Reconcile cadence:             watchdog, every 300 seconds, before the incident scan
+New incidents:                 coordinator-inbox-ready, coordinator-status-missing, coordinator-status-stale,
+                               coordinator-plan-unexecutable, coordinator-commitment-overdue, coordinator-status-contradiction
 ```
 
 ## Status IDs expected by the source workspace
@@ -148,5 +170,8 @@ Recovery incidents:            1
 Recovery controller lease:     1
 Recovery admission receipt:    3 (prepared/delivered/pending/consumed/recovering/blocked)
 Coordinator tick receipts:     3 (one project-keyed exact-generation target cycle)
+Coordinator inbox item:        1
+Coordinator product status:    1
+Coordinator commitment:        1
 Labels config:                 1
 ```

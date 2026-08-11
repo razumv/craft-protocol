@@ -45,6 +45,6 @@ jobs:
           ! rg -n 'session\.jsonl.*write|sqlite|__get-ws-token' "$HOME/.craft-agent/scripts/recovery-admission.py"
       - name: Run regression suite against installed payload
         working-directory: tests
-        run: CRAFT_TEST_SCRIPTS="$HOME/.craft-agent/scripts" python3 -m unittest -v test_worker_reliability.py test_orchestration_v320.py test_self_healing_v311.py test_delivery_mode_v320.py test_controller_harness_v321.py test_recovery_admission_v322.py
+        run: CRAFT_TEST_SCRIPTS="$HOME/.craft-agent/scripts" python3 -m unittest -v test_worker_reliability.py test_orchestration_v320.py test_self_healing_v311.py test_delivery_mode_v320.py test_controller_harness_v321.py test_recovery_admission_v322.py test_external_wait_v321.py test_coordinator_v330.py
       - name: Installer dry run
         run: ./install.sh

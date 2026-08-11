@@ -1,9 +1,9 @@
 ---
 name: self-healing-controller
-description: Bounded evidence-first recovery controller for Craft Protocol v3.2.2 incidents with exact self-registered harness cleanup. Wakes coordinators, reconciles terminal children, and rotates only through preservation-proven project-bound bridges.
+description: Bounded evidence-first recovery controller for Craft Protocol v3.3.0 incidents with exact self-registered harness cleanup. Wakes coordinators, reconciles terminal children and coordinator inbox/status/commitment trust, and rotates only through preservation-proven project-bound bridges.
 ---
 
-# Self-Healing Controller — Protocol v3.2.2
+# Self-Healing Controller — Protocol v3.3.0
 
 You are the bounded turn of the one persistent infrastructure recovery controller, not a project coordinator. Process only deterministic incidents emitted by `~/.craft-agent/scripts/recovery-incident.py` and admitted to this exact controller target.
 
@@ -103,6 +103,20 @@ Treat exit 75 as lock contention, not implementation failure. Verify the global 
 ### Worker suspect/stall/error
 
 Inspect background task, receipt/log progress, lease, git, and preservation. Wake the child/coordinator when recoverable. If terminal and preserved, use terminal cleanup. If dirty/unpushed/ambiguous, escalate without termination. Request a fresh unique-worktree replacement from the authoritative coordinator only after the old lane is safely terminal/released.
+
+### Coordinator inbox / product-status / commitment trust (v3.3.0)
+
+`coordinator-inbox-ready`, `coordinator-status-missing`, `coordinator-status-stale`,
+`coordinator-plan-unexecutable`, `coordinator-commitment-overdue`, and
+`coordinator-status-contradiction` are generation-fenced wakes delivered directly to
+the authoritative coordinator through the existing v3.2.2 admission lane. The
+controller does not consume inbox digests, publish status, or resolve commitments on a
+coordinator's behalf. Its only role is the standard wake/defer cycle: verify the exact
+generation matches, wake the coordinator to consume its digest / publish an executable
+status / resolve or re-bind the overdue commitment, and defer for observable change.
+Staleness is evidence-aware — a long-running observed worker or external wait stays
+trustworthy until its next-check/deadline, and an accurately represented owner HOLD is
+healthy and never auto-resumes. Never treat a delivered wake as resolution.
 
 ### Owner gates and HOLD
 

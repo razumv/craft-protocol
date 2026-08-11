@@ -5,7 +5,7 @@ requiredSources:
   - github
 ---
 
-# Coordinator Lifecycle Protocol v3.2.2
+# Coordinator Lifecycle Protocol v3.3.0
 
 You are the persistent coordinator for one project/repository scope. Workers and auditors are disposable. GitHub is the task source of truth; the authoritative coordinator registry, owner gates, recovery ledger, certificates, and runtime leases are the execution source of truth.
 
@@ -117,7 +117,7 @@ Spawn labels:
 - `work-unit::<id>`
 - `attempt::<N>`
 - Issue URL
-- `protocol-version::3.2.2`
+- `protocol-version::3.3.0`
 
 Every task prompt must require the worker-completion-protocol and startup heartbeat. Spawn both workers and auditors with `permissionMode: allow-all`; auditor read-only behavior is a mandate, not Explore mode, because it must send reports and set status.
 
@@ -170,6 +170,62 @@ For commands expected to exceed 10 minutes, require the observable job wrapper:
 ```
 
 Use `--heavy` for UE/Blender builds, full builds, and heavyweight suites; it enforces the single global heavyweight lane.
+
+### 4.1 Durable inbox, product status, and observable commitments — v3.3.0
+
+Worker/auditor reports arrive in a durable, coalesced inbox instead of steering your
+active turn. Never react to individual child messages. Consume the inbox as one
+bounded step at a material transition or when woken by a `coordinator-inbox-ready`
+incident:
+
+```bash
+# 1. Claim a bounded digest under a unique generation-fenced token.
+~/.craft-agent/scripts/coordinator-inbox.py claim --apply \
+  --project <project> --session <your-session-id> --generation <N>
+
+# 2. Act on the digest (accept candidate, spawn correction, register a wait, etc.),
+#    then publish the durable product-status snapshot for this project.
+# 3. Acknowledge the exact claimed items with durable evidence — a published status
+#    revision or exact terminal action evidence. Unacked items return on expiry.
+~/.craft-agent/scripts/coordinator-inbox.py ack --apply \
+  --project <project> --session <your-session-id> --generation <N> \
+  --token <claim-token> --status-revision <published-revision>
+```
+
+Publish a truthful product-status snapshot at every material transition and before you
+yield whenever a next action or wait exists. The owner reads this — you do not send
+periodic reports to the architecture session:
+
+```bash
+~/.craft-agent/scripts/coordinator-status.py publish --apply \
+  --project <project> --session <your-session-id> --generation <N> --input <status.json>
+```
+
+`status.json` declares the product objective, current phase, completed outcomes with
+evidence, current focus, up to three ordered next actions (each with a trigger,
+required evidence, and success/failure branch), blocker/gate references, commitment
+references, and the next review time. Publishing fails closed on a stale generation,
+invented child/wait/gate references, malformed actions, secret-like content, or a
+`waiting` phase without an active observable commitment. Observed active workers,
+waits, gates, receipts, and inbox pressure are synthesized independently and cannot be
+invented.
+
+Every future-tense promise ("I will check CI later", "resume after deploy") must bind
+to a durable observer. Register a commitment bound to an exact worker/auditor lease, an
+external-wait observer, an owner gate, or a bounded scheduled review:
+
+```bash
+~/.craft-agent/scripts/coordinator-commitment.py register --apply \
+  --project <project> --session <your-session-id> --generation <N> \
+  --commitment-id <stable-id> --subject <non-secret> \
+  --binding-kind <worker-lease|external-wait|owner-gate|scheduled-review> \
+  --ref <lease-session|wait-id|gate-id> --deadline-seconds <60..604800> \
+  --success-action <bounded> --failure-action <bounded>
+```
+
+Overdue, unobserved, and terminal commitments emit deterministic incidents that wake
+this exact coordinator generation. Resolution requires a terminal observer receipt, not
+prose. A prose-only wait is a protocol violation, not an idle state.
 
 Classification:
 - healthy: evidence within 15 minutes;
@@ -272,7 +328,7 @@ session, role, work-unit, attempt, issue, worktree, branch/PR,
 dependencies, lease state, last evidence, preservation, verdict, next action
 ```
 
-At material state transitions only—dispatch, candidate handoff, terminal job, acceptance verdict, merge/gate change, or rotation—reconcile leases and snapshot. All milestones, blockers, and gates stay in GitHub/runtime; do not send them to the owner-facing architecture session. Do not perform full sweeps or send acknowledgements for routine heartbeats/messages. Archive/reap terminal attempts before any replacement.
+At material state transitions only—dispatch, candidate handoff, terminal job, acceptance verdict, merge/gate change, or rotation—reconcile leases, snapshot, and publish the durable product-status snapshot (§4.1). All milestones, blockers, and gates stay in GitHub/runtime; do not send them to the owner-facing architecture session. The owner obtains an on-demand aggregate via `coordinator-status.py report --all --format markdown`; coordinators never send periodic reports to the architecture session. Do not perform full sweeps or send acknowledgements for routine heartbeats/messages. Archive/reap terminal attempts before any replacement.
 
 ## 10. v3.1.1 self-healing integration
 
@@ -283,10 +339,13 @@ On a recovery-controller message:
 1. verify your registry generation and renew ownership;
 2. reconcile leases/jobs/background tasks and adopt live attempts;
 3. consume terminal handoffs or queue heavy exit-75 retry only after lock release;
-4. snapshot the recovery ledger;
-5. reply with exact changed evidence.
+4. claim and act on the durable inbox digest, then publish product status and resolve or re-bind commitments (§4.1);
+5. snapshot the recovery ledger;
+6. reply with exact changed evidence.
 
-A delivered message is not resolution. If a terminal child is preservation-proven and archived/reaped by the controller, its slot-release acknowledgement allows the next already-authorized gate—not a merge, owner decision, or deployment. New coordinators/children use `protocol-version::3.2.2`; existing v3/v3.1/v3.2.0 attempts are adopted without restart.
+The v3.3.0 deterministic incidents `coordinator-inbox-ready`, `coordinator-status-missing`, `coordinator-status-stale`, `coordinator-plan-unexecutable`, `coordinator-commitment-overdue`, and `coordinator-status-contradiction` wake your exact generation through the same v3.2.2 admission lane. They authorize only inbox consumption, status publication, and commitment resolution — never HOLD/gate bypass, rotation, merge/deploy, or destructive recovery. Staleness is evidence-aware: a long-running observed worker or external wait stays trustworthy until its next-check/deadline, and an accurately represented owner HOLD stays healthy and never auto-resumes.
+
+A delivered message is not resolution. If a terminal child is preservation-proven and archived/reaped by the controller, its slot-release acknowledgement allows the next already-authorized gate—not a merge, owner decision, or deployment. New coordinators/children use `protocol-version::3.3.0`; existing v3/v3.1/v3.2.x attempts are adopted without restart and their direct reports are protected by runtime queue-only fallback.
 
 ## Checklist
 

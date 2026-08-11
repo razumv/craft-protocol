@@ -12,7 +12,7 @@ class DeliveryModeV320Tests(unittest.TestCase):
 
     def test_coordinator_role_separation_and_owner_work_preservation(self):
         text = self.read("skills/coordinator-lifecycle-protocol/SKILL.md")
-        self.assertIn("Coordinator Lifecycle Protocol v3.2.2", text)
+        self.assertIn("Coordinator Lifecycle Protocol v3.3.0", text)
         self.assertIn("Project coordinators are autonomous", text)
         self.assertIn("must never cancel or replace a direct owner-requested work unit", text)
         self.assertIn("Do not send milestone, gate, progress, completion, archive, blocker, or decision-request messages", text)
@@ -47,15 +47,15 @@ class DeliveryModeV320Tests(unittest.TestCase):
 
     def test_worker_does_not_substitute_infrastructure_for_product(self):
         text = self.read("skills/worker-completion-protocol/SKILL.md")
-        self.assertIn("Worker Completion Protocol v3.2.2", text)
+        self.assertIn("Worker Completion Protocol v3.3.0", text)
         self.assertIn("Implement the exact owner/coordinator-frozen outcome", text)
         self.assertIn("one safe recovery attempt or 20 minutes", text)
         self.assertIn("Send no micro-progress messages", text)
 
     def test_kickoff_inherits_delivery_mode(self):
         text = self.read("scripts/coordinator-kickoff.md")
-        self.assertIn("canonical v3.2.2", text)
-        self.assertIn("protocol-version::3.2.2", text)
+        self.assertIn("canonical v3.3.0", text)
+        self.assertIn("protocol-version::3.3.0", text)
         self.assertIn("Никакого audit-of-audit", text)
         self.assertIn("Не отправляй owner-facing architecture session никакие unsolicited milestone/gate/progress/completion/archive/blocker/decision-request сообщения", text)
 
@@ -63,7 +63,7 @@ class DeliveryModeV320Tests(unittest.TestCase):
         readme = self.read("README.md")
         delivery = self.read("docs/DELIVERY-MODE-v3.2.0.md")
         defaults = self.read("docs/CURRENT-DEFAULTS.md")
-        self.assertIn("Protocol v3.2.2", readme)
+        self.assertIn("Protocol v3.3.0", readme)
         self.assertIn("Tests, audits, reports, certificates, and gates are acceptance instruments", delivery)
         self.assertIn("Unsolicited reports, routine acknowledgements, and status polling are prohibited", delivery)
         self.assertIn("ignores all unsolicited coordinator updates", delivery)

@@ -1,6 +1,6 @@
 #!/bin/zsh
 # SPDX-License-Identifier: Apache-2.0
-# Safe installer for Craft Agents orchestration protocol v3.2.2.
+# Safe installer for Craft Agents orchestration protocol v3.3.0.
 # Dry-run by default. Use --apply only after reviewing README.md.
 set -eu
 
@@ -23,7 +23,7 @@ SKILLS="$WORKSPACE/skills"
 RUNTIME="$CRAFT/runtime"
 LOGS="$CRAFT/logs"
 STAMP=$(date '+%Y%m%d-%H%M%S')
-BACKUP="$CRAFT/backups/orchestration-v3.2.2-$STAMP"
+BACKUP="$CRAFT/backups/orchestration-v3.3.0-$STAMP"
 PYTHON="${CRAFT_PYTHON:-/opt/homebrew/bin/python3}"
 [[ -x "$PYTHON" ]] || PYTHON=$(command -v python3)
 PLIST_NAME="com.craft-protocol.worker-watchdog.plist"
@@ -34,6 +34,7 @@ files=(
   owner-gate.py recovery-ledger.py completion-certificate.py recovery-incident.py
   worker-lease.py observable-job.py external-wait.py worker-watchdog.py post-archive-reaper.py
   controller-harness.py recovery-admission.py
+  coordinator-inbox.py coordinator-status.py coordinator-commitment.py
   scan-reapable-workers.py watchdog-cron.sh recovery-admission-cron.sh coordinator-kickoff.md
 )
 
@@ -64,7 +65,7 @@ install_file() {
   fi
 }
 
-# FIRST safety mutation: restore the absolute kill switch before any v3.2.2
+# FIRST safety mutation: restore the absolute kill switch before any v3.3.0
 # script, skill, config, or launchd payload can be copied. Any later failure
 # therefore leaves admission disabled.
 if (( APPLY )); then
@@ -124,7 +125,7 @@ if (( APPLY )); then
   (cd "$ROOT/tests" && CRAFT_TEST_SCRIPTS="$SCRIPTS" "$PYTHON" -m unittest -v \
     test_worker_reliability.py test_orchestration_v320.py test_self_healing_v311.py \
     test_delivery_mode_v320.py test_controller_harness_v321.py \
-    test_recovery_admission_v322.py test_external_wait_v321.py)
+    test_recovery_admission_v322.py test_external_wait_v321.py test_coordinator_v330.py)
   echo "Running watchdog dry-run..."
   "$PYTHON" "$SCRIPTS/worker-watchdog.py"
   echo "Install complete. Review output before enabling launchd."

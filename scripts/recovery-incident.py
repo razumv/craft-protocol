@@ -49,7 +49,24 @@ ACTION_MATRIX = {
     "ambiguous-coordinator-owner": ["hard-refusal", "owner-escalation"],
     "preservation-unknown": ["verify-preservation", "hard-refusal-until-proven"],
     "owner-gate-blocked": ["report-only"],
+    # Protocol v3.3.0 coordinator inbox / product status / commitment incidents.
+    "coordinator-inbox-ready": ["wake-coordinator", "consume-digest"],
+    "coordinator-status-missing": ["wake-coordinator", "publish-status"],
+    "coordinator-status-stale": ["wake-coordinator", "publish-status"],
+    "coordinator-plan-unexecutable": ["wake-coordinator", "publish-executable-plan"],
+    "coordinator-commitment-overdue": ["wake-coordinator", "resolve-commitment"],
+    "coordinator-status-contradiction": ["wake-coordinator", "reconcile-status"],
 }
+
+# Protocol v3.3.0 siblings expose deterministic, importable observation feeds.
+def _load_sibling(name):
+    spec_s = importlib.util.spec_from_file_location(name.replace("-", "_"), HERE / f"{name}.py")
+    module = importlib.util.module_from_spec(spec_s); spec_s.loader.exec_module(module)  # type: ignore
+    return module
+
+inbox_mod = _load_sibling("coordinator-inbox")
+status_mod = _load_sibling("coordinator-status")
+commitment_mod = _load_sibling("coordinator-commitment")
 
 def now_ms(): return common.now_ms()
 def fail(message): raise SystemExit(message)
@@ -119,7 +136,10 @@ def observation(kind, severity, project, session_id, evidence, *, fingerprint_ev
     keyed by this value. Callers with volatile evidence provide the immutable
     condition identity explicitly through ``fingerprint_evidence``.
     """
-    key = ":".join((project or "global", kind, session_id or str(extra.get("gateId") or "none")))
+    slot = session_id or str(extra.get("gateId") or "none")
+    discriminator = extra.pop("discriminator", None)
+    parts = (project or "global", kind, slot) + ((str(discriminator),) if discriminator else ())
+    key = ":".join(parts)
     stable_evidence = evidence if fingerprint_evidence is None else fingerprint_evidence
     return {"stableKey": key, "incidentId": incident_id(key), "kind": kind,
             "severity": severity, "project": project, "sessionId": session_id,
@@ -234,6 +254,24 @@ def collect_observations():
         if gate.get("state") == "open":
             out.append(observation("owner-gate-blocked", "info", gate.get("project"), None,
                 {"state": gate.get("state"), "action": gate.get("action"), "workUnit": gate.get("workUnit")}, gateId=gate.get("gateId") or p.stem))
+
+    # Protocol v3.3.0: coordinator inbox digests, product-status trust, and commitments.
+    # Each feed embeds the exact coordinator generation so admission fences the wake, and
+    # provides a stable fingerprint so a continuously-observed condition coalesces to one wake.
+    for row in inbox_mod.wake_observations(now):
+        out.append(observation("coordinator-inbox-ready", "high", row["project"], row["sessionId"],
+            {"generation": row["generation"], "wakingCount": row["count"],
+             "itemIds": row["itemIds"], "kinds": row["kinds"]},
+            fingerprint_evidence={"generation": row["generation"], "itemIds": row["itemIds"]},
+            coordinatorGeneration=row["generation"]))
+    for row in status_mod.health_observations(now):
+        out.append(observation(row["kind"], "high", row["project"], row["sessionId"], row["evidence"],
+            fingerprint_evidence=row["evidence"], coordinatorGeneration=row["generation"]))
+    for row in commitment_mod.overdue_observations(now):
+        out.append(observation("coordinator-commitment-overdue", "high", row["project"], row["sessionId"],
+            {**row["evidence"], "commitmentId": row["commitmentId"]},
+            fingerprint_evidence=row["evidence"], discriminator=row["commitmentId"],
+            coordinatorGeneration=row["generation"]))
     return out
 
 def detect(apply=False):

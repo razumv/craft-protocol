@@ -57,8 +57,11 @@ DELIVERY_STATUSES = {"delivered", "pending-consumption", "consumed", "duplicate"
 INSPECT_STATUSES = {"delivered", "pending-consumption", "consumed"}
 RECOVER_STATUSES = {"recovered", "consumed", "busy"}
 BLOCKED_KINDS = {"owner-gate-blocked", "cwd-collision", "project-mapping-conflict", "ambiguous-coordinator-owner", "preservation-unknown"}
-WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "job-exit-unreported", "heavy-lock-wait", "terminal-handoff-unconsumed", "external-wait-terminal", "external-wait-unobserved", "external-wait-deadline"}
-ROUTINE_KINDS = {"coordinator-tick-due", "coordinator-lease-stale", "terminal-handoff-unconsumed", "external-wait-terminal"}
+# Protocol v3.3.0 coordinator inbox/status/commitment wakes ride the existing v3.2.2
+# admission lane. They are generation-fenced and never grant merge/rotation authority.
+COORDINATOR_V33_WAKE_KINDS = {"coordinator-inbox-ready", "coordinator-status-missing", "coordinator-status-stale", "coordinator-plan-unexecutable", "coordinator-commitment-overdue", "coordinator-status-contradiction"}
+WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "job-exit-unreported", "heavy-lock-wait", "terminal-handoff-unconsumed", "external-wait-terminal", "external-wait-unobserved", "external-wait-deadline"} | COORDINATOR_V33_WAKE_KINDS
+ROUTINE_KINDS = {"coordinator-tick-due", "coordinator-lease-stale", "terminal-handoff-unconsumed", "external-wait-terminal"} | COORDINATOR_V33_WAKE_KINDS
 
 
 class AdmissionError(ValueError):
@@ -282,7 +285,7 @@ def direct_target(row: dict[str, Any]) -> dict[str, str] | None:
                 blocker.get("kind") == "preservation-unknown" and
                 blocker.get("sessionId") == row.get("sessionId")):
             return None
-    if kind in {"coordinator-tick-due", "coordinator-lease-stale"}:
+    if kind in {"coordinator-tick-due", "coordinator-lease-stale"} | COORDINATOR_V33_WAKE_KINDS:
         if row.get("sessionId") != session_id or scalar_generation(evidence.get("generation")) != generation:
             return None
     elif kind == "terminal-handoff-unconsumed":

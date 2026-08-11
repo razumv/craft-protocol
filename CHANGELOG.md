@@ -4,6 +4,16 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+### Protocol v3.3.0 coordinator inbox and product observability candidate
+
+- add `coordinator-inbox.py`: a durable, serialized, atomically-stored inbox for worker/auditor reports with validated `submit`/`list`/`claim`/`ack`/`release`/`reconcile`/`report`; submission is fail-closed on sender lease binding, exact coordinator/generation registry match, allowed kind, and non-secret workspace-local evidence;
+- coalesce reports by `project + generation + sender + work-unit + attempt + kind`; a newer meaningful revision replaces the pending payload, identical resubmission advances diagnostics only, terminal/blocker items are never downgraded by later progress, and no report is deleted on claim;
+- generation-fence consumption: one authoritative generation claims a bounded digest under a unique token/TTL, acknowledgement requires the same token plus a durable published status revision or exact terminal evidence, and crash/claim expiry returns unacknowledged items;
+- add `coordinator-status.py`: a durable per-project product-status snapshot with `publish`/`show`/`report --all --format json|markdown`/`reconcile`/`validate`; publishing fails closed on stale generation, invented child/wait/gate references, malformed next actions, secret-like or unbounded content, or a `waiting` phase without an active observable commitment, while worker/wait/gate/inbox/evidence state is synthesized independently and classified `verified`/`executing`/`waiting-observed`/`blocked`/`stale`/`contradictory`;
+- add `coordinator-commitment.py`: observer-bound commitments (`register`/`resolve`/`list`/`reconcile`) that bind every future-tense wait to an exact worker/auditor lease, external-wait observer, owner gate, or bounded scheduled review, with deadlines and durable-evidence resolution;
+- extend deterministic detection with `coordinator-inbox-ready`, `coordinator-status-missing`, `coordinator-status-stale`, `coordinator-plan-unexecutable`, `coordinator-commitment-overdue`, and `coordinator-status-contradiction` incidents, each carrying the exact generation and stable fingerprint so the unchanged v3.2.2 capability-v2 admission lane fences the wake and coalesces to one envelope; the watchdog reconciles inbox/status/commitments before the incident scan;
+- update coordinator/worker/self-healing skills, the kickoff prompt, `PROTOCOL-v3.3.md`, `CURRENT-DEFAULTS.md`, installer, and version markers to v3.3.0, add `test_coordinator_v330.py`, and preserve owner gates, exact-generation fencing, v3.2.x adoption, and the no-architecture-report boundary. No production activation is performed by this candidate.
+
 ### Protocol v3.2.2 controller-liveness candidate
 
 - replaced `prepared → notified → cooldown` with schema-v3 per-target `prepared`, `delivered`, `pending-consumption`, `consumed`, `recovering`, and `blocked` cycles; pending delivery is inspected until runtime-proven consumption and can never cooldown-rearm;
