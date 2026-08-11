@@ -859,6 +859,25 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
         state.update(phase="pending-consumption", deliveryStatus=receipt["status"], receipt=receipt["receipt"],
                      deliveredAt=receipt["receipt"]["deliveredAt"])
 
+        # Delivery can synchronously queue/start the newer coalesced revision.
+        # The inspection above describes the old revision and must not be used
+        # to declare the refreshed envelope idle at its historical deadline.
+        # Re-inspect the exact receipt after delivery before any deadline or
+        # recovery decision.
+        inspection = inspect(state, token)
+        outstanding_status = inspection["status"]
+        session_inspection = inspection["session"]
+        state["lastInspectedAt"] = NOW_MS()
+        state["receipt"] = inspection["receipt"]
+        state["lastInspection"] = {key: session_inspection.get(key) for key in
+                                   ("isProcessing", "processingGeneration", "processingStartedAt", "processingAgeMs",
+                                    "queueDepth", "lastFinalMessageId", "lastFinalMessageAt",
+                                    "lastErrorMessageId", "lastErrorMessageAt")}
+        if outstanding_status == "consumed":
+            state.update(phase="consumed", consumedAt=inspection["receipt"]["consumedAt"])
+            atomic_json(path, state)
+            return 0, state
+
     started = session_inspection.get("processingStartedAt")
     stuck = session_inspection.get("isProcessing") and isinstance(started, int) and now-started >= RECOVERY_MIN_AGE_MS
     idle_expired = (not session_inspection.get("isProcessing") and

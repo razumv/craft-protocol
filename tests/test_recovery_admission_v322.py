@@ -74,7 +74,13 @@ if args[:2] == ["automation","deliver"]:
         receipt.pop(key,None)
     if state.get("nullOptionalCompletion"): receipt["completedMessageId"]=None
     if state.get("consume"): consume(receipt)
-    elif duplicate: receipt["deliveryState"]="pending-consumption"
+    elif duplicate:
+        receipt["deliveryState"]="pending-consumption"
+        if state.get("startProcessingOnDuplicate"):
+            generation=int(state["session"]["processingGeneration"])+1
+            state["session"].update(isProcessing=True,processingGeneration=generation,
+                                    processingStartedAt=int(state["now"]),processingAgeMs=0,queueDepth=0)
+            receipt["acceptedProcessingGeneration"]=generation
     status="consumed" if receipt["deliveryState"]=="consumed" else "pending-consumption"
     result={"status":status,"messageId":receipt["messageId"],"receipt":receipt}
     if state.get("crashAfterReceipt") and not state.get("crashed"):
@@ -347,6 +353,22 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         self.assertEqual(second["messageId"],first["messageId"]); self.assertEqual(second["scope"],first["scope"])
         self.assertEqual(second["incidentIds"],["i1","i2"]); self.assertEqual(len(self.fake()["receipts"]),1)
         self.assertEqual(len(self.records("deliver")),2)
+
+    def test_coalesced_redelivery_reinspects_started_revision_before_idle_deadline(self):
+        self.incident(); self.apply(); first=self.controller_state()
+        self.incident("i2",kind="job-exit-unreported",session="worker")
+        fake=self.fake(); fake.update(startProcessingOnDuplicate=True,now=NOW+61_000); self.put(self.fake_state,fake)
+        later=dict(self.env); later["CRAFT_TEST_NOW_MS"]=str(NOW+61_000)
+        cp,_=self.apply(env=later)
+        state=self.controller_state()
+        self.assertEqual(cp.returncode,0)
+        self.assertEqual(state["messageId"],first["messageId"])
+        self.assertEqual(state["phase"],"pending-consumption")
+        self.assertNotIn("reason",state)
+        self.assertTrue(state["lastInspection"]["isProcessing"])
+        self.assertEqual(state["lastInspection"]["processingAgeMs"],0)
+        self.assertEqual(len(self.records("deliver")),2)
+        self.assertEqual(len(self.records("inspect")),2)
 
     def test_consumed_receipt_ends_cycle_without_redelivery(self):
         self.incident(); self.apply(); self.mutate_fake(consume=True)
