@@ -13,9 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 TOOL = Path(os.environ.get("CRAFT_TEST_SCRIPTS", ROOT / "scripts")) / "recovery-admission.py"
 NOW = 1786429000000
 TOKEN = "never-print-this-test-token"
+RUNTIME_VERSION = "0.11.4"
+RUNTIME_COMMIT = "f8679cdcf47688a5a44e0fb9436ab2d6856d583f"
+WIRE_FIXTURE = json.loads((ROOT / "tests/fixtures/admission-v2-wire.json").read_text())
 
 FAKE_CLI = r'''#!/usr/bin/env python3
-import json, os, sys
+import hashlib, json, os, sys
 from pathlib import Path
 state_path = Path(sys.argv[1]); raw = sys.argv[2:]
 state = json.loads(state_path.read_text())
@@ -31,34 +34,48 @@ def fields(start=2):
         if args[i].startswith("--") and i+1 < len(args): out[args[i]]=args[i+1]; i+=2
         else: i+=1
     return out
-def receipt_for(f, message, create=True):
+def require_flags(command,f):
+    missing=[flag for flag in state["wire"]["requiredFlags"][command] if flag not in f]
+    if missing: output({"status":"blocked","reason":"missing flags: "+",".join(missing)})
+def revision(message): return hashlib.sha256(message.encode("utf-8")).hexdigest()
+def consume(receipt):
+    generation=int(state["session"]["processingGeneration"])
+    completed_at=int(state["now"])
+    receipt.update({"deliveryState":"consumed","completedContentRevision":receipt["contentRevision"],
+                    "completedProcessingGeneration":generation,"completedMessageId":"assistant-final-a",
+                    "completedMessageAt":completed_at,"consumedAt":completed_at+1})
+def receipt_for(f,message,create=True):
     scope="|".join(f[x] for x in ("--workspace","--session","--matcher","--action","--occurrence","--key"))
     receipt=state.setdefault("receipts",{}).get(scope)
     if receipt is None and create:
         receipt={"workspaceId":f["--workspace"],"sessionId":f["--session"],"targetKind":f["--target-kind"],"targetId":f["--target-id"],
                  "targetGeneration":f["--target-generation"],"matcherId":f["--matcher"],"actionId":f["--action"],
                  "occurrenceId":f["--occurrence"],"idempotencyKey":f["--key"],"messageId":"msg-"+str(len(state["receipts"])+1),
-                 "deliveredAt":int(state["now"]),"deliveryState":"delivered","acceptedProcessingGeneration":None,"message":message}
+                 "deliveredAt":int(state["now"]),"deliveryState":"pending-consumption",
+                 "acceptedProcessingGeneration":int(state["session"]["processingGeneration"]),
+                 "contentRevision":revision(message),"message":message}
         state["receipts"][scope]=receipt
     return scope,receipt
 if args == ["automation","capabilities"]:
     if state.get("rejectCapabilitiesOnce") and not state.get("capabilitiesRejected"):
         state["capabilitiesRejected"]=True; save(); raise SystemExit(9)
-    output(state["capabilities"])
+    output(state["wire"]["capabilities"])
 if args == ["workspaces"]: output(state["workspaces"])
 if args[:2] == ["automation","deliver"]:
-    f=fields(); message=args[-1]; scope,receipt=receipt_for(f,message)
+    f=fields(); require_flags("deliver",f); message=args[-1]; scope,receipt=receipt_for(f,message)
     state.setdefault("deliveryScopes",[]).append(scope)
     if state.get("busyOnce") and not state.get("busySeen"):
         state["busySeen"]=True; output({"status":"busy","reason":"busy"})
     if state.get("blockedDeliver"): output({"status":"blocked","reason":"blocked"})
     duplicate=receipt["message"] != message or state["deliveryScopes"].count(scope)>1
-    receipt["message"]=message
-    if state.get("consume"):
-        receipt["deliveryState"]="consumed"; receipt["consumedAt"]=int(state["now"])
-    elif duplicate:
-        receipt["deliveryState"]="pending-consumption"
-    status="consumed" if receipt["deliveryState"]=="consumed" else ("pending-consumption" if duplicate else "delivered")
+    receipt.update(message=message,contentRevision=revision(message))
+    if state.get("nullAcceptedGeneration"): receipt["acceptedProcessingGeneration"]=None
+    for key in ("completedContentRevision","completedProcessingGeneration","completedMessageId","completedMessageAt","consumedAt"):
+        receipt.pop(key,None)
+    if state.get("nullOptionalCompletion"): receipt["completedMessageId"]=None
+    if state.get("consume"): consume(receipt)
+    elif duplicate: receipt["deliveryState"]="pending-consumption"
+    status="consumed" if receipt["deliveryState"]=="consumed" else "pending-consumption"
     result={"status":status,"messageId":receipt["messageId"],"receipt":receipt}
     if state.get("crashAfterReceipt") and not state.get("crashed"):
         state["crashed"]=True; save(); raise SystemExit(9)
@@ -66,18 +83,31 @@ if args[:2] == ["automation","deliver"]:
 if args[:2] == ["automation","inspect"]:
     if state.get("rejectInspectOnce") and not state.get("inspectRejected"):
         state["inspectRejected"]=True; save(); raise SystemExit(9)
-    f=fields(); scope="|".join(f[x] for x in ("--workspace","--session","--matcher","--action","--occurrence","--key"))
+    f=fields(); require_flags("inspect",f)
+    scope="|".join(f[x] for x in ("--workspace","--session","--matcher","--action","--occurrence","--key"))
     receipt=state.setdefault("receipts",{}).get(scope)
-    if receipt and state.get("consume"):
-        receipt["deliveryState"]="consumed"; receipt["consumedAt"]=int(state["now"])
+    if receipt and state.get("consume"): consume(receipt)
     if not receipt: output({"status":"missing","receipt":None,"session":state["session"]})
     output({"status":receipt["deliveryState"],"receipt":receipt,"session":state["session"]})
 if args[:2] == ["automation","recover"]:
-    f=fields(); state["recoverCalls"]=state.get("recoverCalls",0)+1
-    if state.get("blockedRecover"): output({"status":"blocked","reason":"blocked"})
+    f=fields(); require_flags("recover",f); state["recoverCalls"]=state.get("recoverCalls",0)+1
     scope="|".join(f[x] for x in ("--workspace","--session","--matcher","--action","--occurrence","--key"))
-    receipt=state["receipts"][scope]
-    output({"status":"recovered","messageId":receipt["messageId"],"processingGeneration":int(f["--processing-generation"])})
+    receipt=state["receipts"][scope]; requested=int(f["--processing-generation"])
+    if state.get("busyRecover"): output({"status":"busy","messageId":receipt["messageId"],"reason":"Recovery CAS is already held"})
+    if state.get("blockedRecover"): output({"status":"blocked","messageId":receipt["messageId"],"reason":"blocked"})
+    if state.get("consumeOnRecover"):
+        consume(receipt)
+        if state.get("badConsumedProof"): receipt["completedContentRevision"]="0"*64
+        if state.get("missingConsumedFinalId"): receipt.pop("completedMessageId",None)
+        if state.get("sameConsumedFinalId"): receipt["completedMessageId"]=receipt["messageId"]
+        result={"status":"consumed","messageId":receipt["messageId"],
+                "processingGeneration":int(state["session"]["processingGeneration"]),"receipt":receipt}
+        if state.get("badConsumedPrevious"): result["previousProcessingGeneration"]=requested
+        output(result)
+    advanced=requested if state.get("badRecoverTransition") else requested+1
+    state["session"].update(isProcessing=True,processingGeneration=advanced,processingStartedAt=int(state["now"]),processingAgeMs=0)
+    output({"status":"recovered","messageId":receipt["messageId"],
+            "previousProcessingGeneration":requested,"processingGeneration":advanced})
 save(); print(json.dumps({"status":"error"})); raise SystemExit(2)
 '''
 
@@ -90,18 +120,14 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         self.harness.write_text('#!/bin/sh\necho \'{"healthy":true,"rows":[{"sessionId":"controller","sessionRole":"recovery-controller","state":"active"}]}\'\n'); self.harness.chmod(0o755)
         self.fake_cli=self.root/"fake-cli.py"; self.fake_cli.write_text(FAKE_CLI); self.fake_cli.chmod(0o755)
         self.fake_state=self.root/"fake.json"
-        self.put(self.fake_state,{"expectedToken":TOKEN,"now":NOW,
-            "capabilities":{"available":True,"version":2,"deliverChannel":"automations:admissionDeliver",
-                "inspectChannel":"automations:admissionInspect","recoverChannel":"automations:admissionRecover",
-                "runtimeVersion":"2026.8.11","runtimeCommit":"runtime-v2","deliveryStates":["delivered","pending-consumption","consumed","duplicate","busy","blocked"],
-                "targetKinds":["controller","coordinator"],"minimumRecoveryAgeMs":60000},
-            "workspaces":[{"id":"workspace-7","rootPath":str(self.workspace)}],
-            "session":{"isProcessing":False,"processingGeneration":None,"processingStartedAt":None,"processingAgeMs":None,"queueDepth":0,
-                "lastFinalMessageId":None,"lastFinalMessageAt":None,"lastErrorMessageId":None,"lastErrorMessageAt":None}})
+        wire=json.loads(json.dumps(WIRE_FIXTURE))
+        idle=wire["idleSession"]
+        self.put(self.fake_state,{"expectedToken":TOKEN,"now":NOW,"wire":wire,
+            "workspaces":[{"id":"workspace-7","rootPath":str(self.workspace)}],"session":idle})
         self.env={**os.environ,"CRAFT_WORKSPACE":str(self.workspace),"CRAFT_RUNTIME":str(self.runtime),"CRAFT_SESSIONS":str(self.sessions),
             "CRAFT_TEST_NOW_MS":str(NOW),"CRAFT_CONTROLLER_HARNESS":str(self.harness),
             "CRAFT_RPC_CLI":f"{sys.executable} {self.fake_cli} {self.fake_state}","CRAFT_SERVER_TOKEN":TOKEN,
-            "CRAFT_WORKSPACE_ID":"workspace-7","CRAFT_EXPECTED_RUNTIME_VERSION":"2026.8.11","CRAFT_EXPECTED_RUNTIME_COMMIT":"runtime-v2",
+            "CRAFT_WORKSPACE_ID":"workspace-7","CRAFT_EXPECTED_RUNTIME_VERSION":RUNTIME_VERSION,"CRAFT_EXPECTED_RUNTIME_COMMIT":RUNTIME_COMMIT,
             "CRAFT_ADMISSION_RECOVERY_MIN_AGE_SECONDS":"60"}
         self.manifest("controller","recovery-controller",["controller-mode::persistent"])
         self.manifest("coord","coordinator")
@@ -132,6 +158,73 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
     def controller_state(self): return json.loads((self.runtime/"self-healing/admission.json").read_text())
     def records(self,command): return [r for r in self.fake().get("records",[]) if r[:2]==["automation",command]]
 
+    def test_corrected_wire_fixture_and_cli_round_trip_matrix(self):
+        wire=WIRE_FIXTURE
+        self.assertIsInstance(wire["idleSession"]["processingGeneration"],int)
+        self.assertIsNone(wire["idleSession"]["processingStartedAt"]); self.assertIsNone(wire["idleSession"]["processingAgeMs"])
+        self.assertEqual(wire["runtimeCorrectionCommit"],RUNTIME_COMMIT)
+        self.assertEqual(wire["capabilities"]["runtimeVersion"],RUNTIME_VERSION)
+        self.assertEqual(wire["capabilities"]["runtimeCommit"],RUNTIME_COMMIT)
+        self.assertEqual(wire["capabilitiesRequestParams"],[])
+        for request in (wire["deliverRequestParams"],wire["inspectRequestParams"],wire["recoverRequestParams"]):
+            self.assertEqual(len(request),2); self.assertIsInstance(request[0],str); self.assertIsInstance(request[1],dict)
+        delivered=wire["deliveredResponse"]
+        self.assertEqual(delivered["status"],"pending-consumption")
+        self.assertIn("acceptedProcessingGeneration",delivered["receipt"])
+        self.assertEqual(delivered["receipt"]["contentRevision"],hashlib.sha256(wire["exampleMessage"].encode()).hexdigest())
+        self.assertEqual(wire["inspectIdleResponse"]["session"],wire["idleSession"])
+        self.assertEqual(wire["inspectProcessingResponse"]["session"],wire["processingSession"])
+        recovered=wire["recoveredResponse"]
+        self.assertGreater(recovered["processingGeneration"],recovered["previousProcessingGeneration"])
+        consumed=wire["consumedRaceResponse"]
+        self.assertNotIn("previousProcessingGeneration",consumed)
+        self.assertEqual(consumed["receipt"]["contentRevision"],hashlib.sha256(wire["exampleMessage"].encode()).hexdigest())
+        self.assertEqual(consumed["receipt"]["contentRevision"],consumed["receipt"]["completedContentRevision"])
+        self.assertNotEqual(consumed["receipt"]["messageId"],consumed["receipt"]["completedMessageId"])
+        self.assertNotIn("processingGeneration",wire["busyResponse"])
+        _,verified=self.cli("verify-runtime")
+        self.assertTrue(verified["verified"]); self.assertEqual(verified["capabilityVersion"],2)
+        self.incident(); self.apply(); fake=self.fake()
+        fake["session"].update(isProcessing=True,processingGeneration=41,processingStartedAt=NOW-61_000,processingAgeMs=61_000)
+        self.put(self.fake_state,fake); self.apply()
+        for command in ("deliver","inspect","recover"):
+            record=self.records(command)[-1]
+            for flag in wire["requiredFlags"][command]: self.assertIn(flag,record)
+        state=self.controller_state()
+        self.assertEqual(state["recovery"]["previousProcessingGeneration"],41)
+        self.assertEqual(state["recovery"]["processingGeneration"],42)
+
+    def test_installer_restores_kill_switch_before_payload_and_requires_verification(self):
+        text=(ROOT/"install.sh").read_text()
+        sentinel=': > "$RUNTIME/self-healing.disabled"'
+        self.assertEqual(text.count(sentinel),1)
+        self.assertLess(text.index(sentinel),text.index("for name in $files; do"))
+        self.assertLess(text.index("verify-runtime"),text.index("Optional launchd activation"))
+        self.assertIn(RUNTIME_COMMIT,text)
+
+    def test_installer_first_copy_observes_restored_kill_switch(self):
+        home=self.root/"installer-home"; wrappers=self.root/"wrappers"; wrappers.mkdir()
+        marker=self.root/"first-copy-observed"
+        wrapper=wrappers/"cp"
+        wrapper.write_text("#!/bin/sh\n"
+            "test -f \"$HOME/.craft-agent/runtime/self-healing.disabled\" || exit 97\n"
+            f"echo yes > {marker}\n"
+            "exit 99\n")
+        wrapper.chmod(0o755)
+        env={**os.environ,"HOME":str(home),"PATH":f"{wrappers}:{os.environ.get('PATH','/usr/bin:/bin')}","CRAFT_PYTHON":sys.executable}
+        cp=subprocess.run(["/bin/zsh",str(ROOT/"install.sh"),"--apply"],env=env,text=True,capture_output=True)
+        self.assertEqual(cp.returncode,99,cp.stdout+cp.stderr)
+        self.assertTrue(marker.exists())
+        self.assertTrue((home/".craft-agent/runtime/self-healing.disabled").exists())
+        self.assertFalse((home/".craft-agent/scripts/orchestration-common.py").exists())
+
+    def test_verify_runtime_fails_closed_on_identity_mismatch_without_state(self):
+        fake=self.fake(); fake["wire"]["capabilities"]["runtimeCommit"]="wrong"; self.put(self.fake_state,fake)
+        cp,row=self.cli("verify-runtime",ok=False)
+        self.assertEqual(cp.returncode,2); self.assertIn("runtime identity",row["error"])
+        self.assertFalse((self.runtime/"self-healing/admission.json").exists())
+        self.assertEqual(self.records("deliver"),[])
+
     def test_report_only_never_calls_runtime_or_creates_state(self):
         self.incident(); _,row=self.cli("report","--controller-session","controller")
         self.assertEqual(row["actionableCount"],1); self.assertEqual(self.fake().get("records"),None)
@@ -154,7 +247,7 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         self.registry(); self.incident(kind="coordinator-lease-stale",evidence={"generation":7,"agePastExpiryMs":999999})
         _,row=self.apply(); state=self.direct_state()
         self.assertEqual(state["targetKind"],"coordinator"); self.assertEqual(state["targetGeneration"],"7")
-        self.assertEqual(state["phase"],"delivered"); self.assertEqual(len(self.records("deliver")),1)
+        self.assertEqual(state["phase"],"pending-consumption"); self.assertEqual(len(self.records("deliver")),1)
         call=self.records("deliver")[0]
         self.assertEqual(call[call.index("--target-id")+1],"coord")
         self.assertEqual(call[call.index("--target-generation")+1],"7")
@@ -179,7 +272,7 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         self.incident(kind="coordinator-session-error")
         self.manifest("controller","recovery-controller",["controller-mode::persistent"],workspace_root=self.root/"other-workspace")
         cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2)
-        self.assertEqual(self.direct_state()["phase"],"delivered")
+        self.assertEqual(self.direct_state()["phase"],"pending-consumption")
         self.assertEqual(self.controller_state()["phase"],"blocked")
         self.assertEqual(len(self.records("deliver")),1)
         self.assertEqual(self.records("deliver")[0][self.records("deliver")[0].index("--target-kind")+1],"coordinator")
@@ -259,19 +352,23 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         self.apply(); consumed=self.controller_state(); self.assertEqual(consumed["phase"],"consumed")
         self.apply(); self.assertEqual(len(self.records("deliver")),1)
 
-    def test_stuck_processing_generation_recovers_once_then_blocks(self):
+    def test_recovered_response_proves_generation_transition_then_second_stall_blocks(self):
         self.incident(); self.apply()
         fake=self.fake(); fake["session"].update(isProcessing=True,processingGeneration=41,processingStartedAt=NOW-61_000,processingAgeMs=61_000)
         self.put(self.fake_state,fake); self.apply(); recovering=self.controller_state()
         self.assertEqual(recovering["phase"],"recovering"); self.assertEqual(self.fake()["recoverCalls"],1)
-        cp,row=self.apply(ok=False); self.assertEqual(cp.returncode,2); self.assertEqual(self.controller_state()["phase"],"blocked")
+        self.assertEqual(recovering["recovery"]["previousProcessingGeneration"],41)
+        self.assertEqual(recovering["recovery"]["processingGeneration"],42)
+        fake=self.fake(); fake["session"].update(isProcessing=True,processingGeneration=42,processingStartedAt=NOW-61_000,processingAgeMs=61_000)
+        self.put(self.fake_state,fake); cp,_=self.apply(ok=False)
+        self.assertEqual(cp.returncode,2); self.assertEqual(self.controller_state()["reason"],"bounded-admission-recovery-exhausted")
         self.assertEqual(self.fake()["recoverCalls"],1)
 
     def test_second_stuck_generation_blocks_after_recovery_became_idle(self):
         self.incident(); self.apply(); fake=self.fake()
         fake["session"].update(isProcessing=True,processingGeneration=41,processingStartedAt=NOW-61_000,processingAgeMs=61_000)
         self.put(self.fake_state,fake); self.apply()
-        fake=self.fake(); fake["session"].update(isProcessing=False,processingGeneration=None,processingStartedAt=None,processingAgeMs=None)
+        fake=self.fake(); fake["session"].update(isProcessing=False,processingGeneration=42,processingStartedAt=None,processingAgeMs=None)
         self.put(self.fake_state,fake); self.apply(); self.assertEqual(self.controller_state()["phase"],"pending-consumption")
         fake=self.fake(); fake["session"].update(isProcessing=True,processingGeneration=42,processingStartedAt=NOW-61_000,processingAgeMs=61_000)
         self.put(self.fake_state,fake); cp,_=self.apply(ok=False)
@@ -288,6 +385,70 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         fake["session"].update(isProcessing=True,processingGeneration=9,processingStartedAt=NOW-61_000,processingAgeMs=61_000)
         fake["blockedRecover"]=True; self.put(self.fake_state,fake)
         cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2); self.assertEqual(self.controller_state()["phase"],"blocked")
+
+    def test_recover_rejects_non_advanced_generation(self):
+        self.incident(); self.apply(); fake=self.fake()
+        fake["session"].update(isProcessing=True,processingGeneration=9,processingStartedAt=NOW-61_000,processingAgeMs=61_000)
+        fake["badRecoverTransition"]=True; self.put(self.fake_state,fake)
+        cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2)
+        self.assertIn("generation transition mismatch",self.controller_state()["reason"])
+
+    def test_consumed_recovery_race_uses_revision_proof_without_previous_generation(self):
+        self.incident(); self.apply(); fake=self.fake()
+        fake["session"].update(isProcessing=True,processingGeneration=41,processingStartedAt=NOW-61_000,processingAgeMs=61_000)
+        fake["consumeOnRecover"]=True; self.put(self.fake_state,fake)
+        self.apply(); state=self.controller_state(); self.assertEqual(state["phase"],"consumed")
+        self.assertNotIn("previousProcessingGeneration",state["recovery"])
+        self.assertEqual(state["recovery"]["processingGeneration"],41)
+        self.assertEqual(state["receipt"]["contentRevision"],state["receipt"]["completedContentRevision"])
+        self.assertNotEqual(state["receipt"]["completedMessageId"],state["messageId"])
+        self.assertEqual(state["receipt"]["completedMessageId"],"assistant-final-a")
+
+    def test_consumed_recovery_race_rejects_spurious_previous_generation(self):
+        self.incident(); self.apply(); fake=self.fake()
+        fake["session"].update(isProcessing=True,processingGeneration=41,processingStartedAt=NOW-61_000,processingAgeMs=61_000)
+        fake.update(consumeOnRecover=True,badConsumedPrevious=True); self.put(self.fake_state,fake)
+        cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2)
+        self.assertIn("must not claim a recovery transition",self.controller_state()["reason"])
+
+    def test_consumed_recovery_race_rejects_missing_final_assistant_id(self):
+        self.incident(); self.apply(); fake=self.fake()
+        fake["session"].update(isProcessing=True,processingGeneration=41,processingStartedAt=NOW-61_000,processingAgeMs=61_000)
+        fake.update(consumeOnRecover=True,missingConsumedFinalId=True); self.put(self.fake_state,fake)
+        cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2)
+        self.assertIn("consumed receipt proof invalid",self.controller_state()["reason"])
+
+    def test_consumed_recovery_race_rejects_envelope_as_final_id(self):
+        self.incident(); self.apply(); fake=self.fake()
+        fake["session"].update(isProcessing=True,processingGeneration=41,processingStartedAt=NOW-61_000,processingAgeMs=61_000)
+        fake.update(consumeOnRecover=True,sameConsumedFinalId=True); self.put(self.fake_state,fake)
+        cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2)
+        self.assertIn("consumed receipt proof invalid",self.controller_state()["reason"])
+
+    def test_consumed_recovery_race_rejects_bad_revision_proof(self):
+        self.incident(); self.apply(); fake=self.fake()
+        fake["session"].update(isProcessing=True,processingGeneration=41,processingStartedAt=NOW-61_000,processingAgeMs=61_000)
+        fake.update(consumeOnRecover=True,badConsumedProof=True); self.put(self.fake_state,fake)
+        cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2)
+        self.assertIn("consumed receipt proof invalid",self.controller_state()["reason"])
+
+    def test_busy_recovery_cas_is_retryable_without_spending_attempt(self):
+        self.incident(); self.apply(); fake=self.fake()
+        fake["session"].update(isProcessing=True,processingGeneration=41,processingStartedAt=NOW-61_000,processingAgeMs=61_000)
+        fake["busyRecover"]=True; self.put(self.fake_state,fake)
+        cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,75)
+        self.assertEqual(self.controller_state()["recoveryAttempts"],0)
+        fake=self.fake(); fake["busyRecover"]=False; self.put(self.fake_state,fake)
+        self.apply(); self.assertEqual(self.controller_state()["phase"],"recovering")
+        self.assertEqual(self.controller_state()["recovery"]["processingGeneration"],42)
+
+    def test_idle_inspect_retains_numeric_durable_generation(self):
+        self.incident(); self.apply(); self.apply(); state=self.controller_state()
+        self.assertEqual(state["phase"],"pending-consumption")
+        self.assertFalse(state["lastInspection"]["isProcessing"])
+        self.assertEqual(state["lastInspection"]["processingGeneration"],WIRE_FIXTURE["idleSession"]["processingGeneration"])
+        self.assertIsNone(state["lastInspection"]["processingStartedAt"])
+        self.assertIsNone(state["lastInspection"]["processingAgeMs"])
 
     def test_crash_retry_keeps_scope_and_receipt(self):
         self.incident(); self.mutate_fake(crashAfterReceipt=True)
@@ -311,12 +472,23 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,75); scope=self.controller_state()["scope"]
         self.apply(); self.assertEqual(self.controller_state()["scope"],scope); self.assertEqual(len(self.fake()["receipts"]),1)
 
+    def test_unconsumed_receipt_omits_optional_completion_fields(self):
+        self.incident(); self.mutate_fake(nullOptionalCompletion=True)
+        cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2)
+        self.assertIn("optional completion fields must be omitted",self.controller_state()["reason"])
+
+    def test_receipt_requires_numeric_accepted_processing_generation(self):
+        self.incident(); self.mutate_fake(nullAcceptedGeneration=True)
+        cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2)
+        self.assertIn("receipt lifecycle invalid",self.controller_state()["reason"])
+
     def test_capability_v1_or_extra_state_fails_closed(self):
-        for mutation in (lambda cap: cap.update(version=1),lambda cap: cap["deliveryStates"].append("queued")):
+        for mutation in (lambda cap: cap.update(version=1),lambda cap: cap["deliveryStates"].append("queued"),
+                         lambda cap: cap.update(available=True)):
             with self.subTest(mutation=mutation):
                 if (self.runtime/"self-healing/admission.json").exists(): (self.runtime/"self-healing/admission.json").unlink()
-                self.incident(); fake=self.fake(); fake["capabilities"]["version"]=2; fake["capabilities"]["deliveryStates"]=["delivered","pending-consumption","consumed","duplicate","busy","blocked"]
-                mutation(fake["capabilities"]); self.put(self.fake_state,fake)
+                self.incident(); fake=self.fake(); cap=fake["wire"]["capabilities"]; cap["version"]=2; cap["deliveryStates"]=["delivered","pending-consumption","consumed","duplicate","busy","blocked"]
+                mutation(cap); self.put(self.fake_state,fake)
                 cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2); self.assertEqual(self.controller_state()["phase"],"blocked")
 
     def test_workspace_root_mismatch_fails_closed(self):
@@ -330,7 +502,7 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
 
     def test_transient_inspection_retries_without_blocking_or_redelivery(self):
         self.incident(); self.apply(); self.mutate_fake(rejectInspectOnce=True)
-        cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,75); self.assertEqual(self.controller_state()["phase"],"delivered")
+        cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,75); self.assertEqual(self.controller_state()["phase"],"pending-consumption")
         self.apply(); self.assertEqual(self.controller_state()["phase"],"pending-consumption")
         self.assertEqual(len(self.records("deliver")),1)
 
@@ -379,8 +551,8 @@ class RecoveryAdmissionCronV322Test(unittest.TestCase):
         self.capture=self.root/"capture.json"; self.rpc=self.root/"craft-cli"; self.rpc.write_text("#!/bin/sh\nexit 0\n"); self.rpc.chmod(0o700)
         (scripts/"recovery-admission.py").write_text("import json,os,sys\nopen(os.environ['CRAFT_TEST_CAPTURE'],'w').write(json.dumps({'rpc':os.environ.get('CRAFT_RPC_CLI'),'args':sys.argv[1:]}))\n")
         self.config=self.craft/"runtime/self-healing/persistent-controller.json"
-        self.config.write_text(json.dumps({"sessionId":"controller","workspaceId":"workspace-7","expectedRuntimeVersion":"2026.8.11",
-            "expectedRuntimeCommit":"runtime-v2","serverUrl":"wss://craft.example.test:9100","rpcCli":str(self.rpc)}))
+        self.config.write_text(json.dumps({"sessionId":"controller","workspaceId":"workspace-7","expectedRuntimeVersion":RUNTIME_VERSION,
+            "expectedRuntimeCommit":RUNTIME_COMMIT,"serverUrl":"wss://craft.example.test:9100","rpcCli":str(self.rpc)}))
         self.env={**os.environ,"HOME":str(self.root),"CRAFT_HOME":str(self.craft),"CRAFT_PYTHON":sys.executable,"CRAFT_TEST_CAPTURE":str(self.capture)}
     def tearDown(self): self.tmp.cleanup()
     def test_launcher_pins_runtime_identity_and_cli(self):

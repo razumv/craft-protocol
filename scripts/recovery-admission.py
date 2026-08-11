@@ -48,13 +48,14 @@ RECOVERY_MIN_AGE_MS = RECOVERY_MIN_AGE_SECONDS * 1000
 NOW_MS = lambda: int(os.environ.get("CRAFT_TEST_NOW_MS", "0")) or int(time.time() * 1000)
 
 CAPABILITY_VERSION = 2
+CLAIM_CHANNEL = "automations:admissionClaim"
 DELIVER_CHANNEL = "automations:admissionDeliver"
 INSPECT_CHANNEL = "automations:admissionInspect"
 RECOVER_CHANNEL = "automations:admissionRecover"
 PENDING_PHASES = {"delivered", "pending-consumption", "recovering"}
 DELIVERY_STATUSES = {"delivered", "pending-consumption", "consumed", "duplicate"}
 INSPECT_STATUSES = {"delivered", "pending-consumption", "consumed"}
-RECOVER_STATUSES = {"recovered", "consumed"}
+RECOVER_STATUSES = {"recovered", "consumed", "busy"}
 BLOCKED_KINDS = {"owner-gate-blocked", "cwd-collision", "project-mapping-conflict", "ambiguous-coordinator-owner", "preservation-unknown"}
 WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "job-exit-unreported", "heavy-lock-wait", "terminal-handoff-unconsumed", "external-wait-terminal", "external-wait-unobserved", "external-wait-deadline"}
 ROUTINE_KINDS = {"coordinator-tick-due", "coordinator-lease-stale", "terminal-handoff-unconsumed", "external-wait-terminal"}
@@ -514,23 +515,28 @@ def rpc_json(args: list[str], token: str, *, mutation: bool = False, expected_ty
     return value
 
 
-def verify_capabilities(args: argparse.Namespace, token: str) -> None:
+def verify_capabilities(args: argparse.Namespace, token: str) -> dict[str, Any]:
     capabilities = rpc_json(["automation", "capabilities"], token)
-    expected = {"available": True, "version": CAPABILITY_VERSION, "deliverChannel": DELIVER_CHANNEL,
-                "inspectChannel": INSPECT_CHANNEL, "recoverChannel": RECOVER_CHANNEL,
-                "runtimeVersion": expected_runtime_version(args), "runtimeCommit": expected_runtime_commit(args)}
-    required_states = {"delivered", "pending-consumption", "consumed", "duplicate", "busy", "blocked"}
-    required_targets = {"controller", "coordinator"}
-    server_minimum = capabilities.get("minimumRecoveryAgeMs")
-    if (any(capabilities.get(key) != value for key, value in expected.items()) or
-            set(capabilities.get("deliveryStates") or []) != required_states or
-            set(capabilities.get("targetKinds") or []) != required_targets or
-            not isinstance(server_minimum, int) or isinstance(server_minimum, bool) or server_minimum < 60000 or
-            RECOVERY_MIN_AGE_MS < server_minimum):
+    expected = {
+        "version": CAPABILITY_VERSION,
+        "runtimeVersion": expected_runtime_version(args),
+        "runtimeCommit": expected_runtime_commit(args),
+        "actions": ["session-message"],
+        "states": ["prepared", "delivering", "committed", "completed", "blocked"],
+        "deliveryStates": ["delivered", "pending-consumption", "consumed", "duplicate", "busy", "blocked"],
+        "targetKinds": ["controller", "coordinator"],
+        "minimumRecoveryAgeMs": 60000,
+        "claimChannel": CLAIM_CHANNEL,
+        "deliverChannel": DELIVER_CHANNEL,
+        "inspectChannel": INSPECT_CHANNEL,
+        "recoverChannel": RECOVER_CHANNEL,
+    }
+    if capabilities != expected or RECOVERY_MIN_AGE_MS < expected["minimumRecoveryAgeMs"]:
         raise CapabilityError("Craft admission capability-v2/runtime identity unavailable or mismatched")
+    return capabilities
 
 
-def verify_workspace_binding(configured_workspace_id: str, token: str) -> None:
+def verify_workspace_binding(configured_workspace_id: str, token: str) -> dict[str, Any]:
     rows = rpc_json(["workspaces"], token, expected_type=list)
     matches = [row for row in rows if isinstance(row, dict) and row.get("id") == configured_workspace_id]
     if len(matches) != 1:
@@ -542,6 +548,17 @@ def verify_workspace_binding(configured_workspace_id: str, token: str) -> None:
         raise CapabilityError("target workspace binding is invalid") from exc
     if rpc_root != configured_root:
         raise CapabilityError("Craft workspace ID is not bound to the configured workspace")
+    return matches[0]
+
+
+def verify_runtime(args: argparse.Namespace) -> int:
+    token = server_token()
+    capabilities = verify_capabilities(args, token)
+    workspace = verify_workspace_binding(workspace_id(args), token)
+    print(json.dumps({"schemaVersion": 3, "verified": True, "capabilityVersion": capabilities["version"],
+                      "runtimeVersion": capabilities["runtimeVersion"], "runtimeCommit": capabilities["runtimeCommit"],
+                      "workspaceId": workspace["id"], "workspaceRootPath": workspace["rootPath"]}, indent=2))
+    return 0
 
 
 def scope_for(batch: dict[str, Any], initial_fingerprint: str) -> dict[str, str]:
@@ -601,6 +618,10 @@ def target_identity_args(state: dict[str, Any]) -> list[str]:
             "--target-generation", str(state["targetGeneration"])]
 
 
+def content_revision(message: str) -> str:
+    return hashlib.sha256(message.encode("utf-8")).hexdigest()
+
+
 def validate_receipt(state: dict[str, Any], receipt: Any, *, message_id: str | None = None) -> dict[str, Any]:
     if not isinstance(receipt, dict):
         raise AdmissionError("capability-v2 admission receipt missing")
@@ -613,12 +634,37 @@ def validate_receipt(state: dict[str, Any], receipt: Any, *, message_id: str | N
         raise AdmissionError("capability-v2 admission receipt identity mismatch")
     if message_id is not None and receipt.get("messageId") != message_id:
         raise AdmissionError("capability-v2 admission receipt message mismatch")
+    revision = receipt.get("contentRevision")
+    if (not isinstance(revision, str) or len(revision) != 64 or
+            any(ch not in "0123456789abcdef" for ch in revision) or
+            revision != content_revision(str(state["message"]))):
+        raise AdmissionError("capability-v2 admission receipt content revision mismatch")
+    completion_keys = {"completedContentRevision", "completedProcessingGeneration", "completedMessageId",
+                       "completedMessageAt", "consumedAt"}
+    if (receipt.get("deliveryState") != "consumed" and any(key in receipt for key in completion_keys)):
+        raise AdmissionError("capability-v2 admission receipt optional completion fields must be omitted")
     if (receipt.get("deliveryState") not in INSPECT_STATUSES or
             not isinstance(receipt.get("deliveredAt"), int) or isinstance(receipt.get("deliveredAt"), bool) or receipt["deliveredAt"] <= 0 or
-            (receipt.get("acceptedProcessingGeneration") is not None and
-             (not isinstance(receipt.get("acceptedProcessingGeneration"), int) or isinstance(receipt.get("acceptedProcessingGeneration"), bool)))):
+            not isinstance(receipt.get("acceptedProcessingGeneration"), int) or
+            isinstance(receipt.get("acceptedProcessingGeneration"), bool) or receipt["acceptedProcessingGeneration"] < 0):
         raise AdmissionError("capability-v2 admission receipt lifecycle invalid")
     return receipt
+
+
+def validate_consumed_receipt(state: dict[str, Any], receipt: Any, *, message_id: str | None = None) -> dict[str, Any]:
+    expected_message_id = message_id if message_id is not None else str(state["messageId"])
+    value = validate_receipt(state, receipt, message_id=expected_message_id)
+    completed_generation = value.get("completedProcessingGeneration")
+    completed_at, consumed_at = value.get("completedMessageAt"), value.get("consumedAt")
+    if (value.get("deliveryState") != "consumed" or
+            value.get("completedContentRevision") != value.get("contentRevision") or
+            not isinstance(completed_generation, int) or isinstance(completed_generation, bool) or completed_generation < 0 or
+            not isinstance(value.get("completedMessageId"), str) or not value["completedMessageId"].strip() or
+            value.get("completedMessageId") == value.get("messageId") or
+            not isinstance(completed_at, int) or isinstance(completed_at, bool) or completed_at < value["deliveredAt"] or
+            not isinstance(consumed_at, int) or isinstance(consumed_at, bool) or consumed_at < completed_at):
+        raise AdmissionError("capability-v2 consumed receipt proof invalid")
+    return value
 
 
 def deliver(state: dict[str, Any], token: str) -> dict[str, Any]:
@@ -634,6 +680,8 @@ def deliver(state: dict[str, Any], token: str) -> dict[str, Any]:
         raise AdmissionError("capability-v2 delivery message receipt invalid")
     if status != "duplicate" and receipt.get("deliveryState") != status:
         raise AdmissionError("capability-v2 delivery receipt state mismatch")
+    if receipt.get("deliveryState") == "consumed":
+        receipt = validate_consumed_receipt(state, receipt, message_id=message_id)
     return {"status": status, "messageId": message_id, "receipt": receipt}
 
 
@@ -645,16 +693,19 @@ def inspect(state: dict[str, Any], token: str) -> dict[str, Any]:
     receipt = validate_receipt(state, response.get("receipt"), message_id=str(state["messageId"]))
     if receipt.get("deliveryState") != status:
         raise AdmissionError("admission inspection receipt state mismatch")
+    if status == "consumed":
+        receipt = validate_consumed_receipt(state, receipt)
     session = response.get("session")
     if not isinstance(session, dict) or not isinstance(session.get("isProcessing"), bool):
         raise AdmissionError("admission inspection processing state invalid")
     generation = session.get("processingGeneration")
     started = session.get("processingStartedAt")
-    if session["isProcessing"] and (not isinstance(generation, int) or isinstance(generation, bool) or
-                                    not isinstance(started, int) or started <= 0):
+    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
+        raise AdmissionError("admission inspection durable processing generation invalid")
+    if session["isProcessing"] and (not isinstance(started, int) or started <= 0):
         raise AdmissionError("admission inspection processing generation invalid")
-    if not session["isProcessing"] and (generation is not None or started is not None):
-        raise AdmissionError("admission inspection idle generation invalid")
+    if not session["isProcessing"] and started is not None:
+        raise AdmissionError("admission inspection idle timing invalid")
     if not isinstance(session.get("queueDepth"), int) or isinstance(session.get("queueDepth"), bool) or session["queueDepth"] < 0:
         raise AdmissionError("admission inspection queue depth invalid")
     age = session.get("processingAgeMs")
@@ -682,11 +733,29 @@ def recover(state: dict[str, Any], inspection: dict[str, Any], token: str, args:
                          "--message-id", str(state["messageId"]), "--runtime-version", expected_runtime_version(args),
                          "--runtime-commit", expected_runtime_commit(args), "--processing-generation", str(generation),
                          "--minimum-processing-age-ms", str(RECOVERY_MIN_AGE_MS)], token, mutation=True)
-    if response.get("status") == "blocked" or response.get("status") not in RECOVER_STATUSES:
+    status = response.get("status")
+    if status == "busy":
+        if response.get("messageId") != state.get("messageId") or not isinstance(response.get("reason"), str) or not response["reason"]:
+            raise AdmissionError("capability-v2 recovery busy response invalid")
+        raise TransientRpcError("capability-v2 recovery CAS busy")
+    if status == "blocked" or status not in RECOVER_STATUSES:
         raise AdmissionError("capability-v2 recovery response blocked or invalid")
-    if response.get("messageId") != state.get("messageId") or response.get("processingGeneration") != generation:
-        raise AdmissionError("capability-v2 recovery generation/message mismatch")
-    return {"status": response["status"], "processingGeneration": generation}
+    if response.get("messageId") != state.get("messageId"):
+        raise AdmissionError("capability-v2 recovery message mismatch")
+    if status == "consumed":
+        if "previousProcessingGeneration" in response:
+            raise AdmissionError("capability-v2 consumed race must not claim a recovery transition")
+        current_generation = response.get("processingGeneration")
+        if not isinstance(current_generation, int) or isinstance(current_generation, bool) or current_generation < 0:
+            raise AdmissionError("capability-v2 consumed race durable generation invalid")
+        receipt = validate_consumed_receipt(state, response.get("receipt"))
+        return {"status": "consumed", "processingGeneration": current_generation, "receipt": receipt}
+    previous = response.get("previousProcessingGeneration")
+    advanced = response.get("processingGeneration")
+    if (previous != generation or not isinstance(advanced, int) or isinstance(advanced, bool) or advanced <= generation):
+        raise AdmissionError("capability-v2 recovery generation transition mismatch")
+    return {"status": "recovered", "previousProcessingGeneration": previous,
+            "processingGeneration": advanced}
 
 
 def hard_block(state: dict[str, Any], now: int, reason: str) -> dict[str, Any]:
@@ -754,7 +823,7 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
             "pending-consumption" if receipt["status"] in {"pending-consumption", "duplicate"} else "delivered")
         state["deliveryStatus"] = receipt["status"]
         if state["phase"] == "consumed":
-            state["consumedAt"] = now
+            state["consumedAt"] = receipt["receipt"]["consumedAt"]
         atomic_json(path, state)
         # A duplicate proves an earlier attempt may already have been pending
         # for a long time. Inspect immediately against the original receipt
@@ -772,7 +841,7 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
                                 "queueDepth", "lastFinalMessageId", "lastFinalMessageAt",
                                 "lastErrorMessageId", "lastErrorMessageAt")}
     if outstanding_status == "consumed":
-        state.update(phase="consumed", consumedAt=now)
+        state.update(phase="consumed", consumedAt=inspection["receipt"]["consumedAt"])
         atomic_json(path, state)
         return 0, state
 
@@ -782,7 +851,8 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
         if receipt["messageId"] != state.get("messageId") or receipt["receipt"]["deliveryState"] == "consumed":
             if receipt["messageId"] != state.get("messageId"):
                 raise AdmissionError("coalesced admission changed outstanding message ID")
-            state.update(phase="consumed", consumedAt=now, deliveryStatus="consumed", receipt=receipt["receipt"])
+            state.update(phase="consumed", consumedAt=receipt["receipt"]["consumedAt"],
+                         deliveryStatus="consumed", receipt=receipt["receipt"])
             atomic_json(path, state)
             return 0, state
         state.update(phase="pending-consumption", deliveryStatus=receipt["status"], receipt=receipt["receipt"],
@@ -799,7 +869,9 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
     if stuck and int(state.get("recoveryAttempts") or 0) == 0:
         recovery = recover(state, inspection, token, args)
         if recovery["status"] == "consumed":
-            state.update(phase="consumed", consumedAt=now, recoveryAttempts=1, recovery=recovery)
+            proof = recovery["receipt"]
+            state.update(phase="consumed", consumedAt=proof["consumedAt"], receipt=proof,
+                         recoveryAttempts=1, recovery=recovery)
             atomic_json(path, state)
             return 0, state
         state.update(phase="recovering", recoveryAttempts=1, recoveryStartedAt=now, recovery=recovery)
@@ -983,6 +1055,11 @@ def main() -> int:
     cmd.add_argument("--apply", action="store_true")
     cmd.add_argument("--force", action="store_true")
     cmd.set_defaults(func=disarm)
+    cmd = sub.add_parser("verify-runtime")
+    cmd.add_argument("--workspace-id")
+    cmd.add_argument("--expected-runtime-version")
+    cmd.add_argument("--expected-runtime-commit")
+    cmd.set_defaults(func=verify_runtime)
     cmd = sub.add_parser("tick")
     cmd.add_argument("--controller-session", required=True)
     cmd.add_argument("--workspace-id")

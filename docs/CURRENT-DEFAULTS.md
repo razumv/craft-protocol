@@ -95,7 +95,10 @@ Admission supervisor:          deterministic, before any LLM session
 Admission interval:            300 seconds; report-only under kill switch
 Production admission:          capability-v2 delivery/inspect/recover on exact runtime identity
 Direct capability:             available=true, version=2; deliver + inspect + recover channels
-Delivery completion:           runtime-proven consumed receipt; queued/delivered are not completion
+Delivery completion:           consumed receipt + matching content/completion revision proof
+Durable processing generation: numeric during processing and idle; idle timing fields are null
+Recovery transition:           previous generation must equal request; resulting generation must advance
+Recovery CAS busy:              exit 75 retry; does not spend the single correction attempt
 Outstanding envelope:          one per target generation; meaningful incident changes coalesce in place
 Stuck processing deadline:     1800 seconds by default; one guarded recovery attempt, then blocked
 Direct coordinator lane:       stale/current handoff/terminal wait only; exact authoritative generation
@@ -118,6 +121,8 @@ Controller harness invariant:  exactly 1 persistent active; zero stale receipts
 Harness identity:              PID + process start token + command SHA-256
 Notifier cleanup:              archive first; exact guarded reap only
 Kill-switch sentinel:          $HOME/.craft-agent/runtime/self-healing.disabled
+Installer first mutation:      create/restore kill switch before copying v3.2.2 payload
+Activation order:              runtime f8679cdc first → Protocol → verify-runtime → report-only → canary approval
 ```
 
 ## Status IDs expected by the source workspace

@@ -12,7 +12,9 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - add one guarded processing-generation recovery CAS after the configured 30-minute default deadline, then durably block a still-stuck cycle rather than silently repeating correction;
 - route only exact-generation authoritative coordinator stale leases, current-child terminal handoffs, and terminal external waits directly to their coordinator; complex recovery, ambiguity, gates, HOLD, preservation, rotation, and cleanup remain recovery-controller-bound or fail closed;
 - exclude volatile `agePastExpiryMs` from stale-lease evidence fingerprints while retaining it for diagnostics, and add durable `conditionRevision` so confirmed recurrence begins a distinct bounded cycle;
-- add capability-v2 contract documentation, adversarial coalescing/consumption/recovery/direct-lane tests, v3.2.2 install/automation/version markers, and manifest coverage. No production activation is performed by this candidate.
+- add capability-v2 contract documentation, adversarial coalescing/consumption/recovery/direct-lane tests, v3.2.2 install/automation/version markers, and manifest coverage. No production activation is performed by this candidate;
+- align the adapter and literal wire fixtures to corrected runtime commit `f8679cdcf47688a5a44e0fb9436ab2d6856d583f` (atop base `2889c0a051fe3859842123efb440e8a7ad63193e`): numeric durable idle generation, recovered `previousProcessingGeneration` plus strictly advanced generation, distinct admitted-envelope/final-assistant IDs in authoritative consumed-race content/completion proof without a prior-generation field, and retryable recovery-CAS `busy`;
+- make kill-switch restoration the installer’s first safety mutation before any v3.2.2 payload copy, and add non-mutating `verify-runtime` exact capability/runtime/workspace verification as a mandatory runtime-first activation gate.
 
 ### Added
 

@@ -64,6 +64,16 @@ install_file() {
   fi
 }
 
+# FIRST safety mutation: restore the absolute kill switch before any v3.2.2
+# script, skill, config, or launchd payload can be copied. Any later failure
+# therefore leaves admission disabled.
+if (( APPLY )); then
+  mkdir -p "$RUNTIME"
+  : > "$RUNTIME/self-healing.disabled"
+  chmod 600 "$RUNTIME/self-healing.disabled"
+  echo "RESTORED KILL SWITCH $RUNTIME/self-healing.disabled before payload mutation"
+fi
+
 for name in $files; do
   install_file "$ROOT/scripts/$name" "$SCRIPTS/$name"
 done
@@ -94,8 +104,6 @@ if (( APPLY )); then
   backup_existing "$WORKSPACE/automations.json"
   "$PYTHON" "$SCRIPTS/recovery-admission.py" install-guard \
     --template "$ROOT/config/self-healing.automations.template.json" --apply
-  : > "$RUNTIME/self-healing.disabled"
-  chmod 600 "$RUNTIME/self-healing.disabled"
   echo "Capability-v2 recovery and direct coordinator ticks remain disabled until persistent-controller.json explicitly provides sessionId, workspaceId, expectedRuntimeVersion, expectedRuntimeCommit, a trusted serverUrl, and an absolute executable rpcCli."
   echo "Provide CRAFT_SERVER_TOKEN in the service environment or an owner-only token file; no token/version defaults are installed."
 fi
@@ -125,7 +133,16 @@ else
 fi
 
 echo
-echo "Optional launchd activation (manual review required):"
+echo "MANDATORY RUNTIME-FIRST ACTIVATION GATE:"
+echo "  1. Install/start corrected capability-v2 runtime f8679cdcf47688a5a44e0fb9436ab2d6856d583f first."
+echo "  2. Keep '$RUNTIME/self-healing.disabled' present."
+echo "  3. Verify exact identity before launchd activation or kill-switch removal:"
+echo "     CRAFT_SERVER_URL=<trusted-url> CRAFT_RPC_CLI=<absolute-cli> $SCRIPTS/recovery-admission.py verify-runtime \\"
+echo "       --workspace-id <workspace-id> --expected-runtime-version 0.11.4 --expected-runtime-commit f8679cdcf47688a5a44e0fb9436ab2d6856d583f"
+echo "  4. Activate report-only launchd only after verified=true; remove the kill switch only after reviewed canary approval."
+
+echo
+echo "Optional launchd activation (manual review required after verified=true):"
 echo "  mkdir -p ~/Library/LaunchAgents"
 echo "  cp '$PLIST_DST' ~/Library/LaunchAgents/$PLIST_NAME"
 echo "  launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/$PLIST_NAME"

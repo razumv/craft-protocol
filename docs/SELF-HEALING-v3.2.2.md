@@ -18,20 +18,22 @@ Protocol accepts only an authenticated `automation capabilities` response with a
 
 ```json
 {
-  "available": true,
   "version": 2,
-  "deliverChannel": "automations:admissionDeliver",
-  "inspectChannel": "automations:admissionInspect",
-  "recoverChannel": "automations:admissionRecover",
-  "runtimeVersion": "<configured exact version>",
-  "runtimeCommit": "<configured exact commit>",
+  "runtimeVersion": "0.11.4",
+  "runtimeCommit": "f8679cdcf47688a5a44e0fb9436ab2d6856d583f",
+  "actions": ["session-message"],
+  "states": ["prepared", "delivering", "committed", "completed", "blocked"],
   "deliveryStates": ["delivered", "pending-consumption", "consumed", "duplicate", "busy", "blocked"],
   "targetKinds": ["controller", "coordinator"],
-  "minimumRecoveryAgeMs": 60000
+  "minimumRecoveryAgeMs": 60000,
+  "claimChannel": "automations:admissionClaim",
+  "deliverChannel": "automations:admissionDeliver",
+  "inspectChannel": "automations:admissionInspect",
+  "recoverChannel": "automations:admissionRecover"
 }
 ```
 
-The array order is irrelevant; the sets must match. The configured Protocol deadline must be at least the runtime minimum. Capability v1, absent channels, unknown states, extra/absent target kinds, a runtime identity mismatch, and malformed JSON all fail closed. `system:versions` is never an admission identity source.
+The full object and ordered arrays must match the literal corrected runtime capability. The configured Protocol deadline must be at least the runtime minimum. Capability v1, the obsolete `available` field, absent channels, unknown/extra states or targets, a runtime identity mismatch, and malformed JSON all fail closed. `system:versions` is never an admission identity source.
 
 ### Exact CLI adapter
 
@@ -70,7 +72,9 @@ For coordinators, `targetGeneration` is the exact authoritative registry generat
 
 ### Response contract
 
-Delivery returns `{status,messageId?,reason?,receipt?}`. Protocol accepts only `delivered`, `pending-consumption`, `consumed`, or `duplicate` with one nonempty original `messageId` and a receipt whose scope, session, target kind/ID/generation, occurrence, and idempotency key exactly match. `busy` is an idempotent exit-75 retry with the same prepared scope. `blocked`, plain legacy `queued`, unknown status, changed message ID, or receipt ambiguity fails closed.
+Concrete capability, deliver, idle/processing inspect, recovered, consumed-race, busy, receipt-revision, and required-CLI-flag fixtures are versioned at `tests/fixtures/admission-v2-wire.json` and exercised through the fake CLI round-trip matrix. The fake adapter must satisfy those fixtures; it is not an alternative schema.
+
+Delivery returns `{status,messageId?,reason?,receipt?}`. Protocol accepts only `delivered`, `pending-consumption`, `consumed`, or `duplicate` with one nonempty original `messageId` and a receipt whose scope, session, target kind/ID/generation, occurrence, idempotency key, required nonnegative numeric `acceptedProcessingGeneration`, and `contentRevision` exactly match the delivered message. `contentRevision` is the lowercase SHA-256 of the exact UTF-8 message and changes when coalescing changes content. Completion-only receipt fields are omitted—not emitted as null—until `deliveryState` is `consumed`; consumed proof requires all of them. `busy` is an idempotent exit-75 retry with the same prepared scope. `blocked`, plain legacy `queued`, unknown status, changed message ID, content mismatch, or receipt ambiguity fails closed.
 
 Inspection returns:
 
@@ -80,7 +84,7 @@ Inspection returns:
   "receipt": null,
   "session": {
     "isProcessing": false,
-    "processingGeneration": null,
+    "processingGeneration": 42,
     "processingStartedAt": null,
     "processingAgeMs": null,
     "queueDepth": 0,
@@ -92,9 +96,17 @@ Inspection returns:
 }
 ```
 
-For an outstanding cycle, `receipt` must be non-null and exactly match the durable delivery receipt. `missing`, `blocked`, identity mismatch, a processing target without an integer generation/start time, or an idle target retaining an active generation fails closed.
+For an outstanding cycle, `receipt` must be non-null and exactly match the durable delivery receipt. `processingGeneration` is the nonnegative durable session generation even while idle; idle is represented by `isProcessing:false` with null `processingStartedAt`/`processingAgeMs`. `missing`, `blocked`, identity mismatch, a nonnumeric durable generation, a processing target without a start time/age, or an idle target with non-null timing fails closed.
 
-Recovery adds the exact message, target, runtime, and processing-generation CAS plus the minimum age. Only `recovered` or already-`consumed` with matching message/generation is accepted. Runtime `blocked`, a second attempted correction, or any mismatch puts that target cycle into durable `blocked`. This is a recovery-specific primitive; Protocol exposes no generic remote kill operation.
+Recovery adds the exact message, target, runtime, and processing-generation CAS plus the minimum age. Its corrected wire variants are:
+
+```json
+{"status":"recovered","messageId":"automation-envelope-1","previousProcessingGeneration":18,"processingGeneration":19}
+{"status":"consumed","messageId":"automation-envelope-1","processingGeneration":19,"receipt":{"deliveryState":"consumed","contentRevision":"<sha256>","completedContentRevision":"<same sha256>","completedProcessingGeneration":18,"completedMessageId":"assistant-final-a","completedMessageAt":1786437060000,"consumedAt":1786437061000}}
+{"status":"busy","messageId":"msg-1","reason":"Recovery CAS is already held"}
+```
+
+`recovered` must echo the requested generation in `previousProcessingGeneration` and advance `processingGeneration`. A `consumed` race proves completion independently: `previousProcessingGeneration` is absent because no recovery transition won, while the consumed receipt must prove matching content/completion and complete generation/message/timestamps. The receipt `messageId` is the admitted user envelope; `completedMessageId` is a distinct nonempty final assistant message ID and must not be equated with the envelope ID. `busy` means another exact recovery winner or active tool dispatch holds the CAS; it returns exit 75 without spending the Protocol recovery attempt or blocking the winner. Runtime `blocked`, a non-advanced recovery generation, invalid consumption proof, a second attempted correction, or any identity mismatch puts that target cycle into durable `blocked`. This is a recovery-specific primitive; Protocol exposes no generic remote kill operation.
 
 ## Admission state machine
 
@@ -121,7 +133,7 @@ Rules:
 4. New meaningful incidents for the same target are delivered with the same scope; runtime must replace/coalesce the envelope and retain one message ID and queue entry.
 5. An incident disappearing locally does not prove consumption. Inspection continues until the runtime receipt is consumed or blocked.
 6. Only runtime `consumed`, backed by a completed newer target turn, ends the cycle.
-7. If `isProcessing` exceeds `CRAFT_ADMISSION_RECOVERY_MIN_AGE_SECONDS` (default 1,800 seconds), Protocol calls guarded recovery once. Any later stuck processing generation in that cycle blocks without a second recovery. If an unconsumed envelope remains idle/not-processing through the deadline, it also blocks because there is no exact processing-generation CAS to recover. The 479-minute production failure therefore cannot remain silently pending.
+7. If `isProcessing` exceeds `CRAFT_ADMISSION_RECOVERY_MIN_AGE_SECONDS` (default 1,800 seconds), Protocol calls guarded recovery once. Any later stuck processing generation in that cycle blocks without a second recovery. If an unconsumed envelope remains idle/not-processing through the deadline, it also blocks because there is no active processing turn eligible for recovery even though the durable generation remains numeric. The 479-minute production failure therefore cannot remain silently pending.
 8. Schema-v2 `notified` state cannot be inferred safely and requires owner-reviewed reset while the kill switch remains present.
 
 ## Stable incident identity
@@ -152,9 +164,17 @@ The five-minute admission service evaluates the half-TTL boundary for the defaul
 
 ## Installation and activation
 
-The installer remains dry-run by default. `--apply` installs scripts/tests/docs and a permanently disabled `a322-admission` scheduler guard, disables `a321-notifier`, `a31101`, and `a31102`, restores `self-healing.disabled`, and does **not** enable production admission.
+The installer remains dry-run by default. On `--apply`, its first safety mutation creates/restores mode-0600 `self-healing.disabled` **before** copying any v3.2.2 script, skill, config, or launchd payload. It then installs the permanently disabled `a322-admission` scheduler guard, disables `a321-notifier`, `a31101`, and `a31102`, and never enables production admission. A copy/test failure therefore remains kill-switched.
 
-Before removing the kill switch, configure the persistent controller file with exact `sessionId`, `workspaceId`, `expectedRuntimeVersion`, `expectedRuntimeCommit`, trusted `serverUrl`, and absolute executable `rpcCli`; provide an environment token or owner-only token file. Capability-v2 runtime and Protocol must be installed as one reviewed candidate. Legacy state must be reset explicitly. No production installation, launchctl mutation, or app/process recovery is performed by the package tests.
+Activation is runtime-first and fail-closed:
+
+1. Install and start the separately reviewed capability-v2 Craft runtime correction `f8679cdcf47688a5a44e0fb9436ab2d6856d583f` (separate commit atop base `2889c0a051fe3859842123efb440e8a7ad63193e`) first.
+2. Apply Protocol while the installer restores/retains the kill switch.
+3. Configure exact `sessionId`, `workspaceId`, `expectedRuntimeVersion`, `expectedRuntimeCommit`, trusted `serverUrl`, absolute executable `rpcCli`, and an environment or owner-only token-file credential.
+4. While still kill-switched, run `recovery-admission.py verify-runtime --workspace-id <id> --expected-runtime-version 0.11.4 --expected-runtime-commit f8679cdcf47688a5a44e0fb9436ab2d6856d583f` with the configured CLI/server environment; require `verified:true` and exact identity.
+5. Only then activate report-only launchd. Remove the kill switch only after reviewed canary approval.
+
+Legacy state must be reset explicitly. Protocol-first activation, inferred package identity, and verification after kill-switch removal are prohibited. No production installation, launchctl mutation, or app/process recovery is performed by the package tests.
 
 ## Retained safety boundaries
 

@@ -1,0 +1,214 @@
+{
+  "contract": "automations-admission-v2-corrected",
+  "runtimeBaseCommit": "2889c0a051fe3859842123efb440e8a7ad63193e",
+  "runtimeCorrectionCommit": "f8679cdcf47688a5a44e0fb9436ab2d6856d583f",
+  "exampleMessage": "Incident evidence v3",
+  "capabilitiesRequestParams": [],
+  "capabilities": {
+    "version": 2,
+    "runtimeVersion": "0.11.4",
+    "runtimeCommit": "f8679cdcf47688a5a44e0fb9436ab2d6856d583f",
+    "actions": ["session-message"],
+    "states": ["prepared", "delivering", "committed", "completed", "blocked"],
+    "deliveryStates": ["delivered", "pending-consumption", "consumed", "duplicate", "busy", "blocked"],
+    "targetKinds": ["controller", "coordinator"],
+    "minimumRecoveryAgeMs": 60000,
+    "claimChannel": "automations:admissionClaim",
+    "deliverChannel": "automations:admissionDeliver",
+    "inspectChannel": "automations:admissionInspect",
+    "recoverChannel": "automations:admissionRecover"
+  },
+  "deliverRequestParams": [
+    "workspace-a",
+    {
+      "sessionId": "controller-session",
+      "message": "Incident evidence v3",
+      "matcherId": "matcher-a",
+      "actionId": "0",
+      "occurrenceId": "occurrence-a",
+      "idempotencyKey": "notice",
+      "targetKind": "controller",
+      "targetId": "controller-session",
+      "targetGeneration": "controller-generation-a"
+    }
+  ],
+  "deliveredResponse": {
+    "status": "pending-consumption",
+    "messageId": "automation-d544a32d4cdbc2d20a13d47fb9ab009f03349a91",
+    "receipt": {
+      "workspaceId": "workspace-a",
+      "matcherId": "matcher-a",
+      "actionId": "0",
+      "occurrenceId": "occurrence-a",
+      "idempotencyKey": "notice",
+      "sessionId": "controller-session",
+      "targetKind": "controller",
+      "targetId": "controller-session",
+      "targetGeneration": "controller-generation-a",
+      "messageId": "automation-d544a32d4cdbc2d20a13d47fb9ab009f03349a91",
+      "deliveredAt": 1786437000000,
+      "deliveryState": "pending-consumption",
+      "acceptedProcessingGeneration": 17,
+      "contentRevision": "276af96c799bee3572a7d939bc7ea974510d889c308a02b965ef9680ae0c6159"
+    }
+  },
+  "inspectRequestParams": [
+    "workspace-a",
+    {
+      "sessionId": "controller-session",
+      "matcherId": "matcher-a",
+      "actionId": "0",
+      "occurrenceId": "occurrence-a",
+      "idempotencyKey": "notice"
+    }
+  ],
+  "idleSession": {
+    "isProcessing": false,
+    "processingGeneration": 18,
+    "processingStartedAt": null,
+    "processingAgeMs": null,
+    "queueDepth": 0,
+    "lastFinalMessageId": "assistant-final-a",
+    "lastFinalMessageAt": 1786437060000,
+    "lastErrorMessageId": null,
+    "lastErrorMessageAt": null
+  },
+  "processingSession": {
+    "isProcessing": true,
+    "processingGeneration": 18,
+    "processingStartedAt": 1786437000000,
+    "processingAgeMs": 120000,
+    "queueDepth": 1,
+    "lastFinalMessageId": null,
+    "lastFinalMessageAt": null,
+    "lastErrorMessageId": null,
+    "lastErrorMessageAt": null
+  },
+  "inspectIdleResponse": {
+    "status": "pending-consumption",
+    "receipt": {
+      "workspaceId": "workspace-a",
+      "matcherId": "matcher-a",
+      "actionId": "0",
+      "occurrenceId": "occurrence-a",
+      "idempotencyKey": "notice",
+      "sessionId": "controller-session",
+      "targetKind": "controller",
+      "targetId": "controller-session",
+      "targetGeneration": "controller-generation-a",
+      "messageId": "automation-d544a32d4cdbc2d20a13d47fb9ab009f03349a91",
+      "deliveredAt": 1786437000000,
+      "deliveryState": "pending-consumption",
+      "acceptedProcessingGeneration": 17,
+      "contentRevision": "276af96c799bee3572a7d939bc7ea974510d889c308a02b965ef9680ae0c6159"
+    },
+    "session": {
+      "isProcessing": false,
+      "processingGeneration": 18,
+      "processingStartedAt": null,
+      "processingAgeMs": null,
+      "queueDepth": 0,
+      "lastFinalMessageId": "assistant-final-a",
+      "lastFinalMessageAt": 1786437060000,
+      "lastErrorMessageId": null,
+      "lastErrorMessageAt": null
+    }
+  },
+  "inspectProcessingResponse": {
+    "status": "pending-consumption",
+    "receipt": {
+      "workspaceId": "workspace-a",
+      "matcherId": "matcher-a",
+      "actionId": "0",
+      "occurrenceId": "occurrence-a",
+      "idempotencyKey": "notice",
+      "sessionId": "controller-session",
+      "targetKind": "controller",
+      "targetId": "controller-session",
+      "targetGeneration": "controller-generation-a",
+      "messageId": "automation-d544a32d4cdbc2d20a13d47fb9ab009f03349a91",
+      "deliveredAt": 1786437000000,
+      "deliveryState": "pending-consumption",
+      "acceptedProcessingGeneration": 17,
+      "contentRevision": "276af96c799bee3572a7d939bc7ea974510d889c308a02b965ef9680ae0c6159"
+    },
+    "session": {
+      "isProcessing": true,
+      "processingGeneration": 18,
+      "processingStartedAt": 1786437000000,
+      "processingAgeMs": 120000,
+      "queueDepth": 1,
+      "lastFinalMessageId": null,
+      "lastFinalMessageAt": null,
+      "lastErrorMessageId": null,
+      "lastErrorMessageAt": null
+    }
+  },
+  "recoverRequestParams": [
+    "workspace-a",
+    {
+      "sessionId": "controller-session",
+      "matcherId": "matcher-a",
+      "actionId": "0",
+      "occurrenceId": "occurrence-a",
+      "idempotencyKey": "notice",
+      "targetKind": "controller",
+      "targetId": "controller-session",
+      "targetGeneration": "controller-generation-a",
+      "messageId": "automation-d544a32d4cdbc2d20a13d47fb9ab009f03349a91",
+      "runtimeVersion": "0.11.4",
+      "runtimeCommit": "f8679cdcf47688a5a44e0fb9436ab2d6856d583f",
+      "processingGeneration": 18,
+      "minimumProcessingAgeMs": 60000
+    }
+  ],
+  "recoveredResponse": {
+    "status": "recovered",
+    "messageId": "automation-d544a32d4cdbc2d20a13d47fb9ab009f03349a91",
+    "previousProcessingGeneration": 18,
+    "processingGeneration": 19
+  },
+  "consumedRaceResponse": {
+    "status": "consumed",
+    "messageId": "automation-d544a32d4cdbc2d20a13d47fb9ab009f03349a91",
+    "processingGeneration": 19,
+    "receipt": {
+      "workspaceId": "workspace-a",
+      "matcherId": "matcher-a",
+      "actionId": "0",
+      "occurrenceId": "occurrence-a",
+      "idempotencyKey": "notice",
+      "sessionId": "controller-session",
+      "targetKind": "controller",
+      "targetId": "controller-session",
+      "targetGeneration": "controller-generation-a",
+      "messageId": "automation-d544a32d4cdbc2d20a13d47fb9ab009f03349a91",
+      "deliveredAt": 1786437000000,
+      "deliveryState": "consumed",
+      "acceptedProcessingGeneration": 17,
+      "contentRevision": "276af96c799bee3572a7d939bc7ea974510d889c308a02b965ef9680ae0c6159",
+      "completedContentRevision": "276af96c799bee3572a7d939bc7ea974510d889c308a02b965ef9680ae0c6159",
+      "consumedAt": 1786437061000,
+      "completedProcessingGeneration": 18,
+      "completedMessageId": "assistant-final-a",
+      "completedMessageAt": 1786437060000
+    }
+  },
+  "busyResponse": {
+    "status": "busy",
+    "messageId": "automation-d544a32d4cdbc2d20a13d47fb9ab009f03349a91",
+    "reason": "Recovery CAS is already held"
+  },
+  "busyToolResponse": {
+    "status": "busy",
+    "messageId": "automation-d544a32d4cdbc2d20a13d47fb9ab009f03349a91",
+    "reason": "A tool dispatch is still in flight"
+  },
+  "requiredFlags": {
+    "capabilities": ["--workspace", "--expected-runtime-version", "--expected-runtime-commit"],
+    "claim": ["--workspace", "--session", "--matcher", "--action", "--occurrence", "--key", "--target-kind", "--target-id", "--target-generation", "--message-id", "--minimum-processing-age-ms", "--expected-runtime-version", "--expected-runtime-commit"],
+    "deliver": ["--workspace", "--session", "--matcher", "--action", "--occurrence", "--key", "--target-kind", "--target-id", "--target-generation"],
+    "inspect": ["--workspace", "--session", "--matcher", "--action", "--occurrence", "--key"],
+    "recover": ["--workspace", "--session", "--matcher", "--action", "--occurrence", "--key", "--target-kind", "--target-id", "--target-generation", "--message-id", "--runtime-version", "--runtime-commit", "--processing-generation", "--minimum-processing-age-ms"]
+  }
+}
