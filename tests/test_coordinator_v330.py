@@ -92,6 +92,17 @@ class Base(unittest.TestCase):
 
 
 class InboxTests(Base):
+    def publish_ack_status(self):
+        payload = {"objective": "Process coordinator inbox", "phase": "executing",
+                   "currentFocus": "claimed digest", "childRefs": ["worker1"],
+                   "nextReviewInSeconds": 3600,
+                   "nextActions": [{"description": "apply claimed evidence", "trigger": "now",
+                                    "requiredEvidence": "claimed inbox revision", "successBranch": "continue",
+                                    "failureBranch": "release claim"}]}
+        _, out = self.cli(STATUS, "publish", "--project", "demo", "--session", "coord1",
+                          "--generation", "2", "--json", json.dumps(payload), "--apply")
+        return out["revision"]
+
     def test_submit_requires_generation_match(self):
         self.base_project()
         cp, _ = self.submit("progress", generation=99, ok=False)
@@ -105,6 +116,13 @@ class InboxTests(Base):
         self.lease(parent="other-coord")
         cp, _ = self.submit("progress", ok=False)
         self.assertIn("not bound", cp.stderr)
+
+    def test_submit_requires_exact_lease_attempt_binding(self):
+        self.base_project()
+        lease_path = self.runtime / "worker-leases" / "worker1.json"
+        lease = json.loads(lease_path.read_text()); lease.pop("attempt"); self.put(lease_path, lease)
+        cp, _ = self.submit("progress", ok=False)
+        self.assertIn("attempt binding", cp.stderr)
 
     def test_submit_rejects_credentials_in_evidence(self):
         self.base_project()
@@ -144,6 +162,20 @@ class InboxTests(Base):
         self.assertEqual(report["projects"][0]["summary"]["wakingPending"], 1)
         self.assertTrue(report["projects"][0]["wakeReady"])
 
+    def test_wake_report_is_bounded_with_truthful_total(self):
+        self.base_project()
+        for n in range(220):
+            self.put(self.runtime / "coordinator-inbox" / "demo" / f"item-{n:02d}.json",
+                     {"eventKey": f"event-{n:02d}", "kind": "blocker", "sender": f"worker-{n:02d}",
+                      "workUnit": f"wu-{n:02d}", "attempt": "1", "revision": 1,
+                      "coordinatorGeneration": 2, "state": "pending", "waking": True,
+                      "updatedAt": self.now})
+        _, report = self.cli(INBOX, "report", "--project", "demo")
+        row = report["projects"][0]
+        self.assertEqual(row["wakePendingCount"], 220)
+        self.assertEqual(len(row["wakePending"]), 200)
+        self.assertTrue(row["wakeTruncated"])
+
     def test_hundred_report_storm_coalesces_to_one_item_and_one_wake(self):
         self.base_project()
         for _ in range(100):
@@ -167,13 +199,17 @@ class InboxTests(Base):
         cp, _ = self.cli(INBOX, "ack", "--project", "demo", "--session", "coord1",
                          "--generation", "2", "--token", token, "--apply", ok=False)
         self.assertNotEqual(cp.returncode, 0)
-        # ack with terminal evidence consumes
+        # Only a status revision published after this claim may consume it.
+        revision = self.publish_ack_status()
         _, acked = self.cli(INBOX, "ack", "--project", "demo", "--session", "coord1",
                             "--generation", "2", "--token", token,
-                            "--terminal-evidence", "pushed abc123", "--apply")
+                            "--status-revision", str(revision), "--apply")
         self.assertEqual(len(acked["acked"]), 1)
         _, report = self.cli(INBOX, "report", "--project", "demo")
-        self.assertEqual(report["projects"][0]["summary"]["total"], 0)
+        summary = report["projects"][0]["summary"]
+        self.assertEqual(summary["total"], 0)
+        self.assertEqual(summary["acknowledged"], 1)
+        self.assertEqual(summary["retained"], 1)
 
     def test_duplicate_ack_is_idempotent(self):
         self.base_project()
@@ -181,11 +217,46 @@ class InboxTests(Base):
         _, claim = self.cli(INBOX, "claim", "--project", "demo", "--session", "coord1",
                             "--generation", "2", "--apply")
         token = claim["token"]
+        revision = self.publish_ack_status()
         self.cli(INBOX, "ack", "--project", "demo", "--session", "coord1", "--generation", "2",
-                 "--token", token, "--terminal-evidence", "x", "--apply")
+                 "--token", token, "--status-revision", str(revision), "--apply")
         _, again = self.cli(INBOX, "ack", "--project", "demo", "--session", "coord1", "--generation", "2",
-                            "--token", token, "--terminal-evidence", "x", "--apply")
+                            "--token", token, "--status-revision", str(revision), "--apply")
         self.assertTrue(again["idempotent"])
+
+    def test_ack_rejects_status_published_before_claim(self):
+        self.base_project()
+        self.submit("terminal-handoff", "candidate")
+        old_revision = self.publish_ack_status()
+        _, claim = self.cli(INBOX, "claim", "--project", "demo", "--session", "coord1",
+                            "--generation", "2", "--apply")
+        _, stale = self.cli(INBOX, "ack", "--project", "demo", "--session", "coord1",
+                            "--generation", "2", "--token", claim["token"],
+                            "--status-revision", str(old_revision), "--apply")
+        self.assertEqual(stale["acked"], [])
+        self.assertEqual(stale["skipped"][0]["reason"], "status-not-published-after-item-claim")
+        new_revision = self.publish_ack_status()
+        _, acked = self.cli(INBOX, "ack", "--project", "demo", "--session", "coord1",
+                            "--generation", "2", "--token", claim["token"],
+                            "--status-revision", str(new_revision), "--apply")
+        self.assertEqual(len(acked["acked"]), 1)
+
+    def test_reused_claim_rebinds_meaningful_new_revision(self):
+        self.base_project()
+        self.submit("terminal-handoff", "candidate v1")
+        _, first_claim = self.cli(INBOX, "claim", "--project", "demo", "--session", "coord1",
+                                  "--generation", "2", "--apply")
+        self.submit("terminal-handoff", "candidate v2")
+        _, refreshed = self.cli(INBOX, "claim", "--project", "demo", "--session", "coord1",
+                                "--generation", "2", "--apply")
+        self.assertEqual(refreshed["token"], first_claim["token"])
+        self.assertEqual(refreshed["digest"][0]["subject"], "candidate v2")
+        self.assertEqual(refreshed["digest"][0]["claimedRevision"], 2)
+        revision = self.publish_ack_status()
+        _, acked = self.cli(INBOX, "ack", "--project", "demo", "--session", "coord1",
+                            "--generation", "2", "--token", refreshed["token"],
+                            "--status-revision", str(revision), "--apply")
+        self.assertEqual(len(acked["acked"]), 1)
 
     def test_claim_expiry_returns_unacked_items(self):
         self.base_project()
@@ -228,7 +299,7 @@ class StatusTests(Base):
 
     def executing_payload(self):
         return {"objective": "Ship API", "phase": "executing", "currentFocus": "wu-1",
-                "childRefs": ["worker1"],
+                "childRefs": ["worker1"], "nextReviewInSeconds": 3600,
                 "nextActions": [{"description": "review wu-1", "trigger": "worker1 terminal",
                                  "requiredEvidence": "green ci", "successBranch": "merge",
                                  "failureBranch": "rework"}]}
@@ -276,7 +347,8 @@ class StatusTests(Base):
 
     def test_waiting_requires_active_commitment(self):
         self.base_project()
-        cp, _ = self.publish({"objective": "x", "phase": "waiting", "nextActions": []}, ok=False)
+        cp, _ = self.publish({"objective": "x", "phase": "waiting", "nextActions": [],
+                              "nextReviewInSeconds": 3600}, ok=False)
         self.assertIn("commitment", cp.stderr)
         # register a commitment then publishing waiting succeeds
         self.cli(COMMIT, "register", "--project", "demo", "--session", "coord1", "--generation", "2",
@@ -284,16 +356,113 @@ class StatusTests(Base):
                  "--ref", "worker1", "--deadline-seconds", "3600", "--success-action", "merge",
                  "--failure-action", "rework", "--apply")
         _, pub = self.publish({"objective": "x", "phase": "waiting", "commitmentRefs": ["c1"],
-                               "childRefs": ["worker1"]})
+                               "childRefs": ["worker1"], "nextReviewInSeconds": 3600})
         self.assertEqual(pub["revision"], 1)
         _, show = self.cli(STATUS, "show", "--project", "demo")
         self.assertEqual(show["classification"], "waiting-observed")
+
+    def test_old_generation_commitment_cannot_observe_current_wait(self):
+        self.base_project()
+        self.cli(COMMIT, "register", "--project", "demo", "--session", "coord1", "--generation", "2",
+                 "--commitment-id", "c-old", "--subject", "await", "--binding-kind", "worker-lease",
+                 "--ref", "worker1", "--deadline-seconds", "3600", "--success-action", "merge",
+                 "--failure-action", "rework", "--apply")
+        path = self.runtime / "coordinator-commitments" / "demo" / "c-old.json"
+        row = json.loads(path.read_text()); row["generation"] = 1; self.put(path, row)
+        cp, _ = self.publish({"objective": "x", "phase": "waiting", "commitmentRefs": ["c-old"],
+                              "nextReviewInSeconds": 3600}, ok=False)
+        self.assertIn("this coordinator generation", cp.stderr)
 
     def test_contradiction_complete_with_active_workers(self):
         self.base_project()
         self.publish({"objective": "x", "phase": "complete", "nextActions": []})
         _, show = self.cli(STATUS, "show", "--project", "demo")
         self.assertEqual(show["classification"], "contradictory")
+
+    def test_next_review_must_be_bounded_integer(self):
+        self.base_project()
+        payload = self.executing_payload(); payload.pop("nextReviewInSeconds"); payload["nextReviewAt"] = "tomorrow"
+        cp, _ = self.publish(payload, ok=False)
+        self.assertIn("integer timestamp", cp.stderr)
+        payload = self.executing_payload(); payload["nextReviewInSeconds"] = "3600"
+        cp, _ = self.publish(payload, ok=False)
+        self.assertIn("must be an integer", cp.stderr)
+
+    def test_nonterminal_status_requires_next_review(self):
+        self.base_project()
+        payload = self.executing_payload(); payload.pop("nextReviewInSeconds")
+        cp, _ = self.publish(payload, ok=False)
+        self.assertIn("requires nextReview", cp.stderr)
+
+    def test_nonterminal_latest_evidence_is_executing_not_verified(self):
+        self.base_project(); self.lease(state="handoff-ready")
+        self.submit("candidate", "candidate ready")
+        payload = self.executing_payload(); payload["childRefs"] = ["worker1"]
+        self.publish(payload)
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["classification"], "executing")
+
+    def test_candidate_only_cannot_verify_completion(self):
+        self.base_project(); self.lease(state="handoff-ready")
+        _, submitted = self.submit("candidate", "candidate ready")
+        cp, _ = self.publish({"objective": "Ship API", "phase": "complete", "nextActions": [],
+                              "completedOutcomes": [{"summary": "candidate accepted",
+                                                     "evidenceRef": submitted["item"]["eventKey"]}]}, ok=False)
+        self.assertIn("not verification-grade", cp.stderr)
+
+    def test_verified_completion_requires_observed_evidence_reference(self):
+        self.base_project(); self.lease(state="handoff-ready")
+        proof = self.root / "ws" / "verification.txt"; proof.write_text("verified\n")
+        _, submitted = self.submit("terminal-handoff", "candidate ready", evidence=[str(proof)])
+        event_key = submitted["item"]["eventKey"]
+        _, published = self.publish({"objective": "Ship API", "phase": "complete", "nextActions": [],
+                                     "completedOutcomes": [{"summary": "candidate accepted",
+                                                            "evidenceRef": event_key}]})
+        self.assertEqual(published["revision"], 1)
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["classification"], "verified")
+        self.submit("candidate", "later unrelated candidate")
+        _, still_verified = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(still_verified["classification"], "verified")
+        cp, _ = self.publish({"objective": "Ship API", "phase": "complete", "nextActions": [],
+                              "completedOutcomes": [{"summary": "invented", "evidenceRef": "missing"}]}, ok=False)
+        self.assertIn("not observed", cp.stderr)
+
+    def test_malformed_stored_status_is_contradictory_not_crash(self):
+        self.base_project()
+        status_path = self.runtime / "coordinator-status" / "demo.json"
+        self.put(status_path, ["malformed"])
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["classification"], "contradictory")
+        self.assertIn("stored-status-malformed", show["issues"])
+        self.put(status_path, {"generation": 2, "revision": 1, "publishedAt": self.now,
+                               "declared": {"objective": "x", "phase": "bogus"}})
+        _, invalid_dict = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(invalid_dict["classification"], "contradictory")
+        self.assertIn("stored-status-malformed", invalid_dict["issues"])
+        self.put(self.runtime / "coordinator-inbox" / "demo" / "bad.json", ["malformed"])
+        _, again = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(again["classification"], "contradictory")
+
+    def test_declared_shape_and_synthesized_arrays_are_bounded(self):
+        self.base_project()
+        payload = self.executing_payload(); payload["currentFocus"] = {"nested": "not text"}
+        cp, _ = self.publish(payload, ok=False)
+        self.assertIn("currentFocus must be text", cp.stderr)
+        payload = self.executing_payload(); payload["childRefs"] = [{"not": "hashable"}]
+        cp, _ = self.publish(payload, ok=False)
+        self.assertIn("entries must be bounded non-empty text", cp.stderr)
+        self.publish(self.executing_payload())
+        for n in range(2, 42):
+            self.put(self.runtime / "worker-leases" / f"worker{n}.json",
+                     {"sessionId": f"worker{n}", "parentSessionId": "coord1", "workUnit": f"wu-{n}",
+                      "attempt": "1", "state": "running"})
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        synth = show["synthesized"]
+        self.assertEqual(synth["activeWorkerCount"], 41)
+        self.assertEqual(len(synth["activeWorkers"]), 32)
+        self.assertTrue(synth["activeWorkersTruncated"])
+        self.assertFalse(any(key.startswith("_") for key in synth))
 
     def test_report_all_markdown_is_deterministic_and_sorted(self):
         self.coordinator("c-alpha"); self.registry("alpha", "c-alpha", 1)
@@ -331,6 +500,13 @@ class CommitmentTests(Base):
         self.base_project()
         _, out = self.register()
         self.assertEqual(out["commitment"]["state"], "observing")
+        _, retry = self.register()
+        self.assertTrue(retry["idempotent"])
+        cp, _ = self.cli(COMMIT, "register", "--project", "demo", "--session", "coord1",
+                         "--generation", "2", "--commitment-id", "c1", "--subject", "different",
+                         "--binding-kind", "worker-lease", "--ref", "worker1", "--deadline-seconds", "3600",
+                         "--success-action", "merge", "--failure-action", "rework", "--apply", ok=False)
+        self.assertIn("conflicting contract", cp.stderr)
 
     def test_overdue_emits_incident_reason(self):
         self.base_project()
@@ -339,6 +515,52 @@ class CommitmentTests(Base):
         _, rec = self.cli(COMMIT, "reconcile", "--apply", now=far)
         reasons = [a["reason"] for a in rec["actions"]]
         self.assertIn("deadline-overdue", reasons)
+
+    def test_malformed_persisted_numbers_fail_closed_without_traceback(self):
+        self.base_project()
+        reg_path = self.runtime / "coordinators" / "demo.json"
+        reg = json.loads(reg_path.read_text()); reg["generation"] = "bad"; self.put(reg_path, reg)
+        cp, _ = self.register(ok=False)
+        self.assertNotIn("Traceback", cp.stderr)
+        self.assertIn("stale coordinator generation", cp.stderr)
+        reg["generation"] = -1; self.put(reg_path, reg)
+        cp, _ = self.register(generation=-1, ok=False)
+        self.assertIn("stale coordinator generation", cp.stderr)
+        reg["generation"] = 2; self.put(reg_path, reg)
+        self.register()
+        path = self.runtime / "coordinator-commitments" / "demo" / "c1.json"
+        record = json.loads(path.read_text()); record["deadlineAt"] = "bad"; self.put(path, record)
+        cp, rec = self.cli(COMMIT, "reconcile", "--apply")
+        self.assertNotIn("Traceback", cp.stderr)
+        self.assertEqual(rec["actions"][0]["reason"], "malformed-record")
+        self.put(path, ["not-an-object"])
+        cp, listed = self.cli(COMMIT, "list", "--project", "demo")
+        self.assertNotIn("Traceback", cp.stderr); self.assertEqual(listed["count"], 0)
+        cp, reconciled = self.cli(COMMIT, "reconcile", "--apply")
+        self.assertNotIn("Traceback", cp.stderr); self.assertEqual(reconciled["actions"], [])
+
+    def test_resolution_rejects_unobserved_cancel_and_early_timeout(self):
+        self.base_project(); self.register()
+        cp, _ = self.cli(COMMIT, "resolve", "--project", "demo", "--session", "coord1",
+                         "--generation", "2", "--commitment-id", "c1", "--resolution", "cancelled",
+                         "--evidence", "no longer needed", "--apply", ok=False)
+        self.assertIn("cannot be cancelled", cp.stderr)
+        cp, _ = self.cli(COMMIT, "resolve", "--project", "demo", "--session", "coord1",
+                         "--generation", "2", "--commitment-id", "c1", "--resolution", "timeout",
+                         "--evidence", "too early", "--apply", ok=False)
+        self.assertIn("deadline", cp.stderr)
+
+    def test_scheduled_review_time_can_only_prove_timeout(self):
+        self.base_project(); self.register(binding="scheduled-review", ref=None, deadline=60)
+        far = self.now + 120_000
+        cp, _ = self.cli(COMMIT, "resolve", "--project", "demo", "--session", "coord1",
+                         "--generation", "2", "--commitment-id", "c1", "--resolution", "success",
+                         "--evidence", "time passed", "--apply", ok=False, now=far)
+        self.assertIn("support timeout only", cp.stderr)
+        _, out = self.cli(COMMIT, "resolve", "--project", "demo", "--session", "coord1",
+                          "--generation", "2", "--commitment-id", "c1", "--resolution", "timeout",
+                          "--evidence", "deadline passed", "--apply", now=far)
+        self.assertEqual(out["commitment"]["state"], "resolved-timeout")
 
     def test_resolution_requires_terminal_observer(self):
         self.base_project()
@@ -354,6 +576,9 @@ class CommitmentTests(Base):
                           "--generation", "2", "--commitment-id", "c1", "--resolution", "success",
                           "--evidence", "merged sha abc", "--apply")
         self.assertEqual(out["commitment"]["state"], "resolved-success")
+        _, retry = self.register()
+        self.assertTrue(retry["idempotent"])
+        self.assertEqual(retry["commitment"]["state"], "resolved-success")
 
 
 class IntegrationTests(Base):

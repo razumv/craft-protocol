@@ -185,8 +185,8 @@ incident:
 
 # 2. Act on the digest (accept candidate, spawn correction, register a wait, etc.),
 #    then publish the durable product-status snapshot for this project.
-# 3. Acknowledge the exact claimed items with durable evidence — a published status
-#    revision or exact terminal action evidence. Unacked items return on expiry.
+# 3. Acknowledge the exact claimed items only with the product-status revision
+#    published after this claim. Reports remain retained; unacked items return on expiry.
 ~/.craft-agent/scripts/coordinator-inbox.py ack --apply \
   --project <project> --session <your-session-id> --generation <N> \
   --token <claim-token> --status-revision <published-revision>

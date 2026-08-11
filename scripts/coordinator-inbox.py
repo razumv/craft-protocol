@@ -7,9 +7,9 @@ instead of steering an active coordinator turn. A burst of identical or supersed
 reports collapses to at most one pending item per stable
 project+generation+sender+work-unit+attempt+kind key. Consumption is
 generation-fenced: one exact authoritative coordinator generation claims a bounded
-digest under a unique token, and acknowledgement requires that same token plus a
-durable product-status revision or exact terminal action evidence. No report is
-deleted on claim; unacknowledged items become available again on crash or expiry.
+digest under a unique token, and acknowledgement requires that same token plus an
+exact product-status revision published after the claim. Reports remain durable after
+acknowledgement; unacknowledged items become available again on crash or expiry.
 
 This tool never mutates session JSONL, worker leases, the coordinator registry, or
 owner gates, and never grants merge/deploy/destructive/rotation authority.
@@ -201,7 +201,9 @@ def cmd_submit(args: argparse.Namespace) -> int:
         if str(lease.get("workUnit") or "") != work_unit:
             fail("work-unit does not match sender lease")
         lease_attempt = str(lease.get("attempt") or "")
-        if lease_attempt and lease_attempt != attempt:
+        if not lease_attempt:
+            fail("sender lease is missing an exact attempt binding")
+        if lease_attempt != attempt:
             fail("attempt does not match sender lease")
 
         key = event_key(project, args.generation, sender, work_unit, attempt, args.kind)
@@ -230,9 +232,10 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 "revision": revision, "state": "pending", "waking": waking,
                 "updatedAt": now, "lastSubmittedAt": now,
                 "diagnosticsRevision": int(existing.get("diagnosticsRevision") or 0),
-                # A new fact detaches the item from any prior claim snapshot.
+                # A new fact detaches the item from any prior claim/ack snapshot.
                 "claimToken": None, "claimedByGeneration": None, "claimedAt": None,
-                "claimExpiresAt": None, "claimedRevision": None,
+                "claimExpiresAt": None, "claimedRevision": None, "claimedStatusRevision": None,
+                "acknowledgedAt": None, "acknowledgedStatusRevision": None,
             })
         else:
             item = {
@@ -245,7 +248,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 "state": "pending", "submittedAt": now, "lastSubmittedAt": now, "updatedAt": now,
                 "diagnosticsRevision": 0,
                 "claimToken": None, "claimedByGeneration": None, "claimedAt": None,
-                "claimExpiresAt": None, "claimedRevision": None,
+                "claimExpiresAt": None, "claimedRevision": None, "claimedStatusRevision": None,
+                "acknowledgedAt": None, "acknowledgedStatusRevision": None,
             }
         if args.apply:
             common.atomic_json(path, item)
@@ -276,6 +280,9 @@ def cmd_claim(args: argparse.Namespace) -> int:
             token = f"{project}-g{args.generation}-{now}-{seq}"
             expires = now + ttl * 1000
             claimed_keys = []
+        status = common.read_json(STATUS / f"{project}.json") or {}
+        status_revision_at_claim = (int(status.get("revision") or 0)
+                                    if status.get("generation") == args.generation else 0)
         newly = 0
         for path in sorted(inbox_dir(project).glob("*.json")):
             if len(claimed_keys) >= DIGEST_LIMIT:
@@ -283,11 +290,25 @@ def cmd_claim(args: argparse.Namespace) -> int:
             item = common.read_json(path)
             if not item or int(item.get("coordinatorGeneration") or -1) != args.generation:
                 continue
-            if item.get("eventKey") in claimed_keys or not item_available(item, now):
+            event_key_value = item.get("eventKey")
+            if event_key_value in claimed_keys:
+                # A meaningful newer revision detaches itself from the old claim
+                # snapshot. Rebind it to the reused token so the digest is current
+                # and its acknowledgement requires a fresh post-revision status.
+                if item_available(item, now):
+                    item.update({"state": "claimed", "claimToken": token,
+                                 "claimedByGeneration": args.generation, "claimedAt": now,
+                                 "claimExpiresAt": expires, "claimedRevision": int(item.get("revision") or 0),
+                                 "claimedStatusRevision": status_revision_at_claim, "updatedAt": now})
+                    if args.apply:
+                        common.atomic_json(path, item)
+                    newly += 1
+                continue
+            if not item_available(item, now):
                 continue
             item.update({"state": "claimed", "claimToken": token, "claimedByGeneration": args.generation,
                          "claimedAt": now, "claimExpiresAt": expires, "claimedRevision": int(item.get("revision") or 0),
-                         "updatedAt": now})
+                         "claimedStatusRevision": status_revision_at_claim, "updatedAt": now})
             if args.apply:
                 common.atomic_json(path, item)
             claimed_keys.append(item["eventKey"]); newly += 1
@@ -318,15 +339,15 @@ def cmd_ack(args: argparse.Namespace) -> int:
             print(json.dumps({"applied": args.apply, "idempotent": True, "acked": [], "skipped": [],
                               "reason": "no-active-claim-for-token"}, ensure_ascii=False, indent=2))
             return 0
-        # Acknowledgement must be backed by durable evidence, not prose.
-        has_status = False
-        if args.status_revision is not None:
-            status = common.read_json(STATUS / f"{project}.json")
-            has_status = bool(status and int(status.get("revision") or -1) >= args.status_revision
-                              and status.get("generation") == args.generation)
-        has_terminal = bool(args.terminal_evidence)
-        if not has_status and not has_terminal:
-            fail("ack requires --status-revision (durable published status) or --terminal-evidence")
+        # Acknowledgement requires an exact status revision published after the
+        # claimed item snapshot. Free-form terminal prose is never evidence.
+        if args.status_revision is None:
+            fail("ack requires --status-revision from a durable status published after claim")
+        status = common.read_json(STATUS / f"{project}.json")
+        has_status = bool(status and status.get("generation") == args.generation
+                          and int(status.get("revision") or -1) == args.status_revision)
+        if not has_status:
+            fail("ack status revision is missing, stale, or belongs to another generation")
 
         requested = set(args.items) if args.items else set(claim.get("items") or [])
         acked: list[str] = []
@@ -346,11 +367,19 @@ def cmd_ack(args: argparse.Namespace) -> int:
                 # A newer fact arrived after claim; leave it available rather than swallow it.
                 skipped.append({"eventKey": key, "reason": "revision-changed-since-claim"})
                 continue
+            if args.status_revision <= int(item.get("claimedStatusRevision") or 0):
+                skipped.append({"eventKey": key, "reason": "status-not-published-after-item-claim"})
+                continue
             acked.append(key)
             if key in remaining_items:
                 remaining_items.remove(key)
+            item.update({"state": "acknowledged", "acknowledgedAt": now,
+                         "acknowledgedStatusRevision": args.status_revision,
+                         "claimToken": None, "claimedByGeneration": None, "claimedAt": None,
+                         "claimExpiresAt": None, "claimedRevision": None, "claimedStatusRevision": None,
+                         "updatedAt": now})
             if args.apply:
-                path.unlink(missing_ok=True)
+                common.atomic_json(path, item)
         claim["items"] = remaining_items
         claim["lastAckAt"] = now
         if not remaining_items:
@@ -359,7 +388,7 @@ def cmd_ack(args: argparse.Namespace) -> int:
         if args.apply:
             common.atomic_json(cpath, claim)
     print(json.dumps({"applied": args.apply, "acked": acked, "skipped": skipped,
-                      "evidence": {"status": has_status, "terminal": has_terminal}},
+                      "evidence": {"status": has_status, "statusRevision": args.status_revision}},
                      ensure_ascii=False, indent=2))
     return 0
 
@@ -383,7 +412,8 @@ def cmd_release(args: argparse.Namespace) -> int:
             if not item or item.get("claimToken") != args.token:
                 continue
             item.update({"state": "pending", "claimToken": None, "claimedByGeneration": None,
-                         "claimedAt": None, "claimExpiresAt": None, "claimedRevision": None, "updatedAt": now})
+                         "claimedAt": None, "claimExpiresAt": None, "claimedRevision": None,
+                         "claimedStatusRevision": None, "updatedAt": now})
             released.append(key)
             if args.apply:
                 common.atomic_json(path, item)
@@ -411,7 +441,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
                     item = common.read_json(path)
                     if item and item.get("claimToken") == claim.get("token") and item.get("state") == "claimed":
                         item.update({"state": "pending", "claimToken": None, "claimExpiresAt": None,
-                                     "claimedRevision": None, "updatedAt": now})
+                                     "claimedRevision": None, "claimedStatusRevision": None, "updatedAt": now})
                         if args.apply:
                             common.atomic_json(path, item)
                 actions.append({"action": "expire-claim", "project": project, "token": claim.get("token")})
@@ -444,14 +474,17 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- list / report
 
 def summarize(items: list[dict[str, Any]], now: int) -> dict[str, Any]:
-    pending = [i for i in items if item_available(i, now) and not i.get("orphaned")]
+    active = [i for i in items if i.get("state") != "acknowledged" and not i.get("orphaned")]
+    pending = [i for i in active if item_available(i, now)]
     waking_pending = [i for i in pending if i.get("waking")]
     return {
-        "total": len(items),
+        "total": len(active),
+        "retained": len(items),
+        "acknowledged": sum(1 for i in items if i.get("state") == "acknowledged"),
         "pending": len(pending),
-        "claimed": sum(1 for i in items if i.get("state") == "claimed" and not item_available(i, now)),
+        "claimed": sum(1 for i in active if i.get("state") == "claimed" and not item_available(i, now)),
         "wakingPending": len(waking_pending),
-        "byKind": {k: sum(1 for i in items if i.get("kind") == k) for k in sorted(KINDS)},
+        "byKind": {k: sum(1 for i in active if i.get("kind") == k) for k in sorted(KINDS)},
     }
 
 
@@ -485,13 +518,17 @@ def cmd_report(args: argparse.Namespace) -> int:
             and int(i.get("coordinatorGeneration") or -1) == (reg_generation if reg_generation is not None else -2)
         ]
         pending_waking.sort(key=lambda r: str(r["eventKey"]))
+        wake_count = len(pending_waking)
+        pending_waking = pending_waking[:DIGEST_LIMIT]
         out.append({
             "project": project,
             "coordinatorSessionId": reg_session,
             "coordinatorGeneration": reg_generation,
             "summary": summarize(items, now),
             "wakePending": pending_waking,
-            "wakeReady": bool(pending_waking),
+            "wakePendingCount": wake_count,
+            "wakeTruncated": wake_count > DIGEST_LIMIT,
+            "wakeReady": bool(wake_count),
         })
     print(json.dumps({"projects": out}, ensure_ascii=False, indent=2))
     return 0
@@ -518,8 +555,10 @@ def wake_observations(now: int) -> list[dict[str, Any]]:
                  and int(i.get("coordinatorGeneration") or -1) == reg_generation]
         if not items:
             continue
+        item_ids = sorted(str(i.get("eventKey")) for i in items)
+        bounded = item_ids[:DIGEST_LIMIT]
         out.append({"project": project, "sessionId": reg_session, "generation": reg_generation,
-                    "count": len(items), "itemIds": sorted(str(i.get("eventKey")) for i in items),
+                    "count": len(items), "itemIds": bounded, "truncated": len(items) > DIGEST_LIMIT,
                     "kinds": sorted({str(i.get("kind")) for i in items})})
     return out
 
@@ -546,7 +585,7 @@ def parser() -> argparse.ArgumentParser:
     a = sub.add_parser("ack")
     a.add_argument("--project", required=True); a.add_argument("--session", required=True)
     a.add_argument("--generation", type=int, required=True); a.add_argument("--token", required=True)
-    a.add_argument("--status-revision", type=int); a.add_argument("--terminal-evidence")
+    a.add_argument("--status-revision", type=int)
     a.add_argument("--items", nargs="*"); a.add_argument("--apply", action="store_true")
     a.set_defaults(func=cmd_ack)
 

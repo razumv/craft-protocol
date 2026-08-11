@@ -49,9 +49,10 @@ kind is part of the key, a later `progress` report can never downgrade a pending
 
 Consumption is generation-fenced. One exact authoritative coordinator generation claims a
 bounded digest under a unique token and TTL. Acknowledgement requires the same
-token/generation plus a durable product-status revision or exact terminal action
-evidence. A crash or claim expiry makes unacknowledged items available again; a duplicate
-acknowledgement is idempotent; ambiguous ownership or a stale generation fails closed.
+token/generation plus the exact durable product-status revision published after that
+claim. Reports remain retained after acknowledgement. A crash or claim expiry makes
+unacknowledged items available again; a duplicate acknowledgement is idempotent;
+ambiguous ownership or a stale generation fails closed.
 
 ## Digest wake integration
 
@@ -79,11 +80,14 @@ Commands: `publish`, `show`, `report --all [--format json|markdown]`, `reconcile
 `validate`.
 
 The coordinator declares the product objective, current phase/outcome, completed
-outcomes with evidence, current focus, up to three ordered next actions (each with a
-trigger, required evidence, and success/failure branch), blocker/gate references,
-commitment references, and the next review time. Publishing fails closed on a stale
-generation, invented child/wait/gate references, malformed actions, secret-like content,
-unbounded fields, or a `waiting` phase without an active observable commitment.
+outcomes bound to exact retained inbox evidence IDs, current focus, up to three ordered
+next actions (each with a trigger, required evidence, and success/failure branch),
+blocker/gate references, commitment references, and the next review time. Every
+non-terminal status requires one bounded next review between 60 seconds and seven days.
+Publishing fails closed on a stale generation, invented child/wait/gate/evidence
+references, malformed actions or timestamps, secret-like content, unbounded fields, or a
+`waiting` phase without an active observable commitment. Only an evidenced `complete`
+phase may classify as `verified`; evidence during active phases remains `executing`.
 
 Everything else is synthesized independently and cannot be caller-invented: exact
 coordinator session/generation and lease health, active/terminal worker leases, external
@@ -106,8 +110,9 @@ A commitment binds to an exact worker/auditor lease, an existing external-wait o
 an owner gate, or a bounded scheduled review time, and records its project, exact
 coordinator generation, subject, deadline/next-check, success action, timeout/failure
 action, state, and evidence revision. Overdue, unobserved, missing-reference, and
-terminal commitments emit stable incidents and wake the exact coordinator. Resolution
-requires a terminal observer receipt, not prose.
+terminal commitments emit stable incidents and wake the exact coordinator. Success and
+failure require a terminal observer receipt; timeout requires the durable deadline to
+pass. Commitments cannot be cancelled with prose.
 
 ## Owner-facing aggregate status
 

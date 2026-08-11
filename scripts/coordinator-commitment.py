@@ -42,7 +42,7 @@ BINDINGS = {"worker-lease", "external-wait", "owner-gate", "scheduled-review"}
 ACTIVE_LEASE_STATES = {"starting", "running", "suspect", "active"}
 OBSERVED_WAIT_STATES = {"observing", "terminal"}
 ACTIVE_STATES = {"registered", "observing", "overdue", "ready"}
-RESOLVED_STATES = {"resolved-success", "resolved-timeout", "resolved-failed", "cancelled"}
+RESOLVED_STATES = {"resolved-success", "resolved-timeout", "resolved-failed"}
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$")
 CRED_MARKERS = ("authorization:", "bearer ", "token=", "api_key=", "apikey=", "secret=", "password=")
 TEXT_LIMIT = 500
@@ -77,20 +77,33 @@ def commitment_path(project: str, commitment_id: str) -> Path:
     return COMMITMENTS / project / f"{valid_id(commitment_id, 'commitment id')}.json"
 
 
+def exact_int(value: Any, default: int = -1) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else default
+
+
+def exact_generation(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else None
+
+
+def object_or_none(value: Any) -> dict[str, Any] | None:
+    return value if isinstance(value, dict) else None
+
+
 def project_commitments(project: str) -> list[dict[str, Any]]:
-    return [c for path in sorted((COMMITMENTS / project).glob("*.json")) if (c := common.read_json(path))]
+    return [c for path in sorted((COMMITMENTS / project).glob("*.json"))
+            if (c := object_or_none(common.read_json(path)))]
 
 
 def authoritative_coordinator(project: str, session: str, generation: int) -> dict[str, Any]:
-    row = common.read_json(COORDINATORS / f"{project}.json")
+    row = object_or_none(common.read_json(COORDINATORS / f"{project}.json"))
     if not row or row.get("state") != "authoritative":
         fail("no authoritative coordinator for project")
     if row.get("coordinatorSessionId") != session:
         fail("coordinator session mismatch")
-    if int(row.get("generation") or -1) != generation:
+    if generation < 1 or exact_generation(row.get("generation")) != generation:
         fail("stale coordinator generation may not register commitments")
-    manifest = common.read_manifest(session)
-    if not common.session_live(manifest) or common.role_of(manifest) != "coordinator":
+    manifest = object_or_none(common.read_manifest(session))
+    if not common.session_live(manifest) or common.role_of(manifest or {}) != "coordinator":
         fail("coordinator session is not live")
     return row
 
@@ -98,7 +111,7 @@ def authoritative_coordinator(project: str, session: str, generation: int) -> di
 def binding_state(project: str, coordinator: str, kind: str, ref: str | None, now: int) -> dict[str, Any]:
     """Return {observed: bool, terminal: bool, present: bool, detail: str} for a binding."""
     if kind == "worker-lease":
-        lease = common.read_json(LEASES / f"{ref}.json") if ref else None
+        lease = object_or_none(common.read_json(LEASES / f"{ref}.json")) if ref else None
         if not lease or lease.get("parentSessionId") != coordinator:
             return {"present": False, "observed": False, "terminal": False, "detail": "lease-missing-or-unbound"}
         if lease.get("state") == "handoff-ready":
@@ -107,14 +120,14 @@ def binding_state(project: str, coordinator: str, kind: str, ref: str | None, no
         return {"present": True, "observed": observed, "terminal": False,
                 "detail": f"lease-{lease.get('state')}"}
     if kind == "external-wait":
-        wait = common.read_json(WAITS / f"{ref}.json") if ref else None
+        wait = object_or_none(common.read_json(WAITS / f"{ref}.json")) if ref else None
         if not wait or wait.get("coordinatorSessionId") != coordinator or wait.get("project") != project:
             return {"present": False, "observed": False, "terminal": False, "detail": "wait-missing-or-unbound"}
         state = wait.get("state")
         return {"present": True, "observed": state in OBSERVED_WAIT_STATES,
                 "terminal": state in {"terminal", "deadline", "cleared"}, "detail": f"wait-{state}"}
     if kind == "owner-gate":
-        gate = common.read_json(GATES / project / f"{ref}.json") if ref else None
+        gate = object_or_none(common.read_json(GATES / project / f"{ref}.json")) if ref else None
         if not gate:
             return {"present": False, "observed": False, "terminal": False, "detail": "gate-missing"}
         resolved = gate.get("state") == "resolved"
@@ -150,19 +163,25 @@ def cmd_register(args: argparse.Namespace) -> int:
         if args.binding_kind != "scheduled-review" and not binding["observed"] and not binding["terminal"]:
             fail(f"binding observer is not active: {binding['detail']}")
         path = commitment_path(project, commitment_id)
-        existing = common.read_json(path)
-        if existing and existing.get("state") not in RESOLVED_STATES:
-            if (existing.get("bindingKind") == args.binding_kind and existing.get("ref") == ref
-                    and existing.get("generation") == args.generation):
+        existing = object_or_none(common.read_json(path))
+        if existing:
+            same_contract = {
+                "project": project, "coordinatorSessionId": args.session, "generation": args.generation,
+                "subject": subject, "bindingKind": args.binding_kind, "ref": ref,
+                "deadlineSeconds": args.deadline_seconds, "successAction": success_action,
+                "failureAction": failure_action,
+            }
+            if all(existing.get(key) == value for key, value in same_contract.items()):
                 print(json.dumps({"applied": args.apply, "idempotent": True, "commitment": existing},
                                  ensure_ascii=False, indent=2))
                 return 0
-            fail("active commitment id already exists with a different binding")
+            fail("commitment id already exists with a conflicting contract")
         record = {
             "schemaVersion": SCHEMA, "project": project, "commitmentId": commitment_id,
             "coordinatorSessionId": args.session, "generation": args.generation,
             "subject": subject, "bindingKind": args.binding_kind, "ref": ref,
-            "deadlineAt": deadline_at, "successAction": success_action, "failureAction": failure_action,
+            "deadlineSeconds": args.deadline_seconds, "deadlineAt": deadline_at,
+            "successAction": success_action, "failureAction": failure_action,
             "state": "observing" if args.binding_kind != "scheduled-review" else "registered",
             "evidenceRevision": 1, "registeredAt": now, "updatedAt": now,
             "lastObservedDetail": binding["detail"], "resolvedAt": None, "resolutionEvidence": None,
@@ -176,36 +195,40 @@ def cmd_register(args: argparse.Namespace) -> int:
 def cmd_resolve(args: argparse.Namespace) -> int:
     project = clean_project(args.project)
     evidence = valid_text(args.evidence, "resolution evidence")
-    if args.resolution not in {"success", "timeout", "failed", "cancelled"}:
-        fail("unsupported resolution")
+    if args.resolution not in {"success", "timeout", "failed"}:
+        fail("unsupported resolution; commitments cannot be cancelled without observed resolution")
     now = common.now_ms()
     with common.file_lock(LOCK):
         authoritative_coordinator(project, args.session, args.generation)
         path = commitment_path(project, args.commitment_id)
-        record = common.read_json(path)
+        record = object_or_none(common.read_json(path))
         if not record:
             fail("commitment not found")
-        target_state = f"resolved-{args.resolution}" if args.resolution != "cancelled" else "cancelled"
+        target_state = f"resolved-{args.resolution}"
         if record.get("state") in RESOLVED_STATES:
             if record.get("state") == target_state:
                 print(json.dumps({"applied": args.apply, "idempotent": True, "commitment": record},
                                  ensure_ascii=False, indent=2))
                 return 0
             fail("commitment already resolved differently")
-        if int(record.get("generation") or -1) != args.generation:
+        if args.generation < 1 or exact_generation(record.get("generation")) != args.generation:
             fail("commitment generation mismatch")
         binding = binding_state(project, args.session, record.get("bindingKind"), record.get("ref"), now)
         # Durable evidence, not prose: success/failure must be backed by an observer
         # terminal (or, for a scheduled review, the review time must have arrived).
-        if args.resolution in {"success", "failed"}:
-            if record.get("bindingKind") == "scheduled-review":
-                if now < int(record.get("deadlineAt") or 0):
-                    fail("scheduled review cannot be resolved before its next-check time")
-            elif not binding["terminal"]:
-                fail(f"resolution requires a terminal observer receipt, not prose: {binding['detail']}")
+        deadline_at = exact_int(record.get("deadlineAt"), 0)
+        if deadline_at <= 0:
+            fail("commitment deadline is malformed")
+        if args.resolution == "timeout":
+            if now < deadline_at:
+                fail("timeout resolution requires the durable commitment deadline to pass")
+        elif record.get("bindingKind") == "scheduled-review":
+            fail("scheduled-review commitments support timeout only; success or failure requires a terminal observer")
+        elif not binding["terminal"]:
+            fail(f"resolution requires a terminal observer receipt, not prose: {binding['detail']}")
         record.update({"state": target_state, "resolvedAt": now, "updatedAt": now,
                        "resolutionEvidence": evidence, "lastObservedDetail": binding["detail"],
-                       "evidenceRevision": int(record.get("evidenceRevision") or 1) + 1})
+                       "evidenceRevision": max(1, exact_int(record.get("evidenceRevision"), 1)) + 1})
         if args.apply:
             common.atomic_json(path, record)
     print(json.dumps({"applied": args.apply, "commitment": record}, ensure_ascii=False, indent=2))
@@ -218,12 +241,13 @@ def reconcile_one(record: dict[str, Any], now: int) -> tuple[dict[str, Any], str
         return record, None
     project = str(record.get("project") or "")
     coordinator = str(record.get("coordinatorSessionId") or "")
-    reg = common.read_json(COORDINATORS / f"{project}.json")
-    reg_generation = int(reg.get("generation") or -1) if reg else None
+    reg = object_or_none(common.read_json(COORDINATORS / f"{project}.json"))
+    reg_generation = exact_generation(reg.get("generation")) if reg else None
     updated = dict(record)
     binding = binding_state(project, coordinator, record.get("bindingKind"), record.get("ref"), now)
     reason: str | None = None
-    if reg is None or reg.get("state") != "authoritative" or reg_generation != int(record.get("generation") or -1):
+    if (reg is None or reg.get("state") != "authoritative" or reg_generation is None
+            or reg_generation != exact_generation(record.get("generation"))):
         # Superseded/absent generation: leave the record but do not raise an incident
         # against a non-authoritative target.
         updated["state"] = "orphaned"
@@ -234,7 +258,10 @@ def reconcile_one(record: dict[str, Any], now: int) -> tuple[dict[str, Any], str
     elif binding["terminal"]:
         updated["state"] = "ready"; updated["lastObservedDetail"] = binding["detail"]
         reason = "observer-terminal"
-    elif now >= int(record.get("deadlineAt") or 0):
+    elif exact_int(record.get("deadlineAt"), 0) <= 0:
+        updated["state"] = "unobserved"; updated["lastObservedDetail"] = "malformed-deadline"
+        reason = "malformed-record"
+    elif now >= exact_int(record.get("deadlineAt"), 0):
         updated["state"] = "overdue"; updated["lastObservedDetail"] = binding["detail"]
         reason = "deadline-overdue"
     elif record.get("bindingKind") != "scheduled-review" and not binding["observed"]:
@@ -255,7 +282,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             if not project_dir.is_dir():
                 continue
             for path in sorted(project_dir.glob("*.json")):
-                record = common.read_json(path)
+                record = object_or_none(common.read_json(path))
                 if not record:
                     continue
                 updated, reason = reconcile_one(record, now)
@@ -277,17 +304,19 @@ def overdue_observations(now: int) -> list[dict[str, Any]]:
         if not project_dir.is_dir():
             continue
         project = project_dir.name
-        reg = common.read_json(COORDINATORS / f"{project}.json")
+        reg = object_or_none(common.read_json(COORDINATORS / f"{project}.json"))
         if not reg or reg.get("state") != "authoritative":
             continue
         coordinator = str(reg.get("coordinatorSessionId") or "")
-        reg_generation = int(reg.get("generation") or -1)
-        manifest = common.read_manifest(coordinator)
+        reg_generation = exact_generation(reg.get("generation"))
+        if reg_generation is None:
+            continue
+        manifest = object_or_none(common.read_manifest(coordinator))
         if not common.session_live(manifest) or common.role_of(manifest or {}) != "coordinator":
             continue
         for path in sorted(project_dir.glob("*.json")):
-            record = common.read_json(path)
-            if not record or int(record.get("generation") or -1) != reg_generation:
+            record = object_or_none(common.read_json(path))
+            if not record or exact_generation(record.get("generation")) != reg_generation:
                 continue
             updated, reason = reconcile_one(record, now)
             if reason:

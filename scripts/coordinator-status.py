@@ -62,7 +62,9 @@ def clean_project(raw: str) -> str:
     return value
 
 
-def scan_secret(value: Any, label: str = "field") -> None:
+def scan_secret(value: Any, label: str = "field", depth: int = 0) -> None:
+    if depth > 8:
+        fail(f"{label} nesting is unbounded")
     if isinstance(value, str):
         if len(value) > TEXT_LIMIT:
             fail(f"{label} exceeds {TEXT_LIMIT} characters")
@@ -73,10 +75,14 @@ def scan_secret(value: Any, label: str = "field") -> None:
         if len(value) > LIST_LIMIT:
             fail(f"{label} list is unbounded")
         for item in value:
-            scan_secret(item, label)
+            scan_secret(item, label, depth + 1)
     elif isinstance(value, dict):
+        if len(value) > LIST_LIMIT:
+            fail(f"{label} object is unbounded")
         for key, item in value.items():
-            scan_secret(item, f"{label}.{key}")
+            if not isinstance(key, str) or len(key) > 128:
+                fail(f"{label} has an invalid key")
+            scan_secret(item, f"{label}.{key}", depth + 1)
 
 
 def req_text(payload: dict[str, Any], key: str) -> str:
@@ -86,10 +92,22 @@ def req_text(payload: dict[str, Any], key: str) -> str:
     return value
 
 
+def object_or_none(value: Any) -> dict[str, Any] | None:
+    return value if isinstance(value, dict) else None
+
+
+def exact_int(value: Any, default: int = 0) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else default
+
+
+def exact_generation(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else None
+
+
 # --------------------------------------------------------------- runtime readers
 
 def registry(project: str) -> dict[str, Any] | None:
-    return common.read_json(COORDINATORS / f"{project}.json")
+    return object_or_none(common.read_json(COORDINATORS / f"{project}.json"))
 
 
 def authoritative(project: str) -> dict[str, Any] | None:
@@ -102,7 +120,7 @@ def authoritative(project: str) -> dict[str, Any] | None:
 def project_leases(coordinator: str) -> list[dict[str, Any]]:
     rows = []
     for path in sorted(LEASES.glob("*.json")):
-        lease = common.read_json(path)
+        lease = object_or_none(common.read_json(path))
         if lease and lease.get("parentSessionId") == coordinator:
             rows.append(lease)
     return rows
@@ -111,30 +129,32 @@ def project_leases(coordinator: str) -> list[dict[str, Any]]:
 def project_waits(project: str, coordinator: str) -> list[dict[str, Any]]:
     rows = []
     for path in sorted(WAITS.glob("*.json")):
-        wait = common.read_json(path)
+        wait = object_or_none(common.read_json(path))
         if wait and wait.get("project") == project and wait.get("coordinatorSessionId") == coordinator:
             rows.append(wait)
     return rows
 
 
 def project_gates(project: str) -> list[dict[str, Any]]:
-    return [g for path in sorted((GATES / project).glob("*.json")) if (g := common.read_json(path))]
+    return [g for path in sorted((GATES / project).glob("*.json"))
+            if (g := object_or_none(common.read_json(path)))]
 
 
 def project_commitments(project: str) -> list[dict[str, Any]]:
-    return [c for path in sorted((COMMITMENTS / project).glob("*.json")) if (c := common.read_json(path))]
+    return [c for path in sorted((COMMITMENTS / project).glob("*.json"))
+            if (c := object_or_none(common.read_json(path)))]
 
 
 def inbox_pressure(project: str, generation: int | None, now: int) -> dict[str, Any]:
     pending = claimed = waking = 0
     for path in sorted((INBOX / project).glob("*.json")):
-        item = common.read_json(path)
+        item = object_or_none(common.read_json(path))
         if not item:
             continue
-        if generation is not None and int(item.get("coordinatorGeneration") or -1) != generation:
+        if generation is not None and exact_generation(item.get("coordinatorGeneration")) != generation:
             continue
         available = item.get("state") == "pending" or (
-            item.get("state") == "claimed" and int(item.get("claimExpiresAt") or 0) <= now)
+            item.get("state") == "claimed" and exact_int(item.get("claimExpiresAt"), 0) <= now)
         if available:
             pending += 1
             if item.get("waking"):
@@ -144,18 +164,33 @@ def inbox_pressure(project: str, generation: int | None, now: int) -> dict[str, 
     return {"pending": pending, "claimed": claimed, "wakingPending": waking}
 
 
+def verification_evidence_keys(project: str, generation: int | None) -> list[str]:
+    keys: list[str] = []
+    for path in sorted((INBOX / project).glob("*.json")):
+        item = object_or_none(common.read_json(path))
+        if not item or (generation is not None
+                        and exact_generation(item.get("coordinatorGeneration")) != generation):
+            continue
+        verification_grade = (item.get("kind") in {"audit-verdict", "observer-terminal"}
+                              or (item.get("kind") == "terminal-handoff" and bool(item.get("evidence"))))
+        if verification_grade and item.get("eventKey"):
+            keys.append(str(item["eventKey"]))
+    return keys
+
+
 def latest_evidence(coordinator: str, project: str, generation: int | None) -> dict[str, Any] | None:
     best: dict[str, Any] | None = None
     for path in sorted((INBOX / project).glob("*.json")):
-        item = common.read_json(path)
-        if not item or item.get("kind") not in {"candidate", "audit-verdict", "terminal-handoff"}:
+        item = object_or_none(common.read_json(path))
+        if not item or item.get("kind") not in {"candidate", "audit-verdict", "terminal-handoff", "observer-terminal"}:
             continue
-        if generation is not None and int(item.get("coordinatorGeneration") or -1) != generation:
+        if generation is not None and exact_generation(item.get("coordinatorGeneration")) != generation:
             continue
-        ts = int(item.get("updatedAt") or 0)
-        if best is None or ts > int(best.get("at") or 0):
-            best = {"kind": item.get("kind"), "workUnit": item.get("workUnit"),
-                    "subject": item.get("subject"), "evidence": item.get("evidence"), "at": ts}
+        ts = exact_int(item.get("updatedAt"), 0)
+        if best is None or ts > exact_int(best.get("at"), 0):
+            best = {"eventKey": item.get("eventKey"), "kind": item.get("kind"),
+                    "workUnit": item.get("workUnit"), "subject": item.get("subject"),
+                    "evidence": item.get("evidence"), "at": ts}
     return best
 
 
@@ -164,13 +199,14 @@ def latest_evidence(coordinator: str, project: str, generation: int | None) -> d
 def synthesize(project: str, now: int) -> dict[str, Any]:
     reg = registry(project)
     coordinator = str(reg.get("coordinatorSessionId") or "") if reg else ""
-    generation = int(reg.get("generation") or -1) if reg else None
-    manifest = common.read_manifest(coordinator) if coordinator else None
-    lease_expiry = int(reg.get("leaseExpiresAt") or 0) if reg else 0
+    generation = exact_generation(reg.get("generation")) if reg else None
+    manifest = object_or_none(common.read_manifest(coordinator)) if coordinator else None
+    lease_expiry = exact_int(reg.get("leaseExpiresAt"), 0) if reg else 0
     leases = project_leases(coordinator) if coordinator else []
     waits = project_waits(project, coordinator) if coordinator else []
     gates = project_gates(project)
-    commitments = project_commitments(project)
+    commitments = [c for c in project_commitments(project)
+                   if generation is not None and exact_generation(c.get("generation")) == generation]
     active_workers = [l for l in leases if l.get("state") in ACTIVE_LEASE_STATES]
     terminal_workers = [l for l in leases if l.get("state") == "handoff-ready"]
     observed_waits = [w for w in waits if w.get("state") in {"observing", "terminal"}]
@@ -184,21 +220,30 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
         "leaseExpiresAt": lease_expiry or None,
         "leaseStale": bool(reg and reg.get("state") != "hold" and lease_expiry and now > lease_expiry),
         "activeWorkers": [{"sessionId": l.get("sessionId"), "workUnit": l.get("workUnit"),
-                           "attempt": l.get("attempt"), "state": l.get("state")} for l in active_workers],
+                           "attempt": l.get("attempt"), "state": l.get("state")} for l in active_workers[:LIST_LIMIT]],
+        "activeWorkerCount": len(active_workers), "activeWorkersTruncated": len(active_workers) > LIST_LIMIT,
         "terminalWorkers": [{"sessionId": l.get("sessionId"), "workUnit": l.get("workUnit"),
-                             "state": l.get("state")} for l in terminal_workers],
+                             "state": l.get("state")} for l in terminal_workers[:LIST_LIMIT]],
+        "terminalWorkerCount": len(terminal_workers), "terminalWorkersTruncated": len(terminal_workers) > LIST_LIMIT,
         "externalWaits": [{"waitId": w.get("waitId"), "kind": w.get("kind"), "state": w.get("state"),
-                           "deadlineAt": w.get("deadlineAt")} for w in waits],
+                           "deadlineAt": w.get("deadlineAt")} for w in waits[:LIST_LIMIT]],
+        "externalWaitCount": len(waits), "externalWaitsTruncated": len(waits) > LIST_LIMIT,
         "observedWaitCount": len(observed_waits),
         "ownerGates": [{"gateId": g.get("gateId"), "state": g.get("state"),
-                        "blockingScope": g.get("blockingScope"), "workUnit": g.get("workUnit")} for g in gates],
+                        "blockingScope": g.get("blockingScope"), "workUnit": g.get("workUnit")} for g in gates[:LIST_LIMIT]],
+        "ownerGateCount": len(gates), "ownerGatesTruncated": len(gates) > LIST_LIMIT,
         "openGateCount": len(open_gates),
         "hold": bool(reg and reg.get("state") == "hold"),
         "commitments": [{"commitmentId": c.get("commitmentId"), "state": c.get("state"),
-                         "bindingKind": c.get("bindingKind"), "deadlineAt": c.get("deadlineAt")} for c in commitments],
+                         "bindingKind": c.get("bindingKind"), "deadlineAt": c.get("deadlineAt")} for c in commitments[:LIST_LIMIT]],
+        "commitmentCount": len(commitments), "commitmentsTruncated": len(commitments) > LIST_LIMIT,
         "activeCommitmentCount": len(active_commitments),
         "inbox": inbox_pressure(project, generation, now),
         "latestEvidence": latest_evidence(coordinator, project, generation) if coordinator else None,
+        "_verificationEvidenceKeys": verification_evidence_keys(project, generation),
+        "_activeWorkerIds": [str(l.get("sessionId")) for l in active_workers],
+        "_terminalWorkerIds": [str(l.get("sessionId")) for l in terminal_workers],
+        "_observedWaitIds": [str(w.get("waitId")) for w in observed_waits],
     }
 
 
@@ -209,11 +254,16 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any]) -> list[str]
         issues.append("declared-waiting-without-observed-wait-or-commitment")
     if phase == "complete" and synth["activeWorkers"]:
         issues.append("declared-complete-with-active-workers")
-    live_children = {w["sessionId"] for w in synth["activeWorkers"]} | {w["sessionId"] for w in synth["terminalWorkers"]}
+    outcome_refs = {str(o.get("evidenceRef") or "") for o in declared.get("completedOutcomes") or []
+                    if isinstance(o, dict)}
+    verification_keys = set(synth.get("_verificationEvidenceKeys") or [])
+    if phase == "complete" and (not outcome_refs or not outcome_refs.issubset(verification_keys)):
+        issues.append("declared-complete-without-observed-verification-evidence")
+    live_children = set(synth.get("_activeWorkerIds") or []) | set(synth.get("_terminalWorkerIds") or [])
     for ref in declared.get("childRefs") or []:
         if ref not in live_children:
             issues.append(f"child-ref-not-observed:{ref}")
-    observed_wait_ids = {w["waitId"] for w in synth["externalWaits"] if w.get("state") in {"observing", "terminal"}}
+    observed_wait_ids = set(synth.get("_observedWaitIds") or [])
     for ref in declared.get("waitRefs") or []:
         if ref not in observed_wait_ids:
             issues.append(f"wait-ref-not-observed:{ref}")
@@ -248,11 +298,15 @@ def classify(declared: dict[str, Any] | None, synth: dict[str, Any], now: int, *
     contra = contradictions(declared, synth) if declared else []
     issues: list[str] = []
     missing = declared is None
-    generation_mismatch = (not missing and status_generation is not None
-                           and reg_generation is not None and status_generation != reg_generation)
+    generation_mismatch = (not missing and (status_generation is None
+                           or reg_generation is None or status_generation != reg_generation))
     review_at = declared.get("nextReviewAt") if declared else None
+    review_value = exact_int(review_at, -1) if review_at is not None else None
+    if review_at is not None and review_value == -1:
+        contra.append("next-review-malformed")
     observed = bool(synth["activeWorkers"] or synth["observedWaitCount"] or synth["activeCommitmentCount"])
-    review_overdue = bool(review_at and now > int(review_at) + STALE_REVIEW_GRACE_SECONDS * 1000 and not observed)
+    review_overdue = bool(review_value is not None and review_value >= 0
+                          and now > review_value + STALE_REVIEW_GRACE_SECONDS * 1000 and not observed)
     unexecutable = (not missing and not generation_mismatch
                     and declared.get("phase") not in TERMINAL_PHASES
                     and not executable_actions(declared, synth))
@@ -277,8 +331,10 @@ def classify(declared: dict[str, Any] | None, synth: dict[str, Any], now: int, *
         classification = "waiting-observed"
     elif synth["activeWorkers"]:
         classification = "executing"
-    elif declared.get("phase") == "complete" or synth["latestEvidence"]:
+    elif declared.get("phase") == "complete":
         classification = "verified"
+    elif declared.get("phase") in {"initializing", "executing", "review"}:
+        classification = "executing"
     else:
         classification = "stale"; issues.append("no-observed-activity")
     return {"classification": classification, "issues": issues, "contradictions": contra,
@@ -299,15 +355,25 @@ def health_observations(now: int) -> list[dict[str, Any]]:
         if not reg or reg.get("state") != "authoritative":
             continue
         coordinator = str(reg.get("coordinatorSessionId") or "")
-        generation = int(reg.get("generation") or -1)
-        manifest = common.read_manifest(coordinator)
+        generation = exact_generation(reg.get("generation"))
+        if generation is None:
+            continue
+        manifest = object_or_none(common.read_manifest(coordinator))
         if not common.session_live(manifest) or common.role_of(manifest or {}) != "coordinator":
             continue
-        status = common.read_json(STATUS / f"{project}.json")
-        declared = status.get("declared") if status else None
+        status_path = STATUS / f"{project}.json"
+        raw_status = common.read_json(status_path)
+        status = object_or_none(raw_status)
+        declared, stored_malformed = canonical_stored_declared(
+            status, project, coordinator, generation)
         synth = synthesize(project, now)
-        verdict = classify(declared, synth, now, status_generation=(status.get("generation") if status else None))
+        status_generation = exact_generation(status.get("generation")) if status else None
+        verdict = classify(declared, synth, now, status_generation=status_generation)
         base = {"project": project, "sessionId": coordinator, "generation": generation}
+        if ((status_path.exists() and status is None) or stored_malformed):
+            out.append({**base, "kind": "coordinator-status-contradiction",
+                        "evidence": {"generation": generation, "reason": "stored-status-malformed"}})
+            continue
         if verdict["statusMissing"]:
             out.append({**base, "kind": "coordinator-status-missing", "evidence": {"generation": generation}})
         else:
@@ -342,10 +408,27 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
     for ref in (declared.get("gateRefs") or []) + (declared.get("blockerRefs") or []):
         if ref not in gate_ids:
             fail(f"gate reference does not exist for this project: {ref}")
-    commitments = {c.get("commitmentId"): c for c in project_commitments(project)}
+    reg = registry(project) or {}
+    generation = exact_generation(reg.get("generation"))
+    if generation is None:
+        fail("coordinator registry generation is malformed")
+    commitments = {c.get("commitmentId"): c for c in project_commitments(project)
+                   if exact_generation(c.get("generation")) == generation}
     for ref in declared.get("commitmentRefs") or []:
         if ref not in commitments:
-            fail(f"commitment reference does not exist for this project: {ref}")
+            fail(f"commitment reference does not exist in this coordinator generation: {ref}")
+    inbox_items = {str(i.get("eventKey")): i for i in
+                   (object_or_none(common.read_json(p)) for p in sorted((INBOX / project).glob("*.json")))
+                   if i and exact_generation(i.get("coordinatorGeneration")) == generation}
+    for outcome in declared.get("completedOutcomes") or []:
+        ref = str(outcome.get("evidenceRef") or "")
+        item = inbox_items.get(ref)
+        if not item:
+            fail(f"completed outcome evidence reference is not observed in this generation: {ref}")
+        verification_grade = (item.get("kind") in {"audit-verdict", "observer-terminal"}
+                              or (item.get("kind") == "terminal-handoff" and bool(item.get("evidence"))))
+        if declared.get("phase") == "complete" and not verification_grade:
+            fail(f"completed outcome evidence is not verification-grade: {ref}")
 
 
 def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
@@ -353,6 +436,9 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
         fail("declared status payload must be a JSON object")
     scan_secret(payload, "status")
     objective = req_text(payload, "objective")
+    current_focus = payload.get("currentFocus")
+    if current_focus is not None and not isinstance(current_focus, str):
+        fail("currentFocus must be text or null")
     phase = payload.get("phase")
     if phase not in PHASES:
         fail(f"phase must be one of {sorted(PHASES)}")
@@ -368,27 +454,47 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
         norm_actions.append({k: action[k] for k in
                              ("description", "trigger", "requiredEvidence", "successBranch", "failureBranch")})
     completed = payload.get("completedOutcomes") or []
-    if not isinstance(completed, list):
-        fail("completedOutcomes must be a list")
+    if not isinstance(completed, list) or len(completed) > LIST_LIMIT:
+        fail("completedOutcomes must be a bounded list")
+    normalized_completed = []
     for outcome in completed:
-        if not isinstance(outcome, dict) or not isinstance(outcome.get("summary"), str):
-            fail("each completed outcome needs a summary")
+        if not isinstance(outcome, dict):
+            fail("each completed outcome must be an object")
+        summary = req_text(outcome, "summary")
+        evidence_ref = req_text(outcome, "evidenceRef")
+        normalized_completed.append({"summary": summary, "evidenceRef": evidence_ref})
+    if payload.get("nextReviewAt") is not None and payload.get("nextReviewInSeconds") is not None:
+        fail("provide either nextReviewAt or nextReviewInSeconds, not both")
     review_at = payload.get("nextReviewAt")
     if payload.get("nextReviewInSeconds") is not None:
-        seconds = int(payload["nextReviewInSeconds"])
+        seconds = payload["nextReviewInSeconds"]
+        if not isinstance(seconds, int) or isinstance(seconds, bool):
+            fail("nextReviewInSeconds must be an integer")
         if seconds < 60 or seconds > 604800:
             fail("nextReviewInSeconds must be between 60 and 604800")
         review_at = now + seconds * 1000
+    elif review_at is not None:
+        if not isinstance(review_at, int) or isinstance(review_at, bool):
+            fail("nextReviewAt must be an integer timestamp")
+        if review_at < now + 60_000 or review_at > now + 604_800_000:
+            fail("nextReviewAt must be between 60 seconds and 7 days from publish")
+    if phase not in TERMINAL_PHASES and review_at is None:
+        fail("non-terminal status requires nextReviewAt or nextReviewInSeconds")
+    normalized_refs: dict[str, list[str]] = {}
     for key in ("childRefs", "waitRefs", "gateRefs", "blockerRefs", "commitmentRefs"):
         refs = payload.get(key) or []
         if not isinstance(refs, list) or len(refs) > LIST_LIMIT:
             fail(f"{key} must be a bounded list")
+        if any(not isinstance(ref, str) or not ref or len(ref) > 128
+               or any(ord(ch) < 32 for ch in ref) for ref in refs):
+            fail(f"{key} entries must be bounded non-empty text")
+        normalized_refs[key] = refs
     return {
-        "objective": objective, "phase": phase, "currentFocus": payload.get("currentFocus"),
-        "completedOutcomes": completed, "nextActions": norm_actions,
-        "childRefs": payload.get("childRefs") or [], "waitRefs": payload.get("waitRefs") or [],
-        "gateRefs": payload.get("gateRefs") or [], "blockerRefs": payload.get("blockerRefs") or [],
-        "commitmentRefs": payload.get("commitmentRefs") or [], "nextReviewAt": review_at,
+        "objective": objective, "phase": phase, "currentFocus": current_focus,
+        "completedOutcomes": normalized_completed, "nextActions": norm_actions,
+        "childRefs": normalized_refs["childRefs"], "waitRefs": normalized_refs["waitRefs"],
+        "gateRefs": normalized_refs["gateRefs"], "blockerRefs": normalized_refs["blockerRefs"],
+        "commitmentRefs": normalized_refs["commitmentRefs"], "nextReviewAt": review_at,
     }
 
 
@@ -412,21 +518,29 @@ def cmd_publish(args: argparse.Namespace) -> int:
             fail("no authoritative coordinator for project")
         if reg.get("coordinatorSessionId") != args.session:
             fail("coordinator session mismatch")
-        if int(reg.get("generation") or -1) != args.generation:
+        if args.generation < 1 or exact_generation(reg.get("generation")) != args.generation:
             fail("stale coordinator generation may not publish status")
-        manifest = common.read_manifest(args.session)
+        manifest = object_or_none(common.read_manifest(args.session))
         if not common.session_live(manifest) or common.role_of(manifest) != "coordinator":
             fail("coordinator session is not live")
         declared = normalize_declared(payload, now)
         validate_refs(project, args.session, declared)
         if declared["phase"] == "waiting":
-            commitments = {c.get("commitmentId"): c for c in project_commitments(project)}
+            commitments = {c.get("commitmentId"): c for c in project_commitments(project)
+                           if exact_generation(c.get("generation")) == args.generation}
             active = [r for r in declared["commitmentRefs"]
                       if commitments.get(r, {}).get("state") in ACTIVE_COMMITMENT_STATES]
             if not active:
                 fail("a waiting phase requires at least one active observable commitment reference")
-        prior = common.read_json(STATUS / f"{project}.json")
-        revision = int(prior.get("revision") or 0) + 1 if prior else 1
+        prior_path = STATUS / f"{project}.json"
+        prior_raw = common.read_json(prior_path)
+        prior = object_or_none(prior_raw)
+        if prior_path.exists() and prior is None:
+            fail("stored coordinator status is malformed")
+        prior_revision = exact_int(prior.get("revision"), 0) if prior else 0
+        if prior and prior_revision <= 0:
+            fail("stored coordinator status revision is malformed")
+        revision = prior_revision + 1
         record = {"schemaVersion": SCHEMA, "project": project, "coordinatorSessionId": args.session,
                   "generation": args.generation, "revision": revision, "declared": declared,
                   "publishedAt": now, "updatedAt": now}
@@ -436,16 +550,49 @@ def cmd_publish(args: argparse.Namespace) -> int:
     return 0
 
 
+def canonical_stored_declared(status: dict[str, Any] | None, project: str,
+                              coordinator: str | None, generation: int | None) -> tuple[dict[str, Any] | None, bool]:
+    if not status:
+        return None, False
+    raw_declared = status.get("declared")
+    published_at = exact_int(status.get("publishedAt"), 0)
+    updated_at = exact_int(status.get("updatedAt"), 0)
+    top_level_valid = (
+        status.get("schemaVersion") == SCHEMA and status.get("project") == project
+        and isinstance(status.get("coordinatorSessionId"), str)
+        and status.get("coordinatorSessionId") == coordinator
+        and exact_generation(status.get("generation")) == generation
+        and exact_int(status.get("revision"), 0) >= 1
+        and published_at > 0 and updated_at >= published_at
+    )
+    if not top_level_valid or not isinstance(raw_declared, dict):
+        return None, True
+    try:
+        return normalize_declared(raw_declared, published_at), False
+    except SystemExit:
+        return None, True
+
+
 def build_report(project: str, now: int) -> dict[str, Any]:
-    status = common.read_json(STATUS / f"{project}.json")
-    declared = status.get("declared") if status else None
+    status_path = STATUS / f"{project}.json"
+    raw_status = common.read_json(status_path)
+    status = object_or_none(raw_status)
+    malformed = status_path.exists() and status is None
     synth = synthesize(project, now)
-    verdict = classify(declared, synth, now, status_generation=(status.get("generation") if status else None))
+    declared, stored_malformed = canonical_stored_declared(
+        status, project, synth.get("coordinatorSessionId"), synth.get("generation"))
+    malformed = malformed or stored_malformed
+    status_generation = exact_generation(status.get("generation")) if status else None
+    verdict = classify(declared, synth, now, status_generation=status_generation)
+    issues = list(verdict["issues"])
+    if malformed:
+        issues.append("stored-status-malformed")
+    public_synth = {key: value for key, value in synth.items() if not key.startswith("_")}
     return {"project": project, "declared": declared,
             "revision": status.get("revision") if status else None,
             "publishedAt": status.get("publishedAt") if status else None,
-            "synthesized": synth, "classification": verdict["classification"],
-            "issues": verdict["issues"]}
+            "synthesized": public_synth, "classification": ("contradictory" if malformed else verdict["classification"]),
+            "issues": issues}
 
 
 def cmd_show(args: argparse.Namespace) -> int:
@@ -484,7 +631,7 @@ def markdown_report(reports: list[dict[str, Any]], now: int) -> str:
         active = ", ".join(f"{w['workUnit'] or w['sessionId']} ({w['state']})" for w in synth["activeWorkers"]) or "none"
         lines.append(f"- **Executing now:** {active}")
         terminal = ", ".join(f"{w['workUnit'] or w['sessionId']}" for w in synth["terminalWorkers"]) or "none"
-        lines.append(f"- **Worker/auditor progress:** {len(synth['activeWorkers'])} active, {len(synth['terminalWorkers'])} terminal ({terminal})")
+        lines.append(f"- **Worker/auditor progress:** {synth['activeWorkerCount']} active, {synth['terminalWorkerCount']} terminal ({terminal})")
         awaited = ", ".join(f"{w['waitId']}:{w['state']}" for w in synth["externalWaits"]) or "nothing"
         lines.append(f"- **Awaited (observed):** {awaited}; {synth['activeCommitmentCount']} active commitment(s)")
         gates = ", ".join(f"{g['gateId']}" for g in synth["ownerGates"] if g["state"] == "open") or "none"
