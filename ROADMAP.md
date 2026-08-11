@@ -2,6 +2,13 @@
 
 This roadmap is directional, not a promise of dates. Contributions are welcome through design Issues and pull requests.
 
+## Candidate in v3.2.2
+
+- capability-v2 consumption receipts, queue-never-steer admission, and one guarded stuck-generation recovery CAS;
+- stable incident identity and one coalesced outstanding envelope per target generation;
+- direct routine coordinator ticks without making the recovery controller a liveness single point;
+- fail-closed retention of all owner-gate, preservation, rotation, cleanup, and destructive-recovery boundaries.
+
 ## Delivered in v3.2.1
 
 - exact recovery-controller harness self-registration;

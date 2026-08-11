@@ -1,6 +1,6 @@
 #!/bin/zsh
 # SPDX-License-Identifier: Apache-2.0
-# launchd entrypoint: report-only under kill switch, direct delivery only when explicitly configured.
+# launchd entrypoint: report-only under kill switch; capability-v2 target cycles only when explicitly configured.
 set -eu
 
 CRAFT_HOME="${CRAFT_HOME:-$HOME/.craft-agent}"

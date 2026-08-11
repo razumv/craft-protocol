@@ -1,4 +1,4 @@
-# Protocol v3.2.1 defaults
+# Protocol v3.2.2 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -93,14 +93,18 @@ Public automation templates:   disabled by default
 Legacy recurring prompts:      permanently disabled
 Admission supervisor:          deterministic, before any LLM session
 Admission interval:            300 seconds; report-only under kill switch
-Production admission:          direct delivery only on exact configured runtime identity
-Direct capability:             available=true, version=1, automations:admissionDeliver
+Production admission:          capability-v2 delivery/inspect/recover on exact runtime identity
+Direct capability:             available=true, version=2; deliver + inspect + recover channels
+Delivery completion:           runtime-proven consumed receipt; queued/delivered are not completion
+Outstanding envelope:          one per target generation; meaningful incident changes coalesce in place
+Stuck processing deadline:     1800 seconds by default; one guarded recovery attempt, then blocked
+Direct coordinator lane:       stale/current handoff/terminal wait only; exact authoritative generation
 Expected runtime version:      required deployment configuration; no package default
 Expected runtime commit:       required deployment configuration; no package default
 Runtime identity source:       automations:admissionCapabilities; never system:versions
 Workspace ID:                  required deployment configuration; no package default
 Server token:                  CRAFT_SERVER_TOKEN or owner-only CRAFT_SERVER_TOKEN_FILE
-Notifier schedule:             permanently disabled legacy guard; never armed by direct admission
+Scheduler prompt guard:        permanently disabled; never armed by capability-v2 admission
 Persistent controllers:        exactly 1 reusable session
 Controller model:              pi/gpt-5.6-sol / high / allow-all
 Controller/claim TTL:          900 seconds
@@ -137,6 +141,7 @@ Worker leases:                 1
 Observable job receipts:       1
 Recovery incidents:            1
 Recovery controller lease:     1
-Recovery admission receipt:    2 (prepared/direct-delivery receipt)
+Recovery admission receipt:    3 (prepared/delivered/pending/consumed/recovering/blocked)
+Coordinator tick receipts:     3 (one project-keyed exact-generation target cycle)
 Labels config:                 1
 ```

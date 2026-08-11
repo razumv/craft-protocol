@@ -4,6 +4,16 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+### Protocol v3.2.2 controller-liveness candidate
+
+- replaced `prepared → notified → cooldown` with schema-v3 per-target `prepared`, `delivered`, `pending-consumption`, `consumed`, `recovering`, and `blocked` cycles; pending delivery is inspected until runtime-proven consumption and can never cooldown-rearm;
+- require authenticated admission capability v2 with exact deliver/inspect/recover channels, target kind/ID/generation receipts, runtime identity pinning, queue-never-steer semantics, explicit delivery states, and a negotiated minimum recovery age; capability v1 and plain `queued` fail closed;
+- coalesce meaningful incident-set changes into the same occurrence, message ID, and outstanding queue envelope; crash, busy, and discovery retries preserve the original prepared scope;
+- add one guarded processing-generation recovery CAS after the configured 30-minute default deadline, then durably block a still-stuck cycle rather than silently repeating correction;
+- route only exact-generation authoritative coordinator stale leases, current-child terminal handoffs, and terminal external waits directly to their coordinator; complex recovery, ambiguity, gates, HOLD, preservation, rotation, and cleanup remain recovery-controller-bound or fail closed;
+- exclude volatile `agePastExpiryMs` from stale-lease evidence fingerprints while retaining it for diagnostics, and add durable `conditionRevision` so confirmed recurrence begins a distinct bounded cycle;
+- add capability-v2 contract documentation, adversarial coalescing/consumption/recovery/direct-lane tests, v3.2.2 install/automation/version markers, and manifest coverage. No production activation is performed by this candidate.
+
 ### Added
 
 - durable `external-wait.py` registration for CI, auto-merge, deployment, and external checks, requiring a live parent-bound watcher lease plus active observable-job receipt; PID/PPID/start-token/process-command and job-command identities remain bound under a serialized lock/CAS lifecycle, clear requires a terminal receipt and uses a crash-recoverable `clearing` journal across wait/job files, and watchdog reconciliation emits semantic wake incidents for terminal receipts, missing observers, and deadlines.

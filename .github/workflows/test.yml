@@ -42,9 +42,9 @@ jobs:
         run: |
           set -euo pipefail
           ! rg -n 'spawn_session|send_agent_message|archive_session|call_llm' "$HOME/.craft-agent/scripts/worker-watchdog.py" "$HOME/.craft-agent/scripts/recovery-incident.py" "$HOME/.craft-agent/scripts/recovery-admission.py"
-          ! rg -n 'session\.jsonl.*write|sqlite|CRAFT_SERVER_TOKEN|__get-ws-token' "$HOME/.craft-agent/scripts/recovery-admission.py"
+          ! rg -n 'session\.jsonl.*write|sqlite|__get-ws-token' "$HOME/.craft-agent/scripts/recovery-admission.py"
       - name: Run regression suite against installed payload
         working-directory: tests
-        run: CRAFT_TEST_SCRIPTS="$HOME/.craft-agent/scripts" python3 -m unittest -v test_worker_reliability.py test_orchestration_v320.py test_self_healing_v311.py test_delivery_mode_v320.py test_controller_harness_v321.py test_recovery_admission_v321.py
+        run: CRAFT_TEST_SCRIPTS="$HOME/.craft-agent/scripts" python3 -m unittest -v test_worker_reliability.py test_orchestration_v320.py test_self_healing_v311.py test_delivery_mode_v320.py test_controller_harness_v321.py test_recovery_admission_v322.py
       - name: Installer dry run
         run: ./install.sh

@@ -1,10 +1,10 @@
-# Craft Agents Multi-Agent Orchestration Protocol v3.2.1 — Complete Standalone Guide
+# Craft Agents Multi-Agent Orchestration Protocol v3.2.2 — Complete Standalone Guide
 
 [![Protocol tests](https://github.com/razumv/craft-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/razumv/craft-protocol/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-**Snapshot:** 2026-08-09 18:26 Europe/Warsaw
+**Snapshot:** 2026-08-11 08:50 Europe/Warsaw
 **Audience:** operators and contributors building safer coordinator/worker/auditor control planes with Craft Agents.
 **Purpose:** deliver owner-requested product outcomes through autonomous project coordinators while preserving work, preventing split-brain, detecting stalls deterministically, gating irreversible actions, and using evidence as bounded acceptance rather than work for its own sake.
 
@@ -20,7 +20,7 @@ cd craft-protocol
 ./install.sh          # dry-run; no files changed
 ```
 
-Review the plan, then use `./install.sh --apply`. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. Self-healing scheduler automations ship permanently disabled. Protocol v3.2.1 can deliver one deterministic incident message directly to one persistent recovery controller only when authenticated `automations:admissionCapabilities` exactly matches the deployment's runtime version and runtime commit and advertises `automations:admissionDeliver`; unsupported or older Craft remains report-only/fail-closed. Keep the kill switch present until the explicit workspace ID, expected runtime version/commit, and owner-only server token are configured; review [the v3.2.1 admission guide](docs/SELF-HEALING-v3.2.1.md).
+Review the plan, then use `./install.sh --apply`. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. Self-healing scheduler automations ship permanently disabled. Protocol v3.2.2 requires authenticated admission capability v2 with exact runtime version/commit pinning, durable delivery inspection, and one guarded recovery CAS. Outstanding messages are coalesced until runtime-proven consumption; plain `queued` is never success. Routine stale/current-handoff/terminal-wait events go directly to the exact authoritative coordinator generation, while complex or destructive recovery remains controller-bound/fail-closed. Keep the kill switch present until the explicit workspace ID, expected runtime version/commit, and owner-only server token are configured; review [the v3.2.2 admission guide](docs/SELF-HEALING-v3.2.2.md).
 
 ---
 
@@ -38,8 +38,9 @@ graph LR
     A --> L
     L --> D[Deterministic watchdog]
     D --> I[Idempotent recovery incidents]
-    I --> P[Deterministic pre-session admission]
-    P --> H[One persistent recovery controller]
+    I --> P[Consumption-aware admission]
+    P -->|routine exact generation| C
+    P -->|complex recovery| H[One persistent recovery controller]
     H --> C
     C --> R[Recovery ledger]
     A --> X[Completion certificate]
@@ -175,11 +176,12 @@ tests/
   test_self_healing_v311.py
   test_delivery_mode_v320.py
   test_controller_harness_v321.py
-  test_recovery_admission_v321.py
+  test_recovery_admission_v322.py
 docs/
   PROTOCOL-v3.1.md
   SELF-HEALING-v3.1.1.md
   SELF-HEALING-v3.2.1.md
+  SELF-HEALING-v3.2.2.md
   DELIVERY-MODE-v3.2.0.md
   CURRENT-DEFAULTS.md
 tools/

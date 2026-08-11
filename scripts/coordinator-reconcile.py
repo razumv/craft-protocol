@@ -20,7 +20,7 @@ def report() -> dict:
     for path in sorted((common.RUNTIME / "coordinators").glob("*.json")):
         record = common.read_json(path) or {}; project = str(record.get("project") or path.stem)
         sid = str(record.get("coordinatorSessionId") or ""); m = common.read_manifest(sid); issues = []; warnings = []
-        desired = f"Coordinator {PROJECT_NAMES.get(project, project)} (Codex/Sol) — v3.2.1"
+        desired = f"Coordinator {PROJECT_NAMES.get(project, project)} (Codex/Sol) — v3.2.2"
         if not m: issues.append("manifest-missing")
         else:
             if m.get("name") != desired: warnings.append("canonical-name-drift")

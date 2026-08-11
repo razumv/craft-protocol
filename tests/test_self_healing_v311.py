@@ -43,6 +43,17 @@ class SelfHealingV311Test(unittest.TestCase):
         self.assertEqual(a["observed"],1); self.assertEqual(b["observed"],1)
         _,rows=self.cli("list","--state","open"); self.assertEqual(rows["count"],1)
         self.assertEqual(rows["incidents"][0]["kind"],"coordinator-lease-stale")
+
+    def test_stale_age_growth_does_not_change_evidence_fingerprint(self):
+        expiry=self.now-1000
+        self.manifest("coord"); self.registry(leaseExpiresAt=expiry,lastHeartbeatAt=self.now-5000,generation=7)
+        self.env["CRAFT_TEST_NOW_MS"]=str(self.now)
+        _,first=self.cli("detect"); stale1=first["observations"][0]
+        self.env["CRAFT_TEST_NOW_MS"]=str(self.now+300_000)
+        _,second=self.cli("detect"); stale2=second["observations"][0]
+        self.assertNotEqual(stale1["evidence"]["agePastExpiryMs"],stale2["evidence"]["agePastExpiryMs"])
+        self.assertEqual(stale1["evidenceFingerprint"],stale2["evidenceFingerprint"])
+        self.assertEqual(stale1["incidentId"],stale2["incidentId"])
     def test_unresolved_repeated_pi_sigterm(self):
         self.manifest("coord"); self.registry(lastHeartbeatAt=self.now-5000)
         with (self.sessions/"coord"/"session.jsonl").open("a") as f:
@@ -203,6 +214,8 @@ class SelfHealingV311Test(unittest.TestCase):
         _,resolved=self.cli("list","--state","resolved")
         self.assertEqual(resolved["incidents"][0]["recoveryAttempts"],0)
         self.registry(leaseExpiresAt=self.now-1); self.cli("detect","--apply")
+        reopened_row=json.loads((self.runtime/"recovery-incidents"/f"{iid}.json").read_text())
+        self.assertEqual(reopened_row["conditionRevision"],2)
         self.cli("controller-claim","--session","c2")
         _,reopened=self.cli("claim","--incident",iid,"--controller","c2")
         self.assertEqual(reopened["recoveryAttempts"],1)

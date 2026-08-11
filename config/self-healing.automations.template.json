@@ -3,8 +3,8 @@
   "automations": {
     "SchedulerTick": [
       {
-        "id": "a321-notifier",
-        "name": "Protocol v3.2.1 legacy recovery notifier (permanently disabled)",
+        "id": "a322-admission",
+        "name": "Protocol v3.2.2 legacy admission guard (permanently disabled)",
         "enabled": false,
         "cron": "0 0 1 1 *",
         "timezone": "UTC",
@@ -12,15 +12,15 @@
         "labels": [
           "auto",
           "agent-role::recovery-notifier",
-          "work-unit::self-healing-v3.2.1-notifier",
-          "protocol-version::3.2.1"
+          "work-unit::self-healing-v3.2.2-admission",
+          "protocol-version::3.2.2"
         ],
         "actions": [
           {
             "type": "prompt",
             "llmConnection": "chatgpt-plus",
             "model": "pi/gpt-5.4-mini",
-            "prompt": "DISABLED LEGACY TEMPLATE. Direct recovery admission delivery never enables SchedulerTick prompts."
+            "prompt": "DISABLED LEGACY TEMPLATE. Capability-v2 controller recovery and exact-generation coordinator ticks never enable SchedulerTick prompts."
           }
         ]
       },
@@ -34,8 +34,8 @@
         "labels": [
           "auto",
           "agent-role::recovery-controller",
-          "work-unit::self-healing-v3.2.1-legacy",
-          "protocol-version::3.2.1"
+          "work-unit::self-healing-v3.2.2-legacy",
+          "protocol-version::3.2.2"
         ],
         "actions": [
           {
@@ -50,7 +50,7 @@
     "SessionStatusChange": [
       {
         "id": "a31102",
-        "name": "Protocol v3.2.1 terminal handoff recovery (disabled; scheduler owns recovery)",
+        "name": "Protocol v3.2.2 terminal handoff recovery (disabled; admission owns delivery)",
         "enabled": false,
         "matcher": "^needs-review$",
         "permissionMode": "allow-all",
@@ -66,8 +66,8 @@
         "labels": [
           "auto",
           "agent-role::recovery-controller",
-          "work-unit::self-healing-v3.2.1",
-          "protocol-version::3.2.1"
+          "work-unit::self-healing-v3.2.2",
+          "protocol-version::3.2.2"
         ],
         "actions": [
           {

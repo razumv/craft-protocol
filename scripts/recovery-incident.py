@@ -111,11 +111,19 @@ def project_for_child(lease, manifest, owners, roots, ambiguous):
         if path_within(cwd, root): return project
     return None
 
-def observation(kind, severity, project, session_id, evidence, **extra):
+def observation(kind, severity, project, session_id, evidence, *, fingerprint_evidence=None, **extra):
+    """Build an observation with a stable, meaningful condition revision.
+
+    Human-facing evidence may include volatile diagnostic counters/ages. They
+    must never enter ``evidenceFingerprint`` because admission idempotency is
+    keyed by this value. Callers with volatile evidence provide the immutable
+    condition identity explicitly through ``fingerprint_evidence``.
+    """
     key = ":".join((project or "global", kind, session_id or str(extra.get("gateId") or "none")))
+    stable_evidence = evidence if fingerprint_evidence is None else fingerprint_evidence
     return {"stableKey": key, "incidentId": incident_id(key), "kind": kind,
             "severity": severity, "project": project, "sessionId": session_id,
-            "evidence": evidence, "evidenceFingerprint": fingerprint(evidence),
+            "evidence": evidence, "evidenceFingerprint": fingerprint(stable_evidence),
             "allowedActions": ACTION_MATRIX.get(kind, ["report-only"]), **extra}
 
 def collect_observations():
@@ -131,9 +139,10 @@ def collect_observations():
                 {"registryState": record.get("state"), "manifestPresent": bool(manifest), "archived": (manifest or {}).get("isArchived")}))
         expiry = record.get("leaseExpiresAt")
         if record.get("state") != "hold" and expiry is not None and now > int(expiry):
+            stable_lease = {"leaseExpiresAt": int(expiry), "lastHeartbeatAt": record.get("lastHeartbeatAt"),
+                            "generation": record.get("generation")}
             out.append(observation("coordinator-lease-stale", "high", project, sid,
-                {"leaseExpiresAt": int(expiry), "lastHeartbeatAt": record.get("lastHeartbeatAt"),
-                 "agePastExpiryMs": now-int(expiry), "generation": record.get("generation")}))
+                {**stable_lease, "agePastExpiryMs": now-int(expiry)}, fingerprint_evidence=stable_lease))
         fallback = record.get("fallbackExpiresAt")
         if fallback is not None and now > int(fallback):
             out.append(observation("fallback-ttl-expired", "high", project, sid,
@@ -238,10 +247,11 @@ def detect(apply=False):
             if not old:
                 initial_state = "suppressed" if obs.get("kind") == "owner-gate-blocked" else "open"
                 row = {"schemaVersion": SCHEMA, **obs, "state": initial_state, "firstSeenAt": now, "lastSeenAt": now,
-                       "claimOwner": None, "claimExpiresAt": None, "recoveryAttempts": 0,
+                       "conditionRevision": 1, "claimOwner": None, "claimExpiresAt": None, "recoveryAttempts": 0,
                        "lastActionAt": None, "cooldownUntil": None, "resolutionEvidence": None, "history": []}
             else:
                 row = {**old, **obs, "lastSeenAt": now}
+                row.setdefault("conditionRevision", 1)
                 if old.get("clearCandidateAt") is not None:
                     row.pop("clearCandidateAt", None)
                     row.setdefault("history", []).append({"at": now, "action": "condition-clear-cancelled",
@@ -256,11 +266,13 @@ def detect(apply=False):
                     # A condition that objectively cleared ended the prior
                     # bounded recovery cycle. A later recurrence starts with a
                     # fresh wake-1 budget rather than inheriting rotation/exhaustion.
+                    revision = int(old.get("conditionRevision") or 1) + 1
                     row.update(state="open", resolutionEvidence=None, recoveryAttempts=0,
-                               claimOwner=None, claimExpiresAt=None, claimStage=None,
+                               conditionRevision=revision, claimOwner=None, claimExpiresAt=None, claimStage=None,
                                claimAllowedActions=None, lastActionAt=None, cooldownUntil=None)
                     row.setdefault("history", []).append({"at": now, "action": "condition-reopened",
-                                                          "fingerprint": fp, "freshRecoveryCycle": True})
+                                                          "fingerprint": fp, "conditionRevision": revision,
+                                                          "freshRecoveryCycle": True})
             common.atomic_json(incident_path(iid), row); changed.append(iid)
         for iid, row in existing.items():
             if iid in seen or row.get("state") == "resolved": continue

@@ -1,6 +1,6 @@
 #!/bin/zsh
 # SPDX-License-Identifier: Apache-2.0
-# Safe installer for Craft Agents orchestration protocol v3.2.1.
+# Safe installer for Craft Agents orchestration protocol v3.2.2.
 # Dry-run by default. Use --apply only after reviewing README.md.
 set -eu
 
@@ -23,7 +23,7 @@ SKILLS="$WORKSPACE/skills"
 RUNTIME="$CRAFT/runtime"
 LOGS="$CRAFT/logs"
 STAMP=$(date '+%Y%m%d-%H%M%S')
-BACKUP="$CRAFT/backups/orchestration-v3.2.1-$STAMP"
+BACKUP="$CRAFT/backups/orchestration-v3.2.2-$STAMP"
 PYTHON="${CRAFT_PYTHON:-/opt/homebrew/bin/python3}"
 [[ -x "$PYTHON" ]] || PYTHON=$(command -v python3)
 PLIST_NAME="com.craft-protocol.worker-watchdog.plist"
@@ -96,7 +96,7 @@ if (( APPLY )); then
     --template "$ROOT/config/self-healing.automations.template.json" --apply
   : > "$RUNTIME/self-healing.disabled"
   chmod 600 "$RUNTIME/self-healing.disabled"
-  echo "Direct recovery delivery remains disabled until persistent-controller.json explicitly provides sessionId, workspaceId, expectedRuntimeVersion, expectedRuntimeCommit, a trusted serverUrl, and an absolute executable rpcCli."
+  echo "Capability-v2 recovery and direct coordinator ticks remain disabled until persistent-controller.json explicitly provides sessionId, workspaceId, expectedRuntimeVersion, expectedRuntimeCommit, a trusted serverUrl, and an absolute executable rpcCli."
   echo "Provide CRAFT_SERVER_TOKEN in the service environment or an owner-only token file; no token/version defaults are installed."
 fi
 
@@ -116,7 +116,7 @@ if (( APPLY )); then
   (cd "$ROOT/tests" && CRAFT_TEST_SCRIPTS="$SCRIPTS" "$PYTHON" -m unittest -v \
     test_worker_reliability.py test_orchestration_v320.py test_self_healing_v311.py \
     test_delivery_mode_v320.py test_controller_harness_v321.py \
-    test_recovery_admission_v321.py test_external_wait_v321.py)
+    test_recovery_admission_v322.py test_external_wait_v321.py)
   echo "Running watchdog dry-run..."
   "$PYTHON" "$SCRIPTS/worker-watchdog.py"
   echo "Install complete. Review output before enabling launchd."

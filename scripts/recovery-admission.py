@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Deterministic direct admission delivery to one persistent recovery controller.
+"""Protocol v3.2.2 authenticated, consumption-aware admission supervisor.
 
-This supervisor selects permitted recovery incidents but never creates sessions or
-writes Craft session state.  A supported Craft server receives one idempotent,
-authenticated direct delivery only after the controller manifest and harness are
-proved.  Scheduler prompt matchers remain a disabled legacy installation guard.
+The supervisor never creates sessions or mutates Craft session state. It uses
+only the capability-v2 admission adapter documented in
+``docs/SELF-HEALING-v3.2.2.md`` and fails closed on every contract ambiguity.
+Routine, exact-generation coordinator ticks and complex controller recovery use
+independent durable target cycles, so a stuck recovery controller cannot block
+ordinary handoff/external-wait reconciliation.
 """
 from __future__ import annotations
 
@@ -31,18 +33,31 @@ COORDINATORS = Path(os.environ.get("CRAFT_COORDINATORS", RUNTIME / "coordinators
 WORKER_LEASES = Path(os.environ.get("CRAFT_WORKER_LEASES", RUNTIME / "worker-leases")).expanduser()
 CONFIG = Path(os.environ.get("CRAFT_AUTOMATIONS_CONFIG", WORKSPACE / "automations.json")).expanduser()
 STATE = Path(os.environ.get("CRAFT_ADMISSION_STATE", RUNTIME / "self-healing/admission.json")).expanduser()
+TICK_STATES = Path(os.environ.get("CRAFT_COORDINATOR_TICK_STATES", RUNTIME / "self-healing/coordinator-ticks")).expanduser()
 LOCK = Path(os.environ.get("CRAFT_ADMISSION_LOCK", RUNTIME / "self-healing/admission.lock")).expanduser()
 DISABLED = Path(os.environ.get("CRAFT_SELF_HEALING_DISABLED", RUNTIME / "self-healing.disabled")).expanduser()
-AUTOMATION_ID = os.environ.get("CRAFT_RECOVERY_NOTIFIER_AUTOMATION_ID", "a321-notifier")
-DIRECT_ACTION_ID = "a321-direct-delivery"
+AUTOMATION_ID = os.environ.get("CRAFT_RECOVERY_NOTIFIER_AUTOMATION_ID", "a322-admission")
+LEGACY_AUTOMATION_IDS = {"a321-notifier", "a31101", "a31102"}
+CONTROLLER_ACTION_ID = "a322-controller-recovery"
+COORDINATOR_ACTION_ID = "a322-coordinator-tick"
 CONTROLLER_HARNESS = Path(os.environ.get("CRAFT_CONTROLLER_HARNESS", Path(__file__).with_name("controller-harness.py"))).expanduser()
 TOKEN_FILE = Path(os.environ.get("CRAFT_SERVER_TOKEN_FILE", HOME / ".config/craft-agent-headless/server-token")).expanduser()
 MAX_INCIDENTS = int(os.environ.get("CRAFT_RECOVERY_ADMISSION_MAX_INCIDENTS", "3"))
-COOLDOWN_SECONDS = int(os.environ.get("CRAFT_RECOVERY_ADMISSION_COOLDOWN_SECONDS", "900"))
+RECOVERY_MIN_AGE_SECONDS = int(os.environ.get("CRAFT_ADMISSION_RECOVERY_MIN_AGE_SECONDS", "1800"))
+RECOVERY_MIN_AGE_MS = RECOVERY_MIN_AGE_SECONDS * 1000
 NOW_MS = lambda: int(os.environ.get("CRAFT_TEST_NOW_MS", "0")) or int(time.time() * 1000)
+
+CAPABILITY_VERSION = 2
+DELIVER_CHANNEL = "automations:admissionDeliver"
+INSPECT_CHANNEL = "automations:admissionInspect"
+RECOVER_CHANNEL = "automations:admissionRecover"
+PENDING_PHASES = {"delivered", "pending-consumption", "recovering"}
+DELIVERY_STATUSES = {"delivered", "pending-consumption", "consumed", "duplicate"}
+INSPECT_STATUSES = {"delivered", "pending-consumption", "consumed"}
+RECOVER_STATUSES = {"recovered", "consumed"}
 BLOCKED_KINDS = {"owner-gate-blocked", "cwd-collision", "project-mapping-conflict", "ambiguous-coordinator-owner", "preservation-unknown"}
 WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "job-exit-unreported", "heavy-lock-wait", "terminal-handoff-unconsumed", "external-wait-terminal", "external-wait-unobserved", "external-wait-deadline"}
-SUCCESS_STATUSES = {"delivered", "queued", "duplicate"}
+ROUTINE_KINDS = {"coordinator-tick-due", "coordinator-lease-stale", "terminal-handoff-unconsumed", "external-wait-terminal"}
 
 
 class AdmissionError(ValueError):
@@ -54,11 +69,15 @@ class CapabilityError(AdmissionError):
 
 
 class TransientRpcError(AdmissionError):
-    """Capability/workspace discovery transport failed before any delivery."""
+    """Capability/workspace discovery failed before target mutation."""
 
 
 class DeliveryUnknown(AdmissionError):
-    """The delivery process outcome is unknown and must be retried idempotently."""
+    """A target mutation may have succeeded and must be retried idempotently."""
+
+
+class StateError(AdmissionError):
+    """Durable local target state is unreadable and must remain untouched."""
 
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -87,10 +106,26 @@ def read_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def required_json(path: Path, label: str) -> dict[str, Any]:
+    value = read_json(path)
+    if value is None:
+        raise StateError(f"unreadable {label}: {path}")
+    return value
+
+
+def validate_fencing_inputs() -> None:
+    """No direct target is selected while any durable safety fence is unreadable."""
+    for path in sorted(COORDINATORS.glob("*.json")):
+        required_json(path, "coordinator registry")
+    for path in sorted(INCIDENTS.glob("*.json")):
+        required_json(path, "recovery incident")
+    for path in sorted((RUNTIME / "owner-gates").glob("*/*.json")):
+        required_json(path, "owner gate")
+
+
 def manifest(session_id: str) -> dict[str, Any] | None:
-    path = SESSIONS / session_id / "session.jsonl"
     try:
-        return json.loads(path.open(encoding="utf-8", errors="ignore").readline())
+        return json.loads((SESSIONS / session_id / "session.jsonl").open(encoding="utf-8", errors="ignore").readline())
     except Exception:
         return None
 
@@ -102,18 +137,21 @@ def label_value(row: dict[str, Any], prefix: str) -> str | None:
     return None
 
 
-def require_persistent_controller(session_id: str) -> dict[str, Any]:
+def require_live_manifest(session_id: str, role: str) -> dict[str, Any]:
     row = manifest(session_id)
     if not row:
-        raise AdmissionError("persistent controller manifest missing")
+        raise AdmissionError(f"{role} manifest missing")
     if (row.get("id") or row.get("sessionId")) != session_id:
-        raise AdmissionError("persistent controller manifest identity mismatch")
-    if row.get("isArchived"):
-        raise AdmissionError("persistent controller is archived")
-    if row.get("sessionStatus") in {"done", "cancelled", "error"}:
-        raise AdmissionError("persistent controller is terminal")
-    if label_value(row, "agent-role::") != "recovery-controller":
-        raise AdmissionError("session is not recovery-controller")
+        raise AdmissionError(f"{role} manifest identity mismatch")
+    if row.get("isArchived") or row.get("sessionStatus") in {"done", "cancelled", "error"}:
+        raise AdmissionError(f"{role} is not live")
+    if label_value(row, "agent-role::") != role:
+        raise AdmissionError(f"session is not {role}")
+    return row
+
+
+def require_persistent_controller(session_id: str) -> dict[str, Any]:
+    row = require_live_manifest(session_id, "recovery-controller")
     if label_value(row, "controller-mode::") != "persistent":
         raise AdmissionError("controller is not marked persistent")
     try:
@@ -128,6 +166,26 @@ def require_persistent_controller(session_id: str) -> dict[str, Any]:
     return row
 
 
+def require_manifest_workspace(row: dict[str, Any]) -> dict[str, Any]:
+    try:
+        manifest_root = Path(str(row["workspaceRootPath"])).expanduser().resolve()
+    except Exception as exc:
+        raise AdmissionError("target manifest workspace binding is invalid") from exc
+    if manifest_root != WORKSPACE.resolve():
+        raise AdmissionError("target manifest is not bound to the configured workspace")
+    return row
+
+
+def require_exact_coordinator_target(batch: dict[str, Any]) -> dict[str, Any]:
+    project = str(batch.get("project") or "")
+    registry = read_json(COORDINATORS / f"{project}.json") if project else None
+    if (not registry or registry.get("state") != "authoritative" or
+            registry.get("coordinatorSessionId") != batch.get("targetSessionId") or
+            scalar_generation(registry.get("generation")) != str(batch.get("targetGeneration"))):
+        raise AdmissionError("coordinator target generation is no longer authoritative")
+    return require_live_manifest(str(batch["targetSessionId"]), "coordinator")
+
+
 def live_scope_blocked(row: dict[str, Any], all_rows: list[dict[str, Any]]) -> bool:
     project, session, work_unit = row.get("project"), row.get("sessionId"), row.get("workUnit")
     registry = read_json(COORDINATORS / f"{project}.json") if project else None
@@ -139,44 +197,35 @@ def live_scope_blocked(row: dict[str, Any], all_rows: list[dict[str, Any]]) -> b
         kind = blocker.get("kind")
         blocker_session = blocker.get("sessionId")
         blocker_work_unit = blocker.get("workUnit") or (blocker.get("evidence") or {}).get("workUnit")
-        # Owner gates are lane-scoped; unrelated executable lanes continue.
         if kind == "owner-gate-blocked":
             if project and blocker.get("project") == project and work_unit and str(blocker_work_unit or "") == str(work_unit):
                 return True
             continue
-        # Unknown preservation forbids cleanup/replacement inference, but a
-        # current active-child handoff may wake its coordinator solely to
-        # verify preservation and consume the handoff.
         if kind == "preservation-unknown":
-            if session and blocker_session == session:
-                current_handoff = (row.get("kind") == "terminal-handoff-unconsumed" and
-                                   (row.get("evidence") or {}).get("activeChild") is True)
-                external_wait_wake = str(row.get("kind") or "").startswith("external-wait-")
-                if not current_handoff and not external_wait_wake:
-                    return True
+            # Preservation ambiguity remains actionable for the complex
+            # controller, but direct_target() must reject the routine lane.
             continue
-        # Identity/cwd conflicts block only the exact affected session. A
-        # project-wide block requires the authoritative registry state above.
         if session and blocker_session == session:
             return True
     if project and work_unit:
         for path in (RUNTIME / "owner-gates" / str(project)).glob("*.json"):
-            gate = read_json(path) or {}
+            gate = required_json(path, "owner gate")
             if gate.get("state") == "open" and str(gate.get("workUnit") or "") == str(work_unit):
                 return True
     return False
 
 
-def incidents() -> list[dict[str, Any]]:
-    all_rows = [row for path in sorted(INCIDENTS.glob("*.json")) if (row := read_json(path))]
+def all_incidents() -> list[dict[str, Any]]:
+    return [required_json(path, "recovery incident") for path in sorted(INCIDENTS.glob("*.json"))]
+
+
+def actionable_incidents() -> list[dict[str, Any]]:
+    all_rows = all_incidents()
     rows = []
     for row in all_rows:
         if (row.get("state") != "open" or row.get("clearCandidateAt") is not None or
                 row.get("kind") in BLOCKED_KINDS or row.get("kind") not in WAKE_KINDS):
             continue
-        # Only a handoff from the coordinator registry's current activeChildren
-        # is an immediate wake. Historical terminal leases remain report-only so
-        # legacy backlog cannot starve current recovery work.
         if row.get("kind") == "terminal-handoff-unconsumed" and (row.get("evidence") or {}).get("activeChild") is not True:
             continue
         if not row.get("sessionId") or live_scope_blocked(row, all_rows):
@@ -184,12 +233,146 @@ def incidents() -> list[dict[str, Any]]:
         rows.append(row)
     order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     rows.sort(key=lambda row: (order.get(str(row.get("severity")), 9), int(row.get("firstSeenAt") or 0), str(row.get("incidentId"))))
-    return rows[:MAX_INCIDENTS]
+    return rows
 
 
-def fingerprint(rows: list[dict[str, Any]]) -> str:
-    value = [{"incidentId": row.get("incidentId"), "evidenceFingerprint": row.get("evidenceFingerprint"), "state": row.get("state")} for row in rows]
+def incident_fingerprint(rows: list[dict[str, Any]]) -> str:
+    value = [{"incidentId": row.get("incidentId"), "evidenceFingerprint": row.get("evidenceFingerprint"),
+              "conditionRevision": int(row.get("conditionRevision") or 1)} for row in rows]
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def scalar_generation(value: Any) -> str | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (str, int)) and str(value):
+        return str(value)
+    return None
+
+
+def authoritative_owner_counts() -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for path in COORDINATORS.glob("*.json"):
+        row = required_json(path, "coordinator registry")
+        session_id = str(row.get("coordinatorSessionId") or "")
+        if row.get("state") in {"authoritative", "rotating", "hold", "needs-owner"} and session_id:
+            counts[session_id] = counts.get(session_id, 0) + 1
+    return counts
+
+
+def direct_target(row: dict[str, Any]) -> dict[str, str] | None:
+    if row.get("kind") not in ROUTINE_KINDS or not row.get("project"):
+        return None
+    project = str(row["project"])
+    if project in {".", ".."} or Path(project).name != project:
+        return None
+    registry_path = COORDINATORS / f"{project}.json"
+    registry = required_json(registry_path, "coordinator registry") if registry_path.exists() else {}
+    if registry.get("state") != "authoritative":
+        return None
+    session_id = str(registry.get("coordinatorSessionId") or "")
+    generation = scalar_generation(registry.get("generation"))
+    if not session_id or generation is None or authoritative_owner_counts().get(session_id) != 1:
+        return None
+    kind = row.get("kind")
+    evidence = row.get("evidence") or {}
+    for blocker in all_incidents():
+        if (blocker.get("state") in {"open", "claimed", "deferred"} and
+                blocker.get("kind") == "preservation-unknown" and
+                blocker.get("sessionId") == row.get("sessionId")):
+            return None
+    if kind in {"coordinator-tick-due", "coordinator-lease-stale"}:
+        if row.get("sessionId") != session_id or scalar_generation(evidence.get("generation")) != generation:
+            return None
+    elif kind == "terminal-handoff-unconsumed":
+        if row.get("coordinatorSessionId") != session_id or row.get("sessionId") not in (registry.get("activeChildren") or []):
+            return None
+    elif kind == "external-wait-terminal" and row.get("coordinatorSessionId") != session_id:
+        return None
+    try:
+        require_live_manifest(session_id, "coordinator")
+    except AdmissionError:
+        return None
+    return {"targetType": "coordinator", "targetKind": "coordinator", "project": project,
+            "targetSessionId": session_id, "targetGeneration": generation,
+            "coordinatorGeneration": generation}
+
+
+def scheduled_tick_rows(now: int) -> list[dict[str, Any]]:
+    """Emit stable half-TTL coordinator tick candidates without an incident.
+
+    A completed coordinator turn advances lastHeartbeatAt/leaseExpiresAt through
+    deterministic activity reconciliation, which creates the next immutable
+    tick identity. Until then, consumption of this exact identity prevents
+    repeated delivery even though every five-minute scan remains due.
+    """
+    rows = []
+    owner_counts = authoritative_owner_counts()
+    for path in sorted(COORDINATORS.glob("*.json")):
+        registry = required_json(path, "coordinator registry")
+        if registry.get("state") != "authoritative":
+            continue
+        session_id = str(registry.get("coordinatorSessionId") or "")
+        generation = scalar_generation(registry.get("generation"))
+        heartbeat = registry.get("lastHeartbeatAt")
+        expiry = registry.get("leaseExpiresAt")
+        if (not session_id or generation is None or owner_counts.get(session_id) != 1 or
+                not isinstance(heartbeat, int) or not isinstance(expiry, int) or
+                expiry <= heartbeat or now < heartbeat + (expiry-heartbeat)//2):
+            continue
+        try:
+            require_live_manifest(session_id, "coordinator")
+        except AdmissionError:
+            continue
+        stable = {"generation": registry.get("generation"), "lastHeartbeatAt": heartbeat, "leaseExpiresAt": expiry}
+        identity = f"{path.stem}:coordinator-tick-due:{session_id}:{generation}:{heartbeat}:{expiry}"
+        rows.append({"incidentId": "tick-"+hashlib.sha256(identity.encode()).hexdigest()[:20],
+                     "kind": "coordinator-tick-due", "state": "open", "sessionId": session_id,
+                     "project": path.stem, "severity": "medium", "firstSeenAt": heartbeat+(expiry-heartbeat)//2,
+                     "evidence": stable,
+                     "evidenceFingerprint": hashlib.sha256(json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+                     "conditionRevision": 1})
+    return rows
+
+
+def admission_batches(controller_session: str) -> list[dict[str, Any]]:
+    validate_fencing_inputs()
+    direct: dict[tuple[str, str, str], dict[str, Any]] = {}
+    complex_rows: list[dict[str, Any]] = []
+    # Concrete incidents consume the bounded batch first; a due heartbeat tick
+    # joins the same envelope only when capacity remains.
+    for row in [*actionable_incidents(), *scheduled_tick_rows(NOW_MS())]:
+        target = direct_target(row)
+        if target:
+            key = (target["project"], target["targetSessionId"], target["coordinatorGeneration"])
+            direct.setdefault(key, {**target, "rows": []})["rows"].append(row)
+        else:
+            complex_rows.append(row)
+    batches = []
+    for key in sorted(direct):
+        batch = direct[key]
+        batch["rows"] = batch["rows"][:MAX_INCIDENTS]
+        batches.append(batch)
+    if complex_rows:
+        batches.append({"targetType": "recovery-controller", "targetKind": "controller",
+                        "targetSessionId": controller_session, "targetGeneration": f"session:{controller_session}",
+                        "rows": complex_rows[:MAX_INCIDENTS]})
+    return batches
+
+
+def state_path(batch: dict[str, Any]) -> Path:
+    if batch["targetType"] == "recovery-controller":
+        return STATE
+    digest = hashlib.sha256(str(batch["project"]).encode()).hexdigest()[:20]
+    return TICK_STATES / f"{digest}.json"
+
+
+def all_target_states() -> list[dict[str, Any]]:
+    rows = []
+    if state := read_json(STATE):
+        rows.append(state)
+    rows.extend(row for path in sorted(TICK_STATES.glob("*.json")) if (row := read_json(path)))
+    return rows
 
 
 def coordinator_health(now: int) -> list[dict[str, Any]]:
@@ -199,12 +382,11 @@ def coordinator_health(now: int) -> list[dict[str, Any]]:
         sid = str(row.get("coordinatorSessionId") or "")
         man = manifest(sid) if sid else None
         heartbeat, expiry = int(row.get("lastHeartbeatAt") or 0), int(row.get("leaseExpiresAt") or 0)
-        age = max(0, now - heartbeat) if heartbeat else None
         children = []
         for child in row.get("activeChildren") or []:
             lease = read_json(WORKER_LEASES / f"{child}.json") or {}
             child_hb = int(lease.get("lastHeartbeatAt") or 0)
-            children.append({"sessionId": child, "state": lease.get("state"), "heartbeatAgeMs": max(0, now - child_hb) if child_hb else None})
+            children.append({"sessionId": child, "state": lease.get("state"), "heartbeatAgeMs": max(0, now-child_hb) if child_hb else None})
         live_children = [child for child in children if child["state"] in {"active", "starting", "suspect"} and child["heartbeatAgeMs"] is not None and child["heartbeatAgeMs"] <= 900000]
         if not man or man.get("isArchived") or man.get("sessionStatus") in {"done", "cancelled", "error"}:
             health = "failed"
@@ -214,12 +396,14 @@ def coordinator_health(now: int) -> list[dict[str, Any]]:
             health = "child-active"
         elif expiry and now <= expiry:
             health = "active" if children else "idle-healthy"
-        elif expiry and now - expiry <= 900000:
+        elif expiry and now-expiry <= 900000:
             health = "suspect"
         else:
             health = "stalled"
-        out.append({"project": path.stem, "sessionId": sid, "health": health, "heartbeatAgeMs": age,
-                    "leaseExpiredByMs": max(0, now - expiry) if expiry else None, "activeChildren": len(live_children), "registeredChildren": len(children)})
+        out.append({"project": path.stem, "sessionId": sid, "generation": row.get("generation"), "health": health,
+                    "heartbeatAgeMs": max(0, now-heartbeat) if heartbeat else None,
+                    "leaseExpiredByMs": max(0, now-expiry) if expiry else None,
+                    "activeChildren": len(live_children), "registeredChildren": len(children)})
     return out
 
 
@@ -230,43 +414,30 @@ def load_config() -> dict[str, Any]:
     return row
 
 
-def disable_legacy_matchers() -> None:
-    """Installation/recovery guard only; direct delivery never calls this path."""
-    config = load_config()
-    for rows in config["automations"].values():
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if isinstance(row, dict) and row.get("id") in {AUTOMATION_ID, "a31101", "a31102"}:
-                row["enabled"] = False
-    atomic_json(CONFIG, config)
-
-
 def install_guard(args: argparse.Namespace) -> int:
     template = read_json(Path(args.template).expanduser())
     if not template:
         raise AdmissionError("automation template missing or invalid")
     candidates = [row for row in template.get("automations", {}).get("SchedulerTick", []) if row.get("id") == AUTOMATION_ID]
     if len(candidates) != 1:
-        raise AdmissionError("template must contain exactly one disabled legacy notifier")
+        raise AdmissionError("template must contain exactly one disabled v3.2.2 legacy guard")
     config = read_json(CONFIG) or {"version": 2, "automations": {}}
     if config.get("version") != 2 or not isinstance(config.get("automations"), dict):
         raise AdmissionError("existing automations config invalid")
     sched = config["automations"].setdefault("SchedulerTick", [])
     matches = [row for row in sched if row.get("id") == AUTOMATION_ID]
     if len(matches) > 1:
-        raise AdmissionError("duplicate recovery notifier automation id")
+        raise AdmissionError("duplicate recovery admission guard id")
     if not matches:
         sched.insert(0, json.loads(json.dumps(candidates[0])))
     if args.apply:
-        # Installation is the only normal configuration mutation; the direct path never arms it.
         for rows in config["automations"].values():
             if isinstance(rows, list):
                 for row in rows:
-                    if isinstance(row, dict) and row.get("id") in {AUTOMATION_ID, "a31101", "a31102"}:
+                    if isinstance(row, dict) and row.get("id") in LEGACY_AUTOMATION_IDS | {AUTOMATION_ID}:
                         row["enabled"] = False
         atomic_json(CONFIG, config)
-    print(json.dumps({"schemaVersion": 2, "applied": args.apply, "notifierCount": 1, "legacyDisabled": True}, indent=2))
+    print(json.dumps({"schemaVersion": 3, "applied": args.apply, "guardCount": 1, "legacyDisabled": True}, indent=2))
     return 0
 
 
@@ -311,9 +482,6 @@ def rpc_command() -> list[str]:
         raise AdmissionError("CRAFT_RPC_CLI is invalid") from exc
     if not command:
         raise AdmissionError("CRAFT_RPC_CLI is invalid")
-    # All adapter responses are machine contracts. The standalone CLI defaults
-    # list-shaped results (notably `workspaces`) to a human table unless the
-    # global JSON flag precedes the command.
     return command + ["--json"]
 
 
@@ -324,75 +492,201 @@ def rpc_env(token: str) -> dict[str, str]:
     return env
 
 
-def rpc_json(args: list[str], token: str, *, delivery: bool = False, expected_type: type = dict) -> Any:
+def rpc_json(args: list[str], token: str, *, mutation: bool = False, expected_type: type = dict) -> Any:
     try:
-        cp = subprocess.run(rpc_command() + args, text=True, capture_output=True, timeout=20, env=rpc_env(token))
+        cp = subprocess.run(rpc_command()+args, text=True, capture_output=True, timeout=20, env=rpc_env(token))
     except (OSError, subprocess.TimeoutExpired) as exc:
-        if delivery:
-            raise DeliveryUnknown("delivery outcome unavailable") from exc
+        if mutation:
+            raise DeliveryUnknown("admission mutation outcome unavailable") from exc
         raise TransientRpcError("Craft CLI unavailable") from exc
-    if cp.returncode and not delivery:
-        raise TransientRpcError("Craft CLI rejected discovery query")
+    if cp.returncode and not mutation:
+        raise TransientRpcError("Craft CLI rejected discovery/inspection query")
     try:
         value = json.loads(cp.stdout)
     except Exception as exc:
-        if delivery:
-            raise DeliveryUnknown("delivery outcome unavailable") from exc
-        raise TransientRpcError("Craft CLI discovery response invalid") from exc
+        if mutation:
+            raise DeliveryUnknown("admission mutation outcome unavailable") from exc
+        raise TransientRpcError("Craft CLI response invalid") from exc
     if not isinstance(value, expected_type):
-        if delivery:
-            raise DeliveryUnknown("delivery outcome unavailable")
-        raise TransientRpcError("Craft CLI discovery response type invalid")
+        if mutation:
+            raise DeliveryUnknown("admission mutation outcome unavailable")
+        raise TransientRpcError("Craft CLI response type invalid")
     return value
 
 
 def verify_capabilities(args: argparse.Namespace, token: str) -> None:
-    """Accept only the identity and channel advertised by admissionCapabilities.
-
-    `system:versions` is intentionally not queried: it identifies desktop
-    components, not the configured Craft runtime serving this RPC.
-    """
-    expected_version = expected_runtime_version(args)
-    expected_commit = expected_runtime_commit(args)
     capabilities = rpc_json(["automation", "capabilities"], token)
-    if (capabilities.get("available") is not True or capabilities.get("version") != 1 or
-            capabilities.get("deliverChannel") != "automations:admissionDeliver" or
-            capabilities.get("runtimeVersion") != expected_version or
-            capabilities.get("runtimeCommit") != expected_commit):
-        raise CapabilityError("Craft direct admission capability/runtime identity unavailable or mismatched")
+    expected = {"available": True, "version": CAPABILITY_VERSION, "deliverChannel": DELIVER_CHANNEL,
+                "inspectChannel": INSPECT_CHANNEL, "recoverChannel": RECOVER_CHANNEL,
+                "runtimeVersion": expected_runtime_version(args), "runtimeCommit": expected_runtime_commit(args)}
+    required_states = {"delivered", "pending-consumption", "consumed", "duplicate", "busy", "blocked"}
+    required_targets = {"controller", "coordinator"}
+    server_minimum = capabilities.get("minimumRecoveryAgeMs")
+    if (any(capabilities.get(key) != value for key, value in expected.items()) or
+            set(capabilities.get("deliveryStates") or []) != required_states or
+            set(capabilities.get("targetKinds") or []) != required_targets or
+            not isinstance(server_minimum, int) or isinstance(server_minimum, bool) or server_minimum < 60000 or
+            RECOVERY_MIN_AGE_MS < server_minimum):
+        raise CapabilityError("Craft admission capability-v2/runtime identity unavailable or mismatched")
 
 
-def verify_workspace_binding(configured_workspace_id: str, token: str, controller_manifest: dict[str, Any]) -> None:
+def verify_workspace_binding(configured_workspace_id: str, token: str) -> None:
     rows = rpc_json(["workspaces"], token, expected_type=list)
     matches = [row for row in rows if isinstance(row, dict) and row.get("id") == configured_workspace_id]
     if len(matches) != 1:
         raise CapabilityError("configured Craft workspace ID is unavailable or ambiguous")
     try:
         rpc_root = Path(str(matches[0]["rootPath"])).expanduser().resolve()
-        manifest_root = Path(str(controller_manifest["workspaceRootPath"])).expanduser().resolve()
         configured_root = WORKSPACE.resolve()
     except Exception as exc:
-        raise CapabilityError("controller workspace binding is invalid") from exc
-    if rpc_root != configured_root or manifest_root != configured_root:
-        raise CapabilityError("controller session and Craft workspace ID are not bound to the configured workspace")
+        raise CapabilityError("target workspace binding is invalid") from exc
+    if rpc_root != configured_root:
+        raise CapabilityError("Craft workspace ID is not bound to the configured workspace")
 
 
-def direct_scope(fp: str, prepared_at: int) -> dict[str, str]:
-    # A prepared cycle is stable across crash retries, while a later cooldown
-    # cycle for the same unresolved fingerprint must produce a fresh wake.
-    scope = f"recovery-admission-{fp}-{prepared_at}"
-    return {"matcherId": AUTOMATION_ID, "actionId": DIRECT_ACTION_ID, "occurrenceId": scope, "key": scope}
+def scope_for(batch: dict[str, Any], initial_fingerprint: str) -> dict[str, str]:
+    # Scope identity contains no wall clock. A continuously observed condition
+    # therefore replays/coalesces into one runtime envelope; confirmed
+    # recurrence or a new heartbeat lease changes conditionRevision/evidence.
+    identity = (f"{batch['targetType']}:{batch.get('project','global')}:"
+                f"{batch['targetSessionId']}:{batch['targetGeneration']}:{initial_fingerprint}")
+    digest = hashlib.sha256(identity.encode()).hexdigest()
+    action = COORDINATOR_ACTION_ID if batch["targetType"] == "coordinator" else CONTROLLER_ACTION_ID
+    occurrence = f"protocol-v322-{digest}"
+    return {"matcherId": AUTOMATION_ID, "actionId": action, "occurrenceId": occurrence, "key": occurrence}
 
 
-def direct_message(fp: str, ids: list[str]) -> str:
-    return "RECOVERY ADMISSION v3.2.1 direct delivery\n" + f"fingerprint: {fp}\nincidentIds: {','.join(ids)}\n"
+def cycle_message(batch: dict[str, Any], fp: str, ids: list[str]) -> str:
+    if batch["targetType"] == "coordinator":
+        return ("COORDINATOR TICK v3.2.2\n"
+                f"project: {batch['project']}\ncoordinatorGeneration: {batch['coordinatorGeneration']}\n"
+                f"fingerprint: {fp}\nincidentIds: {','.join(ids)}\n"
+                "Reconcile the exact registry generation, active children, and external waits; continue executable lanes. "
+                "Renew authority only through a completed coordinator turn. Do not rotate, reap, bypass gates, or send routine owner-facing reports.\n")
+    return ("RECOVERY ADMISSION v3.2.2\n" f"fingerprint: {fp}\nincidentIds: {','.join(ids)}\n"
+            "Acquire the bounded controller lease and apply only ledger-authorized complex recovery.\n")
 
 
-def prepared_state(now: int, controller: str, workspace: str, fp: str, ids: list[str]) -> dict[str, Any]:
-    return {"schemaVersion": 2, "phase": "prepared", "mode": "direct-delivery", "preparedAt": now,
-            "controllerSessionId": controller, "workspaceId": workspace, "fingerprint": fp, "incidentIds": ids,
-            "scope": direct_scope(fp, now), "message": direct_message(fp, ids), "lastFingerprint": fp,
-            "cooldownUntil": now + COOLDOWN_SECONDS * 1000}
+def prepared_cycle(now: int, workspace: str, batch: dict[str, Any]) -> dict[str, Any]:
+    rows = batch["rows"]
+    fp = incident_fingerprint(rows)
+    ids = [str(row["incidentId"]) for row in rows]
+    value = {"schemaVersion": 3, "phase": "prepared", "mode": "capability-v2", "preparedAt": now,
+             "workspaceId": workspace, "targetType": batch["targetType"], "targetKind": batch["targetKind"],
+             "targetSessionId": batch["targetSessionId"], "targetGeneration": batch["targetGeneration"],
+             "fingerprint": fp, "incidentIds": ids, "scope": scope_for(batch, fp), "recoveryAttempts": 0}
+    if batch["targetType"] == "coordinator":
+        value.update(project=batch["project"], coordinatorGeneration=batch["coordinatorGeneration"])
+    value["message"] = cycle_message(batch, fp, ids)
+    return value
+
+
+def validate_scope(state: dict[str, Any]) -> dict[str, str]:
+    scope = state.get("scope")
+    if not isinstance(scope, dict) or any(not isinstance(scope.get(key), str) or not scope[key]
+                                          for key in ("matcherId", "actionId", "occurrenceId", "key")):
+        raise AdmissionError("admission scope invalid")
+    return scope  # type: ignore[return-value]
+
+
+def scope_args(state: dict[str, Any]) -> list[str]:
+    scope = validate_scope(state)
+    return ["--workspace", str(state["workspaceId"]), "--session", str(state["targetSessionId"]),
+            "--matcher", scope["matcherId"], "--action", scope["actionId"],
+            "--occurrence", scope["occurrenceId"], "--key", scope["key"]]
+
+
+def target_identity_args(state: dict[str, Any]) -> list[str]:
+    return ["--target-kind", str(state["targetKind"]), "--target-id", str(state["targetSessionId"]),
+            "--target-generation", str(state["targetGeneration"])]
+
+
+def validate_receipt(state: dict[str, Any], receipt: Any, *, message_id: str | None = None) -> dict[str, Any]:
+    if not isinstance(receipt, dict):
+        raise AdmissionError("capability-v2 admission receipt missing")
+    expected = {"workspaceId": state["workspaceId"], "sessionId": state["targetSessionId"],
+                "targetKind": state["targetKind"], "targetId": state["targetSessionId"],
+                "targetGeneration": state["targetGeneration"],
+                "matcherId": state["scope"]["matcherId"], "actionId": state["scope"]["actionId"],
+                "occurrenceId": state["scope"]["occurrenceId"], "idempotencyKey": state["scope"]["key"]}
+    if any(str(receipt.get(key)) != str(value) for key, value in expected.items()):
+        raise AdmissionError("capability-v2 admission receipt identity mismatch")
+    if message_id is not None and receipt.get("messageId") != message_id:
+        raise AdmissionError("capability-v2 admission receipt message mismatch")
+    if (receipt.get("deliveryState") not in INSPECT_STATUSES or
+            not isinstance(receipt.get("deliveredAt"), int) or isinstance(receipt.get("deliveredAt"), bool) or receipt["deliveredAt"] <= 0 or
+            (receipt.get("acceptedProcessingGeneration") is not None and
+             (not isinstance(receipt.get("acceptedProcessingGeneration"), int) or isinstance(receipt.get("acceptedProcessingGeneration"), bool)))):
+        raise AdmissionError("capability-v2 admission receipt lifecycle invalid")
+    return receipt
+
+
+def deliver(state: dict[str, Any], token: str) -> dict[str, Any]:
+    response = rpc_json(["automation", "deliver", *scope_args(state), *target_identity_args(state), str(state["message"])], token, mutation=True)
+    status = response.get("status")
+    if status == "busy":
+        raise DeliveryUnknown("capability-v2 delivery busy")
+    if status == "blocked" or status not in DELIVERY_STATUSES:
+        raise AdmissionError("capability-v2 delivery response blocked or invalid")
+    receipt = validate_receipt(state, response.get("receipt"))
+    message_id = response.get("messageId") or receipt.get("messageId")
+    if not isinstance(message_id, str) or not message_id or receipt.get("messageId") != message_id:
+        raise AdmissionError("capability-v2 delivery message receipt invalid")
+    if status != "duplicate" and receipt.get("deliveryState") != status:
+        raise AdmissionError("capability-v2 delivery receipt state mismatch")
+    return {"status": status, "messageId": message_id, "receipt": receipt}
+
+
+def inspect(state: dict[str, Any], token: str) -> dict[str, Any]:
+    response = rpc_json(["automation", "inspect", *scope_args(state)], token)
+    status = response.get("status")
+    if status == "missing" or status == "blocked" or status not in INSPECT_STATUSES:
+        raise AdmissionError("admission inspection outstanding state missing or blocked")
+    receipt = validate_receipt(state, response.get("receipt"), message_id=str(state["messageId"]))
+    if receipt.get("deliveryState") != status:
+        raise AdmissionError("admission inspection receipt state mismatch")
+    session = response.get("session")
+    if not isinstance(session, dict) or not isinstance(session.get("isProcessing"), bool):
+        raise AdmissionError("admission inspection processing state invalid")
+    generation = session.get("processingGeneration")
+    started = session.get("processingStartedAt")
+    if session["isProcessing"] and (not isinstance(generation, int) or isinstance(generation, bool) or
+                                    not isinstance(started, int) or started <= 0):
+        raise AdmissionError("admission inspection processing generation invalid")
+    if not session["isProcessing"] and (generation is not None or started is not None):
+        raise AdmissionError("admission inspection idle generation invalid")
+    if not isinstance(session.get("queueDepth"), int) or isinstance(session.get("queueDepth"), bool) or session["queueDepth"] < 0:
+        raise AdmissionError("admission inspection queue depth invalid")
+    age = session.get("processingAgeMs")
+    if (session["isProcessing"] and (not isinstance(age, int) or isinstance(age, bool) or age < 0)) or (
+            not session["isProcessing"] and age is not None):
+        raise AdmissionError("admission inspection processing age invalid")
+    for id_key, at_key in (("lastFinalMessageId", "lastFinalMessageAt"),
+                           ("lastErrorMessageId", "lastErrorMessageAt")):
+        if id_key not in session or at_key not in session:
+            raise AdmissionError(f"admission inspection missing session.{id_key}/{at_key}")
+        message_id, message_at = session[id_key], session[at_key]
+        if ((message_id is None) != (message_at is None) or
+                (message_id is not None and (not isinstance(message_id, str) or not message_id)) or
+                (message_at is not None and (not isinstance(message_at, int) or isinstance(message_at, bool) or message_at <= 0))):
+            raise AdmissionError(f"admission inspection invalid session.{id_key}/{at_key}")
+    return {"status": status, "receipt": receipt, "session": session}
+
+
+def recover(state: dict[str, Any], inspection: dict[str, Any], token: str, args: argparse.Namespace) -> dict[str, Any]:
+    session = inspection["session"]
+    generation = session.get("processingGeneration")
+    if not session.get("isProcessing") or not isinstance(generation, int) or isinstance(generation, bool):
+        raise AdmissionError("recovery requires an exact active processing generation")
+    response = rpc_json(["automation", "recover", *scope_args(state), *target_identity_args(state),
+                         "--message-id", str(state["messageId"]), "--runtime-version", expected_runtime_version(args),
+                         "--runtime-commit", expected_runtime_commit(args), "--processing-generation", str(generation),
+                         "--minimum-processing-age-ms", str(RECOVERY_MIN_AGE_MS)], token, mutation=True)
+    if response.get("status") == "blocked" or response.get("status") not in RECOVER_STATUSES:
+        raise AdmissionError("capability-v2 recovery response blocked or invalid")
+    if response.get("messageId") != state.get("messageId") or response.get("processingGeneration") != generation:
+        raise AdmissionError("capability-v2 recovery generation/message mismatch")
+    return {"status": response["status"], "processingGeneration": generation}
 
 
 def hard_block(state: dict[str, Any], now: int, reason: str) -> dict[str, Any]:
@@ -401,30 +695,135 @@ def hard_block(state: dict[str, Any], now: int, reason: str) -> dict[str, Any]:
     return blocked
 
 
-def deliver(state: dict[str, Any], token: str) -> dict[str, Any]:
-    scope = state.get("scope") or {}
-    if not isinstance(scope, dict) or any(not isinstance(scope.get(key), str) or not scope[key] for key in ("matcherId", "actionId", "occurrenceId", "key")):
-        raise AdmissionError("prepared direct delivery scope invalid")
-    response = rpc_json(["automation", "deliver", "--workspace", str(state["workspaceId"]), "--session", str(state["controllerSessionId"]),
-                         "--matcher", scope["matcherId"], "--action", scope["actionId"], "--occurrence", scope["occurrenceId"],
-                         "--key", scope["key"], str(state["message"])], token, delivery=True)
-    status, message_id = response.get("status"), response.get("messageId")
-    if status == "busy":
-        raise DeliveryUnknown("direct delivery busy")
-    if status not in SUCCESS_STATUSES or not isinstance(message_id, str) or not message_id:
-        raise AdmissionError("direct delivery blocked or invalid")
-    return {"status": status, "messageId": message_id}
+def batch_matches_state(batch: dict[str, Any], state: dict[str, Any]) -> bool:
+    if (state.get("targetType") != batch.get("targetType") or state.get("targetKind") != batch.get("targetKind") or
+            state.get("targetSessionId") != batch.get("targetSessionId") or
+            str(state.get("targetGeneration")) != str(batch.get("targetGeneration"))):
+        return False
+    return batch.get("targetType") != "coordinator" or state.get("project") == batch.get("project")
+
+
+def coalesce_cycle(state: dict[str, Any], batch: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    if batch.get("retainStateFingerprint"):
+        return state, False
+    fp = incident_fingerprint(batch["rows"])
+    if fp == state.get("fingerprint"):
+        return state, False
+    updated = dict(state)
+    ids = [str(row["incidentId"]) for row in batch["rows"]]
+    updated.update(fingerprint=fp, incidentIds=ids, message=cycle_message(batch, fp, ids), coalescedAt=NOW_MS())
+    return updated, True
+
+
+def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str, apply: bool,
+                  args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    now = NOW_MS()
+    state = read_json(path)
+    if path.exists() and state is None:
+        raise StateError(f"admission state unreadable: {path}")
+    if state and state.get("schemaVersion") != 3:
+        blocked = hard_block(state, now, "legacy-admission-state-requires-owner-reset")
+        if apply:
+            atomic_json(path, blocked)
+        return 2, blocked
+    if state and state.get("phase") == "blocked":
+        return 2, state
+    if state and not batch_matches_state(batch, state):
+        if state.get("phase") in PENDING_PHASES | {"prepared"}:
+            blocked = hard_block(state, now, "outstanding-admission-target-generation-changed")
+            if apply:
+                atomic_json(path, blocked)
+            return 2, blocked
+        state = None
+    if state and state.get("phase") == "consumed" and state.get("fingerprint") == incident_fingerprint(batch["rows"]):
+        return 0, state
+    if state is None or state.get("phase") == "consumed":
+        state = prepared_cycle(now, workspace, batch)
+    elif state.get("phase") == "prepared":
+        # No message ID exists yet, so a crash-replayed prepare may safely fold
+        # in newer incidents before the first/duplicate-safe delivery.
+        state, _ = coalesce_cycle(state, batch)
+    if not apply:
+        return 0, state
+    if state["phase"] == "prepared":
+        atomic_json(path, state)
+        receipt = deliver(state, token)
+        state.update(messageId=receipt["messageId"], deliveredAt=receipt["receipt"]["deliveredAt"], receipt=receipt["receipt"])
+        receipt_state = receipt["receipt"]["deliveryState"]
+        state["phase"] = "consumed" if receipt_state == "consumed" else (
+            "pending-consumption" if receipt["status"] in {"pending-consumption", "duplicate"} else "delivered")
+        state["deliveryStatus"] = receipt["status"]
+        if state["phase"] == "consumed":
+            state["consumedAt"] = now
+        atomic_json(path, state)
+        # A duplicate proves an earlier attempt may already have been pending
+        # for a long time. Inspect immediately against the original receipt
+        # timestamp instead of postponing its deadline to this retry.
+        if receipt["status"] != "duplicate" and now <= int(state["deliveredAt"]):
+            return 0, state
+
+    inspection = inspect(state, token)
+    outstanding_status = inspection["status"]
+    session_inspection = inspection["session"]
+    state["lastInspectedAt"] = now
+    state["receipt"] = inspection["receipt"]
+    state["lastInspection"] = {key: session_inspection.get(key) for key in
+                               ("isProcessing", "processingGeneration", "processingStartedAt", "processingAgeMs",
+                                "queueDepth", "lastFinalMessageId", "lastFinalMessageAt",
+                                "lastErrorMessageId", "lastErrorMessageAt")}
+    if outstanding_status == "consumed":
+        state.update(phase="consumed", consumedAt=now)
+        atomic_json(path, state)
+        return 0, state
+
+    state, changed = coalesce_cycle(state, batch)
+    if changed:
+        receipt = deliver(state, token)
+        if receipt["messageId"] != state.get("messageId") or receipt["receipt"]["deliveryState"] == "consumed":
+            if receipt["messageId"] != state.get("messageId"):
+                raise AdmissionError("coalesced admission changed outstanding message ID")
+            state.update(phase="consumed", consumedAt=now, deliveryStatus="consumed", receipt=receipt["receipt"])
+            atomic_json(path, state)
+            return 0, state
+        state.update(phase="pending-consumption", deliveryStatus=receipt["status"], receipt=receipt["receipt"],
+                     deliveredAt=receipt["receipt"]["deliveredAt"])
+
+    started = session_inspection.get("processingStartedAt")
+    stuck = session_inspection.get("isProcessing") and isinstance(started, int) and now-started >= RECOVERY_MIN_AGE_MS
+    idle_expired = (not session_inspection.get("isProcessing") and
+                    now-int(state.get("deliveredAt") or state.get("preparedAt") or now) >= RECOVERY_MIN_AGE_MS)
+    if idle_expired:
+        state = hard_block(state, now, "pending-admission-not-processing-at-deadline")
+        atomic_json(path, state)
+        return 2, state
+    if stuck and int(state.get("recoveryAttempts") or 0) == 0:
+        recovery = recover(state, inspection, token, args)
+        if recovery["status"] == "consumed":
+            state.update(phase="consumed", consumedAt=now, recoveryAttempts=1, recovery=recovery)
+            atomic_json(path, state)
+            return 0, state
+        state.update(phase="recovering", recoveryAttempts=1, recoveryStartedAt=now, recovery=recovery)
+    elif stuck and int(state.get("recoveryAttempts") or 0) >= 1:
+        state = hard_block(state, now, "bounded-admission-recovery-exhausted")
+        atomic_json(path, state)
+        return 2, state
+    else:
+        state["phase"] = "pending-consumption"
+    atomic_json(path, state)
+    return 0, state
 
 
 def report(args: argparse.Namespace) -> int:
     now = NOW_MS()
-    state = read_json(STATE)
-    rows = incidents()
+    batches = admission_batches(getattr(args, "controller_session", None) or "<configured-controller>")
     health = coordinator_health(now)
-    out = {"schemaVersion": 2, "mode": "report-only", "disabled": DISABLED.exists(), "state": state or {"phase": "idle"},
-           "actionableCount": len(rows), "actionableIncidentIds": [row.get("incidentId") for row in rows],
+    out = {"schemaVersion": 3, "mode": "report-only", "disabled": DISABLED.exists(),
+           "states": all_target_states(), "actionableCount": sum(len(batch["rows"]) for batch in batches),
+           "batches": [{key: batch.get(key) for key in ("targetType", "project", "targetSessionId", "coordinatorGeneration")} |
+                       {"incidentIds": [row.get("incidentId") for row in batch["rows"]]} for batch in batches],
            "coordinatorHealth": health,
-           "healthSummary": {name: sum(1 for row in health if row["health"] == name) for name in ("active", "child-active", "idle-healthy", "suspect", "stalled", "failed")}}
+           "healthSummary": {name: sum(1 for row in health if row["health"] == name)
+                             for name in ("active", "child-active", "idle-healthy", "suspect", "stalled", "failed")}}
     print(json.dumps(out, indent=2))
     return 0
 
@@ -434,130 +833,139 @@ def tick(args: argparse.Namespace) -> int:
     LOCK.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with LOCK.open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        state = read_json(STATE)
-        if state and state.get("phase") == "armed":
-            blocked = hard_block(state, now, "legacy-scheduler-state-unsupported")
-            if args.apply:
-                atomic_json(STATE, blocked)
-            print(json.dumps({"schemaVersion": 2, "applied": args.apply, "state": blocked}, indent=2))
-            return 2
-        if state and state.get("phase") == "blocked":
-            print(json.dumps({"schemaVersion": 2, "applied": args.apply, "state": state}, indent=2))
-            return 2
-        if state and state.get("phase") == "notified":
-            current_rows = incidents()
-            current_fp = fingerprint(current_rows) if current_rows else None
-            same_fingerprint_cooling = (current_fp == state.get("lastFingerprint") and
-                                        now < int(state.get("cooldownUntil") or 0))
-            if same_fingerprint_cooling:
-                print(json.dumps({"schemaVersion": 2, "applied": False, "state": state,
-                                  "reason": "fingerprint-cooldown"}, indent=2))
-                return 0
-            state = {"schemaVersion": 2, "phase": "idle", "rearmedAt": now,
-                     "previousPhase": "notified", "lastFingerprint": state.get("lastFingerprint"),
-                     "cooldownUntil": state.get("cooldownUntil")}
-            if args.apply:
-                atomic_json(STATE, state)
         if DISABLED.exists():
-            print(json.dumps({"schemaVersion": 2, "applied": False, "state": state or {"phase": "idle"}, "reason": "kill-switch-active"}, indent=2))
+            print(json.dumps({"schemaVersion": 3, "applied": False, "reason": "kill-switch-active", "states": all_target_states()}, indent=2))
             return 2
-        if state and state.get("phase") == "prepared":
-            configured_workspace = workspace_id(args)
-            if (state.get("mode") != "direct-delivery" or state.get("controllerSessionId") != args.controller_session or
-                    state.get("workspaceId") != configured_workspace):
-                blocked = hard_block(state, now, "prepared-direct-delivery-state-invalid")
-                if args.apply:
-                    atomic_json(STATE, blocked)
-                print(json.dumps({"schemaVersion": 2, "applied": args.apply, "state": blocked}, indent=2))
-                return 2
-            prepared = state
-        else:
-            rows = incidents()
-            if not rows:
-                print(json.dumps({"schemaVersion": 2, "applied": args.apply, "state": {"phase": "idle"}, "reason": "no-actionable-incidents"}, indent=2))
-                return 0
-            fp = fingerprint(rows)
-            if state and state.get("lastFingerprint") == fp and now < int(state.get("cooldownUntil") or 0):
-                print(json.dumps({"schemaVersion": 2, "applied": False, "state": state, "reason": "fingerprint-cooldown"}, indent=2))
-                return 0
-            prepared = prepared_state(now, args.controller_session, workspace_id(args), fp, [str(row["incidentId"]) for row in rows])
-        controller_manifest = require_persistent_controller(args.controller_session)
-        if not args.apply:
-            print(json.dumps({"schemaVersion": 2, "applied": False, "state": prepared}, indent=2))
+        workspace = workspace_id(args)
+        batches = admission_batches(args.controller_session)
+        # Pending targets must still be inspected even when their triggering
+        # incidents have cleared; consumption is a server receipt, never local inference.
+        by_path = {state_path(batch): batch for batch in batches}
+        for path in [STATE, *sorted(TICK_STATES.glob("*.json"))]:
+            state = read_json(path)
+            if not state or state.get("phase") not in PENDING_PHASES | {"prepared"} or path in by_path:
+                continue
+            synthetic = {"targetType": state.get("targetType"), "targetKind": state.get("targetKind"),
+                         "targetSessionId": state.get("targetSessionId"), "targetGeneration": state.get("targetGeneration"),
+                         "project": state.get("project"), "coordinatorGeneration": state.get("coordinatorGeneration"),
+                         "retainStateFingerprint": True,
+                         "rows": [{"incidentId": iid, "evidenceFingerprint": "retained", "conditionRevision": 1}
+                                  for iid in state.get("incidentIds") or []]}
+            by_path[path] = synthetic
+        if not by_path:
+            print(json.dumps({"schemaVersion": 3, "applied": args.apply, "reason": "no-actionable-or-outstanding-admissions", "states": all_target_states()}, indent=2))
             return 0
+
+        pre_results = []
+        invalid_paths = []
+        for path, batch in by_path.items():
+            if path.exists() and read_json(path) is None:
+                pre_results.append({"schemaVersion": 3, "phase": "blocked",
+                                    "reason": f"admission state unreadable: {path}",
+                                    "statePreserved": True, "path": str(path)})
+                invalid_paths.append(path)
+                continue
+            try:
+                target_manifest = (require_persistent_controller(batch["targetSessionId"])
+                                   if batch["targetType"] == "recovery-controller"
+                                   else require_exact_coordinator_target(batch))
+                require_manifest_workspace(target_manifest)
+            except AdmissionError as exc:
+                current = read_json(path) or prepared_cycle(now, workspace, batch)
+                blocked = hard_block(current, now, str(exc))
+                if args.apply:
+                    atomic_json(path, blocked)
+                pre_results.append(blocked)
+                invalid_paths.append(path)
+        for path in invalid_paths:
+            by_path.pop(path, None)
+        if not by_path:
+            print(json.dumps({"schemaVersion": 3, "applied": args.apply, "results": pre_results}, indent=2))
+            return 2 if pre_results else 0
+        if not args.apply:
+            results = [*pre_results, *[process_cycle(path, batch, workspace, "", False, args)[1]
+                                      for path, batch in by_path.items()]]
+            print(json.dumps({"schemaVersion": 3, "applied": False, "results": results}, indent=2))
+            return 2 if pre_results else 0
+
+        token = server_token()
         try:
-            token = server_token()
             verify_capabilities(args, token)
-            verify_workspace_binding(workspace_id(args), token, controller_manifest)
+            verify_workspace_binding(workspace, token)
         except TransientRpcError as exc:
-            # No delivery was attempted. Preserve the exact prepared scope and
-            # retry discovery on the next tick; runtime identity/content
-            # mismatches still hard-block through CapabilityError below.
-            atomic_json(STATE, prepared)
-            print(json.dumps({"schemaVersion": 2, "applied": True, "state": prepared,
-                              "reason": "discovery-retry", "detail": str(exc)}, indent=2))
+            results = []
+            for path, batch in by_path.items():
+                state = read_json(path) or prepared_cycle(now, workspace, batch)
+                atomic_json(path, state)
+                results.append(state)
+            print(json.dumps({"schemaVersion": 3, "applied": True, "reason": "discovery-retry", "detail": str(exc), "results": results}, indent=2))
             return 75
         except (AdmissionError, CapabilityError) as exc:
-            blocked = hard_block(prepared, now, str(exc))
-            atomic_json(STATE, blocked)
-            print(json.dumps({"schemaVersion": 2, "applied": True, "state": blocked}, indent=2))
+            results = []
+            for path, batch in by_path.items():
+                blocked = hard_block(read_json(path) or prepared_cycle(now, workspace, batch), now, str(exc))
+                atomic_json(path, blocked)
+                results.append(blocked)
+            print(json.dumps({"schemaVersion": 3, "applied": True, "results": results}, indent=2))
             return 2
-        if state is None or state.get("phase") != "prepared":
-            atomic_json(STATE, prepared)
-        # Linearization check immediately before the external delivery call. A
-        # kill switch created during capability/workspace discovery wins and
-        # leaves a durable blocked receipt without invoking admissionDeliver.
-        if DISABLED.exists():
-            blocked = hard_block(prepared, NOW_MS(), "kill-switch-active-before-delivery")
-            atomic_json(STATE, blocked)
-            print(json.dumps({"schemaVersion": 2, "applied": True, "state": blocked}, indent=2))
-            return 2
-        try:
-            receipt = deliver(prepared, token)
-        except DeliveryUnknown:
-            # The server may have received the request.  Keep the exact durable scope for a duplicate-safe retry.
-            atomic_json(STATE, prepared)
-            print(json.dumps({"schemaVersion": 2, "applied": True, "state": prepared, "reason": "direct-delivery-retry"}, indent=2))
-            return 75
-        except AdmissionError as exc:
-            blocked = hard_block(prepared, now, str(exc))
-            atomic_json(STATE, blocked)
-            print(json.dumps({"schemaVersion": 2, "applied": True, "state": blocked}, indent=2))
-            return 2
-        notified = dict(prepared)
-        notified.update(phase="notified", notifiedAt=now, notifierSessionId=None,
-                        directDelivery={"workspaceId": prepared["workspaceId"], "controllerSessionId": prepared["controllerSessionId"],
-                                        **prepared["scope"], **receipt})
-        atomic_json(STATE, notified)
-        print(json.dumps({"schemaVersion": 2, "applied": True, "state": notified}, indent=2))
-        return 0
+
+        results, exit_code = list(pre_results), (2 if pre_results else 0)
+        for path, batch in by_path.items():
+            if DISABLED.exists():
+                blocked = hard_block(read_json(path) or prepared_cycle(now, workspace, batch), NOW_MS(), "kill-switch-active-before-target-mutation")
+                atomic_json(path, blocked)
+                results.append(blocked)
+                exit_code = 2
+                continue
+            try:
+                code, result = process_cycle(path, batch, workspace, token, True, args)
+            except StateError as exc:
+                result = {"schemaVersion": 3, "phase": "blocked", "reason": str(exc),
+                          "statePreserved": True, "path": str(path)}
+                code = 2
+            except (DeliveryUnknown, TransientRpcError) as exc:
+                result = read_json(path) or prepared_cycle(now, workspace, batch)
+                atomic_json(path, result)
+                result = {**result, "retryReason": str(exc)}
+                code = 75
+            except AdmissionError as exc:
+                result = hard_block(read_json(path) or prepared_cycle(now, workspace, batch), NOW_MS(), str(exc))
+                atomic_json(path, result)
+                code = 2
+            results.append(result)
+            exit_code = max(exit_code, code)
+        print(json.dumps({"schemaVersion": 3, "applied": True, "results": results}, indent=2))
+        return exit_code
 
 
 def disarm(args: argparse.Namespace) -> int:
     if not DISABLED.exists() and not args.force:
         raise AdmissionError("kill switch is not active; refusing unforced disarm")
-    now = NOW_MS()
-    LOCK.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with LOCK.open("a+") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        state = read_json(STATE) or {"schemaVersion": 2, "phase": "idle"}
-        if args.apply:
-            if state.get("phase") == "prepared":
-                state = hard_block(state, now, "kill-switch-disarm")
-            atomic_json(STATE, state)
-    print(json.dumps({"schemaVersion": 2, "applied": args.apply, "state": state, "disabled": True}, indent=2))
+    states = all_target_states()
+    print(json.dumps({"schemaVersion": 3, "applied": args.apply, "states": states, "disabled": True}, indent=2))
     return 0
 
 
 def reset(args: argparse.Namespace) -> int:
-    state = read_json(STATE) or {"phase": "idle"}
-    if state.get("phase") not in {"blocked", "notified"} and not args.force:
-        raise AdmissionError("reset allowed only from blocked/notified unless --force")
-    if args.apply:
-        state = {"schemaVersion": 2, "phase": "idle", "resetAt": NOW_MS(), "previousPhase": state.get("phase"),
-                 "lastFingerprint": state.get("fingerprint") or state.get("lastFingerprint"), "cooldownUntil": state.get("cooldownUntil")}
-        atomic_json(STATE, state)
-    print(json.dumps({"schemaVersion": 2, "applied": args.apply, "state": state}, indent=2))
+    paths = [STATE, *sorted(TICK_STATES.glob("*.json"))]
+    changed = []
+    for path in paths:
+        state = read_json(path)
+        if path.exists() and state is None:
+            if not args.force:
+                raise AdmissionError("unreadable admission state requires --force")
+            if args.apply:
+                path.unlink(missing_ok=True)
+            changed.append(str(path))
+            continue
+        if not state:
+            continue
+        if state.get("phase") not in {"blocked", "consumed"} and not args.force:
+            raise AdmissionError("reset allowed only from blocked/consumed unless --force")
+        if args.apply:
+            path.unlink(missing_ok=True)
+        changed.append(str(path))
+    print(json.dumps({"schemaVersion": 3, "applied": args.apply, "reset": changed}, indent=2))
     return 0
 
 
@@ -565,6 +973,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     cmd = sub.add_parser("report")
+    cmd.add_argument("--controller-session")
     cmd.set_defaults(func=report)
     cmd = sub.add_parser("install-guard")
     cmd.add_argument("--template", required=True)
