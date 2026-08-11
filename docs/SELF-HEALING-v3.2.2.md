@@ -18,6 +18,7 @@ Protocol accepts only an authenticated `automation capabilities` response with a
 
 ```json
 {
+  "available": true,
   "version": 2,
   "runtimeVersion": "0.11.4",
   "runtimeCommit": "f8679cdcf47688a5a44e0fb9436ab2d6856d583f",
@@ -33,7 +34,7 @@ Protocol accepts only an authenticated `automation capabilities` response with a
 }
 ```
 
-The full object and ordered arrays must match the literal corrected runtime capability. The configured Protocol deadline must be at least the runtime minimum. Capability v1, the obsolete `available` field, absent channels, unknown/extra states or targets, a runtime identity mismatch, and malformed JSON all fail closed. `system:versions` is never an admission identity source.
+The full CLI object and ordered arrays must match the literal corrected runtime capability. The configured Protocol deadline must be at least the runtime minimum. Capability v1, missing or non-true `available`, absent channels, unknown/extra states or targets, a runtime identity mismatch, and malformed JSON all fail closed. `system:versions` is never an admission identity source.
 
 ### Exact CLI adapter
 

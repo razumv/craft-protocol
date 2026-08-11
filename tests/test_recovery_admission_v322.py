@@ -163,6 +163,7 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         self.assertIsInstance(wire["idleSession"]["processingGeneration"],int)
         self.assertIsNone(wire["idleSession"]["processingStartedAt"]); self.assertIsNone(wire["idleSession"]["processingAgeMs"])
         self.assertEqual(wire["runtimeCorrectionCommit"],RUNTIME_COMMIT)
+        self.assertIs(wire["capabilities"]["available"],True)
         self.assertEqual(wire["capabilities"]["runtimeVersion"],RUNTIME_VERSION)
         self.assertEqual(wire["capabilities"]["runtimeCommit"],RUNTIME_COMMIT)
         self.assertEqual(wire["capabilitiesRequestParams"],[])
@@ -482,9 +483,9 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2)
         self.assertIn("receipt lifecycle invalid",self.controller_state()["reason"])
 
-    def test_capability_v1_or_extra_state_fails_closed(self):
+    def test_capability_v1_invalid_availability_or_extra_state_fails_closed(self):
         for mutation in (lambda cap: cap.update(version=1),lambda cap: cap["deliveryStates"].append("queued"),
-                         lambda cap: cap.update(available=True)):
+                         lambda cap: cap.update(available=False),lambda cap: cap.pop("available")):
             with self.subTest(mutation=mutation):
                 if (self.runtime/"self-healing/admission.json").exists(): (self.runtime/"self-healing/admission.json").unlink()
                 self.incident(); fake=self.fake(); cap=fake["wire"]["capabilities"]; cap["version"]=2; cap["deliveryStates"]=["delivered","pending-consumption","consumed","duplicate","busy","blocked"]

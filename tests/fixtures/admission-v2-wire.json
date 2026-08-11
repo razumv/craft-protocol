@@ -5,6 +5,7 @@
   "exampleMessage": "Incident evidence v3",
   "capabilitiesRequestParams": [],
   "capabilities": {
+    "available": true,
     "version": 2,
     "runtimeVersion": "0.11.4",
     "runtimeCommit": "f8679cdcf47688a5a44e0fb9436ab2d6856d583f",
@@ -205,8 +206,6 @@
     "reason": "A tool dispatch is still in flight"
   },
   "requiredFlags": {
-    "capabilities": ["--workspace", "--expected-runtime-version", "--expected-runtime-commit"],
-    "claim": ["--workspace", "--session", "--matcher", "--action", "--occurrence", "--key", "--target-kind", "--target-id", "--target-generation", "--message-id", "--minimum-processing-age-ms", "--expected-runtime-version", "--expected-runtime-commit"],
     "deliver": ["--workspace", "--session", "--matcher", "--action", "--occurrence", "--key", "--target-kind", "--target-id", "--target-generation"],
     "inspect": ["--workspace", "--session", "--matcher", "--action", "--occurrence", "--key"],
     "recover": ["--workspace", "--session", "--matcher", "--action", "--occurrence", "--key", "--target-kind", "--target-id", "--target-generation", "--message-id", "--runtime-version", "--runtime-commit", "--processing-generation", "--minimum-processing-age-ms"]

@@ -518,6 +518,7 @@ def rpc_json(args: list[str], token: str, *, mutation: bool = False, expected_ty
 def verify_capabilities(args: argparse.Namespace, token: str) -> dict[str, Any]:
     capabilities = rpc_json(["automation", "capabilities"], token)
     expected = {
+        "available": True,
         "version": CAPABILITY_VERSION,
         "runtimeVersion": expected_runtime_version(args),
         "runtimeCommit": expected_runtime_commit(args),

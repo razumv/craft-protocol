@@ -14,7 +14,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - exclude volatile `agePastExpiryMs` from stale-lease evidence fingerprints while retaining it for diagnostics, and add durable `conditionRevision` so confirmed recurrence begins a distinct bounded cycle;
 - add capability-v2 contract documentation, adversarial coalescing/consumption/recovery/direct-lane tests, v3.2.2 install/automation/version markers, and manifest coverage. No production activation is performed by this candidate;
 - align the adapter and literal wire fixtures to corrected runtime commit `f8679cdcf47688a5a44e0fb9436ab2d6856d583f` (atop base `2889c0a051fe3859842123efb440e8a7ad63193e`): numeric durable idle generation, recovered `previousProcessingGeneration` plus strictly advanced generation, distinct admitted-envelope/final-assistant IDs in authoritative consumed-race content/completion proof without a prior-generation field, and retryable recovery-CAS `busy`;
-- make kill-switch restoration the installer’s first safety mutation before any v3.2.2 payload copy, and add non-mutating `verify-runtime` exact capability/runtime/workspace verification as a mandatory runtime-first activation gate.
+- make kill-switch restoration the installer’s first safety mutation before any v3.2.2 payload copy, and add non-mutating `verify-runtime` exact capability/runtime/workspace verification as a mandatory runtime-first activation gate;
+- match the real `craft-cli automation capabilities` envelope exactly, including mandatory `available: true`; missing/false availability and extra fields remain fail-closed.
 
 ### Added
 
