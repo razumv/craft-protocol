@@ -208,7 +208,13 @@ periodic reports to the architecture session:
 what remains, an honest ETA range, confidence (`low|medium|high`), one real blocker,
 the Product Increment (ID, stage, risk, real-workflow demonstration criterion, bounded
 story DAG), current phase, completed outcomes with evidence, current focus, up to three
-ordered next actions, blocker/gate/commitment references, and the next review time. Publishing fails closed on a stale generation,
+ordered next actions, blocker/gate/commitment references, and the next review time.
+A Product Increment may use `stage=complete` only when every story is `accepted`, the
+coordinator phase is also `complete`, and `completionEvidence` contains four distinct
+current-generation event refs: `integratedCandidateRef`, `acceptanceRef`,
+`releaseReadbackRef`, and `demonstrationRef`. Medium/High acceptance binds an
+`audit-verdict`; release readback binds `observer-terminal`; demonstration evidence
+must contain the exact `demonstrationCriterion`. Publishing fails closed on a stale generation,
 invented child/wait/gate references, malformed actions, secret-like content, or a
 `waiting` phase without an active observable commitment. Observed active workers,
 waits, gates, receipts, and inbox pressure are synthesized independently and cannot be

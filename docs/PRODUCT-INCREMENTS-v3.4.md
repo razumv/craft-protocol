@@ -16,7 +16,8 @@ One active project has one primary increment by default. Its durable status decl
 - an honest ETA range and `low|medium|high` confidence;
 - one real blocker or none;
 - increment ID, integration stage, aggregate risk tier and real-workflow demonstration criterion;
-- 1–8 stories with state, risk contribution and dependency IDs.
+- 1–8 stories with state, risk contribution and dependency IDs;
+- at `stage=complete`, four distinct current-generation immutable evidence refs: integrated candidate, risk-appropriate acceptance, release/deploy readback and real-workflow demonstration.
 
 Normally an increment groups 3–8 coherent stories or roughly 4–16 hours of related work. This is a batching heuristic, not a quota. A single-story increment is correct when that story alone produces a complete demonstrable outcome. Padding is prohibited.
 
@@ -33,6 +34,7 @@ The story graph must be bounded and acyclic. Duplicate IDs, duplicate edges, unk
 7. Apply one aggregate risk tier at the increment boundary.
 8. Merge once, deploy/read back once and execute the named real user workflow.
 9. Reuse exact unchanged evidence; do not rerun acceptance for report freshness.
+10. `stage=complete` is fail-closed: every story must be `accepted`, coordinator phase must also be `complete`, and `completionEvidence` must bind four distinct inbox events from the current generation. Medium/High acceptance must bind an `audit-verdict`; release readback must bind `observer-terminal`; demonstration evidence must contain the exact named demonstration criterion.
 
 One global heavyweight lane remains the default. A bounded exception requires explicit resource-aware authority and practical memory/CPU guards. Integration remains serialized around one candidate.
 

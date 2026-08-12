@@ -441,6 +441,34 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
                               or (item.get("kind") == "terminal-handoff" and bool(item.get("evidence"))))
         if declared.get("phase") == "complete" and not verification_grade:
             fail(f"completed outcome evidence is not verification-grade: {ref}")
+    increment = declared.get("productIncrement") or {}
+    completion = increment.get("completionEvidence") or {}
+    if increment.get("stage") == "complete":
+        bound: dict[str, dict[str, Any]] = {}
+        for key, ref in completion.items():
+            item = inbox_items.get(str(ref))
+            if not item:
+                fail(f"Product Increment completion evidence is not observed in this generation: {key}={ref}")
+            if not item.get("evidence"):
+                fail(f"Product Increment completion evidence has no immutable evidence payload: {key}={ref}")
+            bound[key] = item
+        if bound["integratedCandidateRef"].get("kind") != "terminal-handoff":
+            fail("integratedCandidateRef must reference a terminal-handoff")
+        acceptance_kind = bound["acceptanceRef"].get("kind")
+        if increment.get("riskTier") in {"medium", "high"} and acceptance_kind != "audit-verdict":
+            fail("Medium/High Product Increment acceptanceRef must reference an audit-verdict")
+        if acceptance_kind not in {"audit-verdict", "terminal-handoff"}:
+            fail("acceptanceRef must reference a verification-grade acceptance report")
+        if bound["releaseReadbackRef"].get("kind") != "observer-terminal":
+            fail("releaseReadbackRef must reference an observer-terminal receipt")
+        demonstration = bound["demonstrationRef"]
+        if demonstration.get("kind") not in {"terminal-handoff", "observer-terminal"}:
+            fail("demonstrationRef must reference a terminal real-workflow report")
+        criterion = str(increment.get("demonstrationCriterion") or "").strip().casefold()
+        evidence_text = "\n".join([str(demonstration.get("subject") or ""),
+                                   *[str(item) for item in demonstration.get("evidence") or []]]).casefold()
+        if criterion not in evidence_text:
+            fail("demonstrationRef evidence must include the exact demonstrationCriterion")
 
 
 def optional_text(payload: dict[str, Any], key: str) -> str | None:
@@ -525,8 +553,31 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
     max_story_risk = max((RISK_ORDER[story["riskContribution"]] for story in normalized), default=0)
     if RISK_ORDER[risk_tier] < max_story_risk:
         fail("productIncrement.riskTier may not understate story riskContribution")
+    raw_completion = value.get("completionEvidence")
+    completion: dict[str, str] | None = None
+    if raw_completion is not None:
+        if not isinstance(raw_completion, dict) or set(raw_completion) != {
+                "integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"}:
+            fail("productIncrement.completionEvidence must contain exactly four evidence references")
+        completion = {}
+        for key in ("integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"):
+            ref = raw_completion.get(key)
+            if (not isinstance(ref, str) or not ref or len(ref) > 128
+                    or any(ord(ch) < 32 for ch in ref)):
+                fail(f"productIncrement.completionEvidence.{key} must be a bounded evidence reference")
+            completion[key] = ref
+        if len(set(completion.values())) != 4:
+            fail("productIncrement.completionEvidence references must be distinct")
+    if stage == "complete":
+        if any(story["state"] != "accepted" for story in normalized):
+            fail("complete Product Increment requires every story to be accepted")
+        if completion is None:
+            fail("complete Product Increment requires completionEvidence")
+    elif completion is not None:
+        fail("productIncrement.completionEvidence is allowed only at stage complete")
     return {"id": increment_id, "stage": stage, "riskTier": risk_tier,
-            "demonstrationCriterion": demo, "nonGoals": non_goals, "stories": normalized}
+            "demonstrationCriterion": demo, "nonGoals": non_goals, "stories": normalized,
+            "completionEvidence": completion}
 
 
 def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
@@ -548,6 +599,10 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
     phase = payload.get("phase")
     if phase not in PHASES:
         fail(f"phase must be one of {sorted(PHASES)}")
+    if product_increment is not None:
+        increment_complete = product_increment["stage"] == "complete"
+        if (phase == "complete") != increment_complete:
+            fail("Product Increment stage complete and coordinator phase complete must match")
     actions = payload.get("nextActions") or []
     if not isinstance(actions, list) or len(actions) > MAX_ACTIONS:
         fail(f"nextActions must be a list of at most {MAX_ACTIONS}")

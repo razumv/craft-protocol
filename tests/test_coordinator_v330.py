@@ -463,6 +463,68 @@ class StatusTests(Base):
         _, published = self.publish(valid)
         self.assertEqual(published["record"]["declared"]["productIncrement"]["riskTier"], "high")
 
+    def completion_payload(self):
+        criterion = "Open a Person and inspect subscriptions on desktop and mobile"
+        reports = [
+            ("worker1", "candidate", "terminal-handoff", "integrated candidate", ["sha:abc123"]),
+            ("worker2", "accept", "audit-verdict", "integrated acceptance PASS", ["audit:pass@abc123"]),
+            ("worker3", "release", "observer-terminal", "production readback succeeded", ["run:release-42"]),
+            ("worker4", "demo", "terminal-handoff", "real workflow demonstrated", [f"demo:{criterion}"]),
+        ]
+        refs = []
+        for sender, work_unit, kind, subject, evidence in reports:
+            self.lease(sender, work_unit=work_unit, state="handoff-ready")
+            _, submitted = self.submit(kind, subject, sender=sender, work_unit=work_unit, evidence=evidence)
+            refs.append(submitted["item"]["eventKey"])
+        payload = self.increment_payload()
+        payload.update({"phase": "complete", "currentFocus": "Customer workflow verified",
+                        "remainingOutcome": "Nothing remains", "realBlocker": None,
+                        "nextActions": [], "childRefs": [], "completedOutcomes": [
+                            {"summary": "Product Increment delivered", "evidenceRef": refs[0]}]})
+        payload.pop("nextReviewInSeconds", None)
+        payload["productIncrement"].update({
+            "stage": "complete",
+            "stories": [
+                {"id": "profile", "title": "Inline subscriptions", "state": "accepted",
+                 "dependsOn": [], "riskContribution": "low"},
+                {"id": "history", "title": "Purchase history", "state": "accepted",
+                 "dependsOn": ["profile"], "riskContribution": "medium"}],
+            "completionEvidence": {"integratedCandidateRef": refs[0], "acceptanceRef": refs[1],
+                                   "releaseReadbackRef": refs[2], "demonstrationRef": refs[3]}})
+        return payload
+
+    def test_complete_increment_requires_accepted_stories_and_phase_alignment(self):
+        self.base_project()
+        bad = self.increment_payload(); bad["productIncrement"]["stage"] = "complete"
+        cp, _ = self.publish(bad, ok=False); self.assertIn("every story", cp.stderr)
+        bad = self.increment_payload(); bad["phase"] = "complete"; bad["nextActions"] = []
+        bad.pop("nextReviewInSeconds", None); bad["childRefs"] = []
+        cp, _ = self.publish(bad, ok=False); self.assertIn("must match", cp.stderr)
+
+    def test_complete_increment_requires_exact_current_generation_evidence(self):
+        self.base_project()
+        payload = self.completion_payload()
+        _, published = self.publish(payload)
+        self.assertEqual(published["record"]["declared"]["productIncrement"]["stage"], "complete")
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["classification"], "verified")
+        for key in ("integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"):
+            bad = self.completion_payload(); bad["productIncrement"]["completionEvidence"][key] = "missing"
+            cp, _ = self.publish(bad, ok=False); self.assertIn("not observed", cp.stderr)
+
+    def test_complete_increment_rejects_wrong_evidence_kind_and_unbound_demo(self):
+        self.base_project()
+        payload = self.completion_payload()
+        completion = payload["productIncrement"]["completionEvidence"]
+        completion["releaseReadbackRef"] = completion["acceptanceRef"]
+        cp, _ = self.publish(payload, ok=False); self.assertIn("distinct", cp.stderr)
+        payload = self.completion_payload()
+        demo_ref = payload["productIncrement"]["completionEvidence"]["demonstrationRef"]
+        item_path = next((self.runtime / "coordinator-inbox" / "demo").glob(f"{demo_ref}.json"))
+        item = json.loads(item_path.read_text()); item["evidence"] = ["demo:some other workflow"]
+        self.put(item_path, item)
+        cp, _ = self.publish(payload, ok=False); self.assertIn("demonstrationCriterion", cp.stderr)
+
     def test_invented_child_reference_fails_closed(self):
         self.base_project()
         payload = self.executing_payload()
