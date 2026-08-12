@@ -445,28 +445,41 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
     completion = increment.get("completionEvidence") or {}
     if increment.get("stage") == "complete":
         bound: dict[str, dict[str, Any]] = {}
-        for key, ref in completion.items():
-            item = inbox_items.get(str(ref))
+        for key, binding in completion.items():
+            event_key = str(binding.get("eventKey") or "")
+            item = inbox_items.get(event_key)
             if not item:
-                fail(f"Product Increment completion evidence is not observed in this generation: {key}={ref}")
+                fail(f"Product Increment completion evidence is not observed in this generation: {key}={event_key}")
+            if (exact_int(item.get("revision"), 0) != binding.get("revision")
+                    or item.get("fingerprint") != binding.get("fingerprint")):
+                fail(f"Product Increment completion evidence immutable binding mismatch: {key}={event_key}")
             if not item.get("evidence"):
-                fail(f"Product Increment completion evidence has no immutable evidence payload: {key}={ref}")
+                fail(f"Product Increment completion evidence has no evidence payload: {key}={event_key}")
             bound[key] = item
         if bound["integratedCandidateRef"].get("kind") != "terminal-handoff":
             fail("integratedCandidateRef must reference a terminal-handoff")
         acceptance_kind = bound["acceptanceRef"].get("kind")
         if increment.get("riskTier") in {"medium", "high"} and acceptance_kind != "audit-verdict":
             fail("Medium/High Product Increment acceptanceRef must reference an audit-verdict")
+        if acceptance_kind == "audit-verdict" and bound["acceptanceRef"].get("senderRole") != "auditor":
+            fail("audit-verdict acceptanceRef must be authored by an auditor")
         if acceptance_kind not in {"audit-verdict", "terminal-handoff"}:
             fail("acceptanceRef must reference a verification-grade acceptance report")
-        if bound["releaseReadbackRef"].get("kind") != "observer-terminal":
+        release = bound["releaseReadbackRef"]
+        if release.get("kind") != "observer-terminal":
             fail("releaseReadbackRef must reference an observer-terminal receipt")
+        release_waits = [wait for wait in project_waits(project, coordinator)
+                         if wait.get("watcherSessionId") == release.get("sender")
+                         and wait.get("workUnit") == release.get("workUnit")
+                         and wait.get("state") in {"terminal", "deadline", "cleared"}]
+        if len(release_waits) != 1:
+            fail("releaseReadbackRef must retain one exact terminal external-wait provenance binding")
         demonstration = bound["demonstrationRef"]
         if demonstration.get("kind") not in {"terminal-handoff", "observer-terminal"}:
             fail("demonstrationRef must reference a terminal real-workflow report")
-        criterion = str(increment.get("demonstrationCriterion") or "").strip().casefold()
+        criterion = str(increment.get("demonstrationCriterion") or "").strip()
         evidence_text = "\n".join([str(demonstration.get("subject") or ""),
-                                   *[str(item) for item in demonstration.get("evidence") or []]]).casefold()
+                                   *[str(item) for item in demonstration.get("evidence") or []]])
         if criterion not in evidence_text:
             fail("demonstrationRef evidence must include the exact demonstrationCriterion")
 
@@ -554,20 +567,29 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
     if RISK_ORDER[risk_tier] < max_story_risk:
         fail("productIncrement.riskTier may not understate story riskContribution")
     raw_completion = value.get("completionEvidence")
-    completion: dict[str, str] | None = None
+    completion: dict[str, dict[str, Any]] | None = None
     if raw_completion is not None:
         if not isinstance(raw_completion, dict) or set(raw_completion) != {
                 "integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"}:
-            fail("productIncrement.completionEvidence must contain exactly four evidence references")
+            fail("productIncrement.completionEvidence must contain exactly four evidence bindings")
         completion = {}
         for key in ("integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"):
-            ref = raw_completion.get(key)
-            if (not isinstance(ref, str) or not ref or len(ref) > 128
-                    or any(ord(ch) < 32 for ch in ref)):
-                fail(f"productIncrement.completionEvidence.{key} must be a bounded evidence reference")
-            completion[key] = ref
-        if len(set(completion.values())) != 4:
-            fail("productIncrement.completionEvidence references must be distinct")
+            binding = raw_completion.get(key)
+            if not isinstance(binding, dict) or set(binding) != {"eventKey", "revision", "fingerprint"}:
+                fail(f"productIncrement.completionEvidence.{key} must bind eventKey, revision, and fingerprint")
+            event_key = binding.get("eventKey")
+            fingerprint = binding.get("fingerprint")
+            revision = binding.get("revision")
+            if (not isinstance(event_key, str) or not event_key or len(event_key) > 128
+                    or any(ord(ch) < 32 for ch in event_key)):
+                fail(f"productIncrement.completionEvidence.{key}.eventKey must be bounded text")
+            if (not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint)):
+                fail(f"productIncrement.completionEvidence.{key}.fingerprint must be SHA-256 hex")
+            if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+                fail(f"productIncrement.completionEvidence.{key}.revision must be a positive integer")
+            completion[key] = {"eventKey": event_key, "revision": revision, "fingerprint": fingerprint}
+        if len({binding["eventKey"] for binding in completion.values()}) != 4:
+            fail("productIncrement.completionEvidence event keys must be distinct")
     if stage == "complete":
         if any(story["state"] != "accepted" for story in normalized):
             fail("complete Product Increment requires every story to be accepted")

@@ -34,7 +34,7 @@ The story graph must be bounded and acyclic. Duplicate IDs, duplicate edges, unk
 7. Apply one aggregate risk tier at the increment boundary.
 8. Merge once, deploy/read back once and execute the named real user workflow.
 9. Reuse exact unchanged evidence; do not rerun acceptance for report freshness.
-10. `stage=complete` is fail-closed: every story must be `accepted`, coordinator phase must also be `complete`, and `completionEvidence` must bind four distinct inbox events from the current generation. Medium/High acceptance must bind an `audit-verdict`; release readback must bind `observer-terminal`; demonstration evidence must contain the exact named demonstration criterion.
+10. `stage=complete` is fail-closed: every story must be `accepted`, coordinator phase must also be `complete`, and `completionEvidence` must bind four distinct current-generation inbox events by exact `eventKey + revision + fingerprint`. Medium/High acceptance must bind an auditor-authored `audit-verdict`; release readback must bind `observer-terminal` from the exact terminal external-wait watcher; demonstration evidence must contain the exact case-sensitive named demonstration criterion.
 
 One global heavyweight lane remains the default. A bounded exception requires explicit resource-aware authority and practical memory/CPU guards. Integration remains serialized around one candidate.
 

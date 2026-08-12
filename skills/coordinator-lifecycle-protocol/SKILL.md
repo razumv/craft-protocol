@@ -211,10 +211,12 @@ story DAG), current phase, completed outcomes with evidence, current focus, up t
 ordered next actions, blocker/gate/commitment references, and the next review time.
 A Product Increment may use `stage=complete` only when every story is `accepted`, the
 coordinator phase is also `complete`, and `completionEvidence` contains four distinct
-current-generation event refs: `integratedCandidateRef`, `acceptanceRef`,
-`releaseReadbackRef`, and `demonstrationRef`. Medium/High acceptance binds an
-`audit-verdict`; release readback binds `observer-terminal`; demonstration evidence
-must contain the exact `demonstrationCriterion`. Publishing fails closed on a stale generation,
+current-generation evidence bindings: `integratedCandidateRef`, `acceptanceRef`,
+`releaseReadbackRef`, and `demonstrationRef`, each with exact `eventKey`, `revision`,
+and `fingerprint`. Medium/High acceptance binds an auditor-authored `audit-verdict`;
+release readback binds `observer-terminal` from one exact terminal external-wait
+watcher; demonstration evidence must contain the exact case-sensitive
+`demonstrationCriterion`. Publishing fails closed on a stale generation,
 invented child/wait/gate references, malformed actions, secret-like content, or a
 `waiting` phase without an active observable commitment. Observed active workers,
 waits, gates, receipts, and inbox pressure are synthesized independently and cannot be

@@ -53,12 +53,12 @@ class Base(unittest.TestCase):
                "lastHeartbeatAt": self.now, **extra}
         self.put(self.runtime / "coordinators" / f"{project}.json", row)
 
-    def lease(self, sid="worker1", parent="coord1", work_unit="wu-1", attempt="1", state="running"):
-        self.manifest(sid, role="worker", labels=[f"parent-session::{parent}",
+    def lease(self, sid="worker1", parent="coord1", work_unit="wu-1", attempt="1", state="running", role="worker"):
+        self.manifest(sid, role=role, labels=[f"parent-session::{parent}",
                       f"work-unit::{work_unit}", f"attempt::{attempt}"])
         self.put(self.runtime / "worker-leases" / f"{sid}.json",
                  {"schemaVersion": 1, "sessionId": sid, "parentSessionId": parent,
-                  "role": "worker", "workUnit": work_unit, "attempt": attempt, "state": state})
+                  "role": role, "workUnit": work_unit, "attempt": attempt, "state": state})
 
     def cli(self, script, *args, ok=True, now=None):
         env = self.env if now is None else {**self.env, "CRAFT_TEST_NOW_MS": str(now)}
@@ -128,6 +128,22 @@ class InboxTests(Base):
         self.base_project()
         cp, _ = self.submit("progress", evidence=["authorization: Bearer sk-1"], ok=False)
         self.assertIn("credential", cp.stderr)
+
+    def test_report_kinds_require_auditor_and_observer_provenance(self):
+        self.base_project()
+        cp, _ = self.submit("audit-verdict", "self approval", ok=False)
+        self.assertIn("auditor", cp.stderr)
+        cp, _ = self.submit("observer-terminal", "unbound observer", ok=False)
+        self.assertIn("external-wait", cp.stderr)
+        self.lease("audit1", work_unit="audit", role="auditor")
+        _, verdict = self.submit("audit-verdict", "PASS", sender="audit1", work_unit="audit")
+        self.assertEqual(verdict["item"]["senderRole"], "auditor")
+        self.lease("watch1", work_unit="release")
+        self.put(self.runtime / "external-waits" / "release.json",
+                 {"waitId": "release", "project": "demo", "coordinatorSessionId": "coord1",
+                  "watcherSessionId": "watch1", "workUnit": "release", "state": "terminal"})
+        _, observed = self.submit("observer-terminal", "release complete", sender="watch1", work_unit="release")
+        self.assertEqual(observed["item"]["kind"], "observer-terminal")
 
     def test_failure_class_is_bounded_and_retained_in_claim(self):
         self.base_project()
@@ -466,16 +482,21 @@ class StatusTests(Base):
     def completion_payload(self):
         criterion = "Open a Person and inspect subscriptions on desktop and mobile"
         reports = [
-            ("worker1", "candidate", "terminal-handoff", "integrated candidate", ["sha:abc123"]),
-            ("worker2", "accept", "audit-verdict", "integrated acceptance PASS", ["audit:pass@abc123"]),
-            ("worker3", "release", "observer-terminal", "production readback succeeded", ["run:release-42"]),
-            ("worker4", "demo", "terminal-handoff", "real workflow demonstrated", [f"demo:{criterion}"]),
+            ("worker1", "candidate", "worker", "terminal-handoff", "integrated candidate", ["sha:abc123"]),
+            ("worker2", "accept", "auditor", "audit-verdict", "integrated acceptance PASS", ["audit:pass@abc123"]),
+            ("worker3", "release", "worker", "observer-terminal", "production readback succeeded", ["run:release-42"]),
+            ("worker4", "demo", "worker", "terminal-handoff", "real workflow demonstrated", [f"demo:{criterion}"]),
         ]
-        refs = []
-        for sender, work_unit, kind, subject, evidence in reports:
-            self.lease(sender, work_unit=work_unit, state="handoff-ready")
+        items = []
+        for sender, work_unit, role, kind, subject, evidence in reports:
+            self.lease(sender, work_unit=work_unit, state="handoff-ready", role=role)
+            if kind == "observer-terminal":
+                self.put(self.runtime / "external-waits" / "release-readback.json",
+                         {"waitId": "release-readback", "project": "demo", "coordinatorSessionId": "coord1",
+                          "watcherSessionId": sender, "workUnit": work_unit, "state": "terminal"})
             _, submitted = self.submit(kind, subject, sender=sender, work_unit=work_unit, evidence=evidence)
-            refs.append(submitted["item"]["eventKey"])
+            items.append(submitted["item"])
+        refs = [item["eventKey"] for item in items]
         payload = self.increment_payload()
         payload.update({"phase": "complete", "currentFocus": "Customer workflow verified",
                         "remainingOutcome": "Nothing remains", "realBlocker": None,
@@ -489,8 +510,11 @@ class StatusTests(Base):
                  "dependsOn": [], "riskContribution": "low"},
                 {"id": "history", "title": "Purchase history", "state": "accepted",
                  "dependsOn": ["profile"], "riskContribution": "medium"}],
-            "completionEvidence": {"integratedCandidateRef": refs[0], "acceptanceRef": refs[1],
-                                   "releaseReadbackRef": refs[2], "demonstrationRef": refs[3]}})
+            "completionEvidence": {
+                key: {"eventKey": item["eventKey"], "revision": item["revision"],
+                      "fingerprint": item["fingerprint"]}
+                for key, item in zip(("integratedCandidateRef", "acceptanceRef",
+                                      "releaseReadbackRef", "demonstrationRef"), items)}})
         return payload
 
     def test_complete_increment_requires_accepted_stories_and_phase_alignment(self):
@@ -509,17 +533,24 @@ class StatusTests(Base):
         _, show = self.cli(STATUS, "show", "--project", "demo")
         self.assertEqual(show["classification"], "verified")
         for key in ("integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"):
-            bad = self.completion_payload(); bad["productIncrement"]["completionEvidence"][key] = "missing"
+            bad = self.completion_payload()
+            bad["productIncrement"]["completionEvidence"][key]["eventKey"] = "missing"
             cp, _ = self.publish(bad, ok=False); self.assertIn("not observed", cp.stderr)
+        bad = self.completion_payload()
+        bad["productIncrement"]["completionEvidence"]["acceptanceRef"]["revision"] += 1
+        cp, _ = self.publish(bad, ok=False); self.assertIn("binding mismatch", cp.stderr)
+        bad = self.completion_payload()
+        bad["productIncrement"]["completionEvidence"]["acceptanceRef"]["fingerprint"] = "0" * 64
+        cp, _ = self.publish(bad, ok=False); self.assertIn("binding mismatch", cp.stderr)
 
     def test_complete_increment_rejects_wrong_evidence_kind_and_unbound_demo(self):
         self.base_project()
         payload = self.completion_payload()
         completion = payload["productIncrement"]["completionEvidence"]
-        completion["releaseReadbackRef"] = completion["acceptanceRef"]
+        completion["releaseReadbackRef"] = dict(completion["acceptanceRef"])
         cp, _ = self.publish(payload, ok=False); self.assertIn("distinct", cp.stderr)
         payload = self.completion_payload()
-        demo_ref = payload["productIncrement"]["completionEvidence"]["demonstrationRef"]
+        demo_ref = payload["productIncrement"]["completionEvidence"]["demonstrationRef"]["eventKey"]
         item_path = next((self.runtime / "coordinator-inbox" / "demo").glob(f"{demo_ref}.json"))
         item = json.loads(item_path.read_text()); item["evidence"] = ["demo:some other workflow"]
         self.put(item_path, item)

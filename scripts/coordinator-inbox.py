@@ -33,6 +33,7 @@ INBOX = RUNTIME / "coordinator-inbox"
 CLAIMS = RUNTIME / "coordinator-inbox-claims"
 COORDINATORS = RUNTIME / "coordinators"
 LEASES = RUNTIME / "worker-leases"
+WAITS = RUNTIME / "external-waits"
 STATUS = RUNTIME / "coordinator-status"
 LOCK = RUNTIME / "coordinator-inbox.lock"
 SCHEMA = 1
@@ -200,8 +201,11 @@ def cmd_submit(args: argparse.Namespace) -> int:
         manifest_s = common.read_manifest(sender)
         if not common.session_live(manifest_s):
             fail("sender session is not live")
-        if common.role_of(manifest_s) not in SENDER_ROLES:
+        sender_role = common.role_of(manifest_s)
+        if sender_role not in SENDER_ROLES:
             fail("sender must have worker/auditor role")
+        if args.kind == "audit-verdict" and sender_role != "auditor":
+            fail("audit-verdict requires an auditor sender")
         lease = common.read_json(LEASES / f"{sender}.json")
         if not lease or lease.get("sessionId") != sender:
             fail("sender lease is missing")
@@ -214,6 +218,17 @@ def cmd_submit(args: argparse.Namespace) -> int:
             fail("sender lease is missing an exact attempt binding")
         if lease_attempt != attempt:
             fail("attempt does not match sender lease")
+        if args.kind == "observer-terminal":
+            waits = [row for path in sorted(WAITS.glob("*.json"))
+                     if isinstance((row := common.read_json(path)), dict)]
+            matching_waits = [wait for wait in waits if wait
+                              and wait.get("project") == project
+                              and wait.get("coordinatorSessionId") == coordinator
+                              and wait.get("watcherSessionId") == sender
+                              and wait.get("workUnit") == work_unit
+                              and wait.get("state") in {"terminal", "deadline", "cleared"}]
+            if len(matching_waits) != 1:
+                fail("observer-terminal requires one exact terminal external-wait binding")
 
         key = event_key(project, args.generation, sender, work_unit, attempt, args.kind)
         path = item_path(project, key)
@@ -257,7 +272,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
             item = {
                 "schemaVersion": SCHEMA, "project": project, "eventKey": key,
                 "coordinatorSessionId": coordinator, "coordinatorGeneration": args.generation,
-                "sender": sender, "senderRole": common.role_of(manifest_s),
+                "sender": sender, "senderRole": sender_role,
                 "workUnit": work_unit, "attempt": attempt or None, "kind": args.kind,
                 "subject": subject, "evidence": evidence, "fingerprint": fingerprint,
                 "waking": waking, "revision": revision_hint if revision_hint is not None else 1,
