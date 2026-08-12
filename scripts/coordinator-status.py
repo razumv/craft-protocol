@@ -327,6 +327,11 @@ def classify(declared: dict[str, Any] | None, synth: dict[str, Any], now: int, *
         classification = "contradictory"; issues.append("plan-unexecutable")
     elif synth["openGateCount"]:
         classification = "blocked"; issues.append("owner-gate-open")
+    elif declared.get("phase") == "blocked" and synth["activeCommitmentCount"]:
+        # A truthful blocked plan can remain healthy when a bounded observer is
+        # responsible for its next review. Absence of both an open gate and an
+        # active commitment still falls through to stale/no-observed-activity.
+        classification = "blocked"
     elif declared.get("phase") == "waiting" and (synth["observedWaitCount"] or synth["activeCommitmentCount"]):
         classification = "waiting-observed"
     elif synth["activeWorkers"]:

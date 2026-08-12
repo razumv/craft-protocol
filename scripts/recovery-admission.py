@@ -804,7 +804,32 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
             atomic_json(path, blocked)
         return 2, blocked
     if state and state.get("phase") == "blocked":
-        return 2, state
+        # A hard block is durable and never auto-cleared or redelivered. The
+        # first unchanged observation records an acknowledgement and remains a
+        # hard supervisor failure. Later observations of the exact same
+        # condition are reported as stable degraded state without permanently
+        # poisoning the global launchd exit code. Any meaningful incident
+        # fingerprint change reopens exit 2 and requires a fresh acknowledgement.
+        incoming_fp = (state.get("fingerprint") if batch.get("retainStateFingerprint")
+                       else incident_fingerprint(batch["rows"]))
+        observed_fp = state.get("blockedConditionFingerprint") or state.get("fingerprint")
+        updated = dict(state)
+        if incoming_fp != observed_fp:
+            updated.update(blockedConditionFingerprint=incoming_fp,
+                           blockedConditionAcknowledgedAt=None,
+                           blockedConditionChangedAt=now,
+                           blockedConditionIncidentIds=[str(row["incidentId"]) for row in batch["rows"]])
+            if apply:
+                atomic_json(path, updated)
+            return 2, updated
+        if not isinstance(state.get("blockedConditionAcknowledgedAt"), int):
+            updated.update(blockedConditionFingerprint=incoming_fp,
+                           blockedConditionAcknowledgedAt=now,
+                           blockedConditionIncidentIds=[str(row["incidentId"]) for row in batch["rows"]])
+            if apply:
+                atomic_json(path, updated)
+            return 2, updated
+        return 0, {**state, "stableBlocked": True, "degraded": True}
     if state and not batch_matches_state(batch, state):
         if state.get("phase") in PENDING_PHASES | {"prepared"}:
             blocked = hard_block(state, now, "outstanding-admission-target-generation-changed")

@@ -120,9 +120,11 @@ pass. Commitments cannot be cancelled with prose.
 project — objective, phase/outcome, what is executing, worker/auditor progress, what is
 awaited and how it is observed, blockers and owner gates, the next three actions, the
 next automatic check, an evidence timestamp, and an explicit confidence classification of
-`verified`, `executing`, `waiting-observed`, `blocked`, `stale`, or `contradictory`. This
-is the source used when the owner asks "what is happening?" Coordinators send no periodic
-reports to the architecture session.
+`verified`, `executing`, `waiting-observed`, `blocked`, `stale`, or `contradictory`.
+A declared blocked plan is healthy `blocked` only when backed by an open owner gate or an
+active bounded commitment; prose-only blocked state remains stale. This is the source
+used when the owner asks "what is happening?" Coordinators send no periodic reports to
+the architecture session.
 
 ## Plan-staleness and trust incidents
 
@@ -147,6 +149,12 @@ The new runtime files are additive and versioned; rollback never deletes inbox, 
 or commitment state.
 
 ## Retained safety boundaries
+
+A hard admission block remains durable and is never auto-cleared or redelivered. Its
+first unchanged supervisor observation records acknowledgement and still exits hard;
+later identical observations report stable degraded state without permanently poisoning
+unrelated target cycles. Any meaningful incident-fingerprint change reopens the hard
+exit and requires a fresh acknowledgement.
 
 Protocol v3.2.2 admission, coordinator ticks, and all preservation/split-brain
 invariants remain authoritative. Inbox records never grant merge, deployment,

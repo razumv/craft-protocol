@@ -409,6 +409,25 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         cp,_=self.apply(ok=False,env=later); self.assertEqual(cp.returncode,2)
         self.assertEqual(self.controller_state()["reason"],"pending-admission-not-processing-at-deadline")
 
+    def test_unchanged_block_is_acknowledged_once_then_degraded_without_redelivery(self):
+        self.incident(); self.apply(); later=dict(self.env); later["CRAFT_TEST_NOW_MS"]=str(NOW+61_000)
+        first,_=self.apply(ok=False,env=later); self.assertEqual(first.returncode,2)
+        self.assertEqual(len(self.records("deliver")),1)
+        second,row=self.apply(ok=False,env=later); self.assertEqual(second.returncode,2)
+        blocked=self.controller_state(); self.assertIsInstance(blocked.get("blockedConditionAcknowledgedAt"),int)
+        third,row=self.apply(env=later); self.assertEqual(third.returncode,0)
+        result=row["results"][0]; self.assertTrue(result["stableBlocked"]); self.assertTrue(result["degraded"])
+        self.assertEqual(len(self.records("deliver")),1)
+        self.assertEqual(self.controller_state()["phase"],"blocked")
+
+    def test_changed_block_condition_reopens_exit_two_without_redelivery(self):
+        self.incident(); self.apply(); later=dict(self.env); later["CRAFT_TEST_NOW_MS"]=str(NOW+61_000)
+        self.apply(ok=False,env=later); self.apply(ok=False,env=later); self.apply(env=later)
+        self.incident("i2",evidence={"changed":True})
+        changed,_=self.apply(ok=False,env=later); self.assertEqual(changed.returncode,2)
+        self.assertIsNone(self.controller_state().get("blockedConditionAcknowledgedAt"))
+        self.assertEqual(len(self.records("deliver")),1)
+
     def test_recover_response_cas_mismatch_hard_blocks(self):
         self.incident(); self.apply(); fake=self.fake()
         fake["session"].update(isProcessing=True,processingGeneration=9,processingStartedAt=NOW-61_000,processingAgeMs=61_000)

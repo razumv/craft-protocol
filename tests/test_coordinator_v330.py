@@ -373,6 +373,29 @@ class StatusTests(Base):
                               "nextReviewInSeconds": 3600}, ok=False)
         self.assertIn("this coordinator generation", cp.stderr)
 
+    def test_blocked_status_with_bounded_commitment_is_blocked_not_stale(self):
+        self.base_project()
+        self.cli(COMMIT, "register", "--project", "demo", "--session", "coord1", "--generation", "2",
+                 "--commitment-id", "blocked-review", "--subject", "review blocker",
+                 "--binding-kind", "scheduled-review", "--deadline-seconds", "3600",
+                 "--success-action", "resume", "--failure-action", "preserve", "--apply")
+        self.publish({"objective": "x", "phase": "blocked", "currentFocus": "exact blocker",
+                      "commitmentRefs": ["blocked-review"], "nextReviewInSeconds": 3600,
+                      "nextActions": [{"description": "review exact blocker", "trigger": "scheduled review deadline",
+                                       "requiredEvidence": "immutable blocker evidence", "successBranch": "resume bounded work",
+                                       "failureBranch": "preserve blocked state"}]})
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["classification"], "blocked")
+        self.assertEqual(show["issues"], [])
+
+    def test_unobserved_blocked_status_remains_stale(self):
+        self.base_project(); self.lease(state="handoff-ready")
+        self.publish({"objective": "x", "phase": "blocked", "currentFocus": "prose blocker",
+                      "nextActions": []})
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["classification"], "stale")
+        self.assertIn("no-observed-activity", show["issues"])
+
     def test_contradiction_complete_with_active_workers(self):
         self.base_project()
         self.publish({"objective": "x", "phase": "complete", "nextActions": []})
