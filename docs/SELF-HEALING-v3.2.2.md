@@ -20,8 +20,8 @@ Protocol accepts only an authenticated `automation capabilities` response with a
 {
   "available": true,
   "version": 2,
-  "runtimeVersion": "0.11.4-admission.db51340",
-  "runtimeCommit": "db51340bfd4595178316f048b17c6cca552b2ad5",
+  "runtimeVersion": "0.11.4-admission.87951ae",
+  "runtimeCommit": "87951ae640df64d00534a54dce9b5e8b5922d27c",
   "actions": ["session-message"],
   "states": ["prepared", "delivering", "committed", "completed", "blocked"],
   "deliveryStates": ["delivered", "pending-consumption", "consumed", "duplicate", "busy", "blocked"],
@@ -169,10 +169,10 @@ The installer remains dry-run by default. On `--apply`, its first safety mutatio
 
 Activation is runtime-first and fail-closed:
 
-1. Install and start the separately reviewed capability-v2 Craft runtime correction `db51340bfd4595178316f048b17c6cca552b2ad5` (separate commit atop base `2889c0a051fe3859842123efb440e8a7ad63193e`) first.
+1. Install and start a separately reviewed capability-v2 Craft runtime first. Protocol v3.3.0 was production-tested against `87951ae640df64d00534a54dce9b5e8b5922d27c`, which includes queue-only busy coordinator/recovery-controller delivery.
 2. Apply Protocol while the installer restores/retains the kill switch.
 3. Configure exact `sessionId`, `workspaceId`, `expectedRuntimeVersion`, `expectedRuntimeCommit`, trusted `serverUrl`, absolute executable `rpcCli`, and an environment or owner-only token-file credential.
-4. While still kill-switched, run `recovery-admission.py verify-runtime --workspace-id <id> --expected-runtime-version 0.11.4-admission.db51340 --expected-runtime-commit db51340bfd4595178316f048b17c6cca552b2ad5` with the configured CLI/server environment; require `verified:true` and exact identity.
+4. While still kill-switched, run `recovery-admission.py verify-runtime --workspace-id <id> --expected-runtime-version 0.11.4-admission.87951ae --expected-runtime-commit 87951ae640df64d00534a54dce9b5e8b5922d27c` with the configured CLI/server environment; require `verified:true` and exact identity.
 5. Only then activate report-only launchd. Remove the kill switch only after reviewed canary approval.
 
 Legacy state must be reset explicitly. Protocol-first activation, inferred package identity, and verification after kill-switch removal are prohibited. No production installation, launchctl mutation, or app/process recovery is performed by the package tests.

@@ -70,8 +70,31 @@ commitment_mod = _load_sibling("coordinator-commitment")
 
 def now_ms(): return common.now_ms()
 def fail(message): raise SystemExit(message)
-def session_error(manifest):
-    return bool(manifest and (manifest.get("sessionStatus") == "error" or manifest.get("lastError")))
+def terminal_session_error(manifest):
+    """Return an unresolved terminal coordinator error, never an in-turn tool error.
+
+    Current Craft manifests retain the last failed completion even after a later
+    successful turn.  A coordinator needs a wake only when that failed completion
+    is newer than every successful final response and is still the latest completed
+    message.  Older manifests may expose only sessionStatus/lastError.
+    """
+    if not manifest:
+        return None
+    error_at = int(manifest.get("lastCompletedErrorMessageAt") or 0)
+    final_at = int(manifest.get("lastCompletedFinalMessageAt") or 0)
+    error_id = manifest.get("lastCompletedErrorMessageId")
+    completed_id = manifest.get("lastCompletedMessageId")
+    completed_at = int(manifest.get("lastCompletedAt") or 0)
+    if error_at and error_at > final_at and (
+        (error_id and completed_id == error_id) or
+        (manifest.get("lastMessageRole") == "error" and error_at >= completed_at)
+    ):
+        return {"errorAt": error_at, "errorMessageId": error_id,
+                "errorClass": "terminal-completion-error"}
+    if manifest.get("sessionStatus") == "error" or manifest.get("lastError"):
+        return {"errorAt": int(manifest.get("updatedAt") or error_at or 0),
+                "errorMessageId": error_id, "errorClass": "manifest-terminal-error"}
+    return None
 def unresolved_pi_sigterms(session_id, after_ms):
     path = common.manifest_path(session_id)
     try:
@@ -172,9 +195,10 @@ def collect_observations():
             if started and now-started > TRANSFER_STUCK_SECONDS*1000:
                 out.append(observation("transfer-stuck", "critical", project, sid,
                     {"transferStartedAt": started, "pendingSessionId": record.get("pendingSessionId"), "generation": record.get("generation")}))
-        if manifest and session_error(manifest):
+        terminal_error = terminal_session_error(manifest)
+        if terminal_error:
             out.append(observation("coordinator-session-error", "high", project, sid,
-                {"updatedAt": manifest.get("updatedAt"), "errorClass": "manifest-terminal-error"}))
+                {**terminal_error, "generation": record.get("generation")}))
         sigterms = unresolved_pi_sigterms(sid, record.get("lastHeartbeatAt") or record.get("claimedAt") or 0)
         if sigterms:
             out.append(observation("coordinator-pi-sigterm", "high", project, sid,

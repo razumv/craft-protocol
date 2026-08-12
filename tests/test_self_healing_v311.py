@@ -18,8 +18,8 @@ class SelfHealingV311Test(unittest.TestCase):
     def tearDown(self): self.tmp.cleanup()
     def put(self, path, value):
         path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(value)+"\n")
-    def manifest(self, sid, *, status="in_progress", archived=False, labels=None, cwd=None, error=None):
-        m={"id":sid,"sessionStatus":status,"isArchived":archived,"labels":labels or []}
+    def manifest(self, sid, *, status="in_progress", archived=False, labels=None, cwd=None, error=None, **extra):
+        m={"id":sid,"sessionStatus":status,"isArchived":archived,"labels":labels or [], **extra}
         if cwd: m["workingDirectory"]=cwd
         if error: m["lastError"]=error
         self.put(self.sessions/sid/"session.jsonl",m)
@@ -64,6 +64,29 @@ class SelfHealingV311Test(unittest.TestCase):
         self.assertNotIn("content",row["evidence"]); self.assertIn("bridge-rotation-on-attempt-3",row["allowedActions"])
         self.registry(lastHeartbeatAt=self.now+1000)
         _,d=self.cli("detect"); self.assertNotIn("coordinator-pi-sigterm",[x["kind"] for x in d["observations"]])
+    def test_terminal_completion_error_wakes_until_later_success(self):
+        error_at=self.now-2000
+        self.manifest("coord", lastCompletedErrorMessageAt=error_at,
+                      lastCompletedErrorMessageId="err-1", lastCompletedMessageId="err-1",
+                      lastCompletedAt=error_at, lastMessageRole="error")
+        self.registry()
+        _,d=self.cli("detect"); row=[x for x in d["observations"] if x["kind"]=="coordinator-session-error"][0]
+        self.assertEqual(row["evidence"]["errorAt"],error_at)
+        self.assertEqual(row["evidence"]["generation"],1)
+        success_at=self.now-1000
+        self.manifest("coord", lastCompletedErrorMessageAt=error_at,
+                      lastCompletedErrorMessageId="err-1", lastCompletedMessageId="ok-1",
+                      lastCompletedAt=success_at, lastCompletedFinalMessageAt=success_at,
+                      lastCompletedFinalMessageId="ok-1", lastMessageRole="assistant")
+        _,d=self.cli("detect"); self.assertNotIn("coordinator-session-error",[x["kind"] for x in d["observations"]])
+    def test_tool_error_inside_successful_turn_does_not_wake_loop(self):
+        error_at=self.now-2000; success_at=self.now-1000
+        self.manifest("coord", lastCompletedErrorMessageAt=error_at,
+                      lastCompletedErrorMessageId="tool-error", lastCompletedMessageId="ok-1",
+                      lastCompletedAt=success_at, lastCompletedFinalMessageAt=success_at,
+                      lastCompletedFinalMessageId="ok-1", lastMessageRole="assistant")
+        self.registry()
+        _,d=self.cli("detect"); self.assertNotIn("coordinator-session-error",[x["kind"] for x in d["observations"]])
     def test_hold_suppresses_stale_and_not_live(self):
         self.registry(state="hold",leaseExpiresAt=self.now-1)
         _,d=self.cli("detect"); self.assertEqual(d["observations"],[])

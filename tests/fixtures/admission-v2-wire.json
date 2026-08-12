@@ -1,14 +1,14 @@
 {
   "contract": "automations-admission-v2-corrected",
   "runtimeBaseCommit": "2889c0a051fe3859842123efb440e8a7ad63193e",
-  "runtimeCorrectionCommit": "db51340bfd4595178316f048b17c6cca552b2ad5",
+  "runtimeCorrectionCommit": "87951ae640df64d00534a54dce9b5e8b5922d27c",
   "exampleMessage": "Incident evidence v3",
   "capabilitiesRequestParams": [],
   "capabilities": {
     "available": true,
     "version": 2,
-    "runtimeVersion": "0.11.4-admission.db51340",
-    "runtimeCommit": "db51340bfd4595178316f048b17c6cca552b2ad5",
+    "runtimeVersion": "0.11.4-admission.87951ae",
+    "runtimeCommit": "87951ae640df64d00534a54dce9b5e8b5922d27c",
     "actions": ["session-message"],
     "states": ["prepared", "delivering", "committed", "completed", "blocked"],
     "deliveryStates": ["delivered", "pending-consumption", "consumed", "duplicate", "busy", "blocked"],
@@ -157,8 +157,8 @@
       "targetId": "controller-session",
       "targetGeneration": "controller-generation-a",
       "messageId": "automation-d544a32d4cdbc2d20a13d47fb9ab009f03349a91",
-      "runtimeVersion": "0.11.4-admission.db51340",
-      "runtimeCommit": "db51340bfd4595178316f048b17c6cca552b2ad5",
+      "runtimeVersion": "0.11.4-admission.87951ae",
+      "runtimeCommit": "87951ae640df64d00534a54dce9b5e8b5922d27c",
       "processingGeneration": 18,
       "minimumProcessingAgeMs": 60000
     }

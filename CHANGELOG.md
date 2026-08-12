@@ -4,7 +4,9 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
-### Protocol v3.3.0 coordinator inbox and product observability candidate
+## [3.3.0] — 2026-08-12
+
+### Coordinator inbox and product observability
 
 - add `coordinator-inbox.py`: a durable, serialized, atomically-stored inbox for worker/auditor reports with validated `submit`/`list`/`claim`/`ack`/`release`/`reconcile`/`report`; submission is fail-closed on sender lease binding, exact coordinator/generation registry match, allowed kind, and non-secret workspace-local evidence;
 - coalesce reports by `project + generation + sender + work-unit + attempt + kind`; a newer meaningful revision replaces the pending payload, identical resubmission advances diagnostics only, terminal/blocker items are never downgraded by later progress, and no report is deleted on claim;
@@ -12,7 +14,12 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - add `coordinator-status.py`: a durable per-project product-status snapshot with `publish`/`show`/`report --all --format json|markdown`/`reconcile`/`validate`; publishing fails closed on stale generation, invented child/wait/gate references, malformed next actions, secret-like or unbounded content, or a `waiting` phase without an active observable commitment, while worker/wait/gate/inbox/evidence state is synthesized independently and classified `verified`/`executing`/`waiting-observed`/`blocked`/`stale`/`contradictory`;
 - add `coordinator-commitment.py`: observer-bound commitments (`register`/`resolve`/`list`/`reconcile`) that bind every future-tense wait to an exact worker/auditor lease, external-wait observer, owner gate, or bounded scheduled review, with deadlines and durable-evidence resolution;
 - extend deterministic detection with `coordinator-inbox-ready`, `coordinator-status-missing`, `coordinator-status-stale`, `coordinator-plan-unexecutable`, `coordinator-commitment-overdue`, and `coordinator-status-contradiction` incidents, each carrying the exact generation and stable fingerprint so the unchanged v3.2.2 capability-v2 admission lane fences the wake and coalesces to one envelope; the watchdog reconciles inbox/status/commitments before the incident scan;
-- update coordinator/worker/self-healing skills, the kickoff prompt, `PROTOCOL-v3.3.md`, `CURRENT-DEFAULTS.md`, installer, and version markers to v3.3.0, add `test_coordinator_v330.py`, and preserve owner gates, exact-generation fencing, v3.2.x adoption, and the no-architecture-report boundary. No production activation is performed by this candidate.
+- update coordinator/worker/self-healing skills, the kickoff prompt, `PROTOCOL-v3.3.md`, `CURRENT-DEFAULTS.md`, installer, and version markers to v3.3.0, add `test_coordinator_v330.py`, and preserve owner gates, exact-generation fencing, v3.2.x adoption, and the no-architecture-report boundary;
+- classify observed `phase=blocked` as healthy only with an open owner gate or active bounded commitment; prose-only blocked plans remain stale;
+- retain durable hard admission blocks without redelivery or auto-clear: the first unchanged observation records acknowledgement and remains exit 2, later identical observations report stable degraded state without poisoning unrelated cycles, and any changed fingerprint reopens exit 2;
+- detect unresolved terminal coordinator completion errors beyond Pi SIGTERM and wake the exact authoritative generation; a later successful final response clears the condition, while recoverable tool errors inside a successfully completed turn cannot create wake loops;
+- support a bounded 20–120 second admission RPC readback timeout for slow authenticated production links;
+- production acceptance passed 188/188 tests before the final terminal-error regressions, exact manifest/install verification, queue-only busy coordinator delivery, coalesced inbox storm behavior, and stable-block canaries. The public release is suitable for external testing while the local multi-project soak continues.
 
 ### Protocol v3.2.2 controller-liveness candidate
 
@@ -137,7 +144,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.2.1...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.3.0...HEAD
+[3.3.0]: https://github.com/razumv/craft-protocol/compare/v3.2.0...v3.3.0
 [3.2.1]: https://github.com/razumv/craft-protocol/compare/v3.2.0...v3.2.1
 [3.2.0]: https://github.com/razumv/craft-protocol/compare/v3.1.1...v3.2.0
 [3.1.1]: https://github.com/razumv/craft-protocol/compare/v3.1.0...v3.1.1
