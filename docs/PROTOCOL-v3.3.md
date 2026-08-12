@@ -140,8 +140,11 @@ auto-resumes.
 The installer copies `coordinator-inbox.py`, `coordinator-status.py`, and
 `coordinator-commitment.py` alongside the existing deterministic tools, restores the
 kill switch before any payload mutation, verifies package hashes, and runs the regression
-suite including `test_coordinator_v330.py`. The new runtime files are additive and
-versioned; rollback never deletes inbox, status, or commitment state.
+suite including `test_coordinator_v330.py`. Admission RPC readback uses a bounded 60-second
+timeout (override `CRAFT_ADMISSION_RPC_TIMEOUT_SECONDS`, allowed range 20–120) so a busy
+coordinator queue acknowledgement is not misclassified as an unknown mutation outcome.
+The new runtime files are additive and versioned; rollback never deletes inbox, status,
+or commitment state.
 
 ## Retained safety boundaries
 

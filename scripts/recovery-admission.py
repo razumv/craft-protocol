@@ -43,6 +43,9 @@ COORDINATOR_ACTION_ID = "a322-coordinator-tick"
 CONTROLLER_HARNESS = Path(os.environ.get("CRAFT_CONTROLLER_HARNESS", Path(__file__).with_name("controller-harness.py"))).expanduser()
 TOKEN_FILE = Path(os.environ.get("CRAFT_SERVER_TOKEN_FILE", HOME / ".config/craft-agent-headless/server-token")).expanduser()
 MAX_INCIDENTS = int(os.environ.get("CRAFT_RECOVERY_ADMISSION_MAX_INCIDENTS", "3"))
+RPC_TIMEOUT_SECONDS = int(os.environ.get("CRAFT_ADMISSION_RPC_TIMEOUT_SECONDS", "60"))
+if RPC_TIMEOUT_SECONDS < 20 or RPC_TIMEOUT_SECONDS > 120:
+    raise ValueError("CRAFT_ADMISSION_RPC_TIMEOUT_SECONDS must be between 20 and 120")
 RECOVERY_MIN_AGE_SECONDS = int(os.environ.get("CRAFT_ADMISSION_RECOVERY_MIN_AGE_SECONDS", "1800"))
 RECOVERY_MIN_AGE_MS = RECOVERY_MIN_AGE_SECONDS * 1000
 NOW_MS = lambda: int(os.environ.get("CRAFT_TEST_NOW_MS", "0")) or int(time.time() * 1000)
@@ -498,7 +501,8 @@ def rpc_env(token: str) -> dict[str, str]:
 
 def rpc_json(args: list[str], token: str, *, mutation: bool = False, expected_type: type = dict) -> Any:
     try:
-        cp = subprocess.run(rpc_command()+args, text=True, capture_output=True, timeout=20, env=rpc_env(token))
+        cp = subprocess.run(rpc_command()+args, text=True, capture_output=True,
+                            timeout=RPC_TIMEOUT_SECONDS, env=rpc_env(token))
     except (OSError, subprocess.TimeoutExpired) as exc:
         if mutation:
             raise DeliveryUnknown("admission mutation outcome unavailable") from exc

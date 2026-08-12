@@ -164,6 +164,12 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
     def controller_state(self): return json.loads((self.runtime/"self-healing/admission.json").read_text())
     def records(self,command): return [r for r in self.fake().get("records",[]) if r[:2]==["automation",command]]
 
+    def test_rpc_timeout_is_bounded_and_long_enough_for_wss_mutation_readback(self):
+        source=TOOL.read_text()
+        self.assertIn('CRAFT_ADMISSION_RPC_TIMEOUT_SECONDS", "60"',source)
+        self.assertIn('RPC_TIMEOUT_SECONDS < 20 or RPC_TIMEOUT_SECONDS > 120',source)
+        self.assertIn('timeout=RPC_TIMEOUT_SECONDS',source)
+
     def test_corrected_wire_fixture_and_cli_round_trip_matrix(self):
         wire=WIRE_FIXTURE
         self.assertIsInstance(wire["idleSession"]["processingGeneration"],int)
