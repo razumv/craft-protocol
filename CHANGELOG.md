@@ -4,6 +4,16 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+### Protocol v3.4.0 candidate — Product Increments
+
+- change the delivery unit from issue-by-issue candidate churn to one customer-visible Product Increment with a bounded acyclic story DAG, one integrated immutable candidate, one batch CI, one merge/deploy/readback and one real-workflow demonstration;
+- extend existing product status backward-compatibly with demonstrable-now, remaining outcome, ETA range, confidence, one real blocker and a validated 1–8-story increment object; customer-facing aggregate reports now lead with product meaning and place PR/SHA/CI/session/audit evidence last;
+- allow up to two disjoint lightweight DAG lanes while retaining one integration candidate and the default single global heavy lane;
+- move independent acceptance to the aggregate increment risk boundary: Low uses scoped story checks + coordinator integration review + batch CI, Medium/High use one focused final-candidate audit, and UI completion requires real desktop/mobile/user-workflow evidence;
+- add optional durable failure classes for blocker/terminal/verdict/observer reports (`admission-environment`, `implementation-defect`, `product-acceptance`, `integration-release`, `irreversible-high-risk`) and keep recovery attempt accounting separate;
+- document deliberate Geolance adoption and dispositions for all 129 DeepSeek problem statements while rejecting a new scheduler/database/queue/service, role hierarchy, vector-memory platform, semantic tool execution and stack-specific infrastructure remedies in the protocol core;
+- preserve all v3.3 admission, generation-fencing, inbox claim/ack, status compatibility, observer, owner-gate, worktree and recovery behavior; no runtime server upgrade or production activation is included in this candidate.
+
 ## [3.3.0] — 2026-08-12
 
 ### Coordinator inbox and product observability

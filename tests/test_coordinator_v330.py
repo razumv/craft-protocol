@@ -129,6 +129,33 @@ class InboxTests(Base):
         cp, _ = self.submit("progress", evidence=["authorization: Bearer sk-1"], ok=False)
         self.assertIn("credential", cp.stderr)
 
+    def test_failure_class_is_bounded_and_retained_in_claim(self):
+        self.base_project()
+        _, submitted = self.cli(INBOX, "submit", "--project", "demo", "--coordinator", "coord1",
+                                "--generation", "2", "--sender", "worker1", "--work-unit", "wu-1",
+                                "--attempt", "1", "--kind", "blocker", "--subject", "environment unavailable",
+                                "--failure-class", "admission-environment", "--apply")
+        self.assertEqual(submitted["item"]["failureClass"], "admission-environment")
+        _, claim = self.cli(INBOX, "claim", "--project", "demo", "--session", "coord1",
+                            "--generation", "2", "--apply")
+        self.assertEqual(claim["digest"][0]["failureClass"], "admission-environment")
+
+    def test_failure_class_changes_payload_revision_and_is_not_allowed_on_progress(self):
+        self.base_project()
+        args = ["submit", "--project", "demo", "--coordinator", "coord1", "--generation", "2",
+                "--sender", "worker1", "--work-unit", "wu-1", "--attempt", "1",
+                "--kind", "blocker", "--subject", "failed", "--failure-class"]
+        _, first = self.cli(INBOX, *args, "implementation-defect", "--apply")
+        _, second = self.cli(INBOX, *args, "product-acceptance", "--apply")
+        self.assertEqual(first["item"]["revision"], 1)
+        self.assertEqual(second["item"]["revision"], 2)
+        self.assertEqual(second["item"]["failureClass"], "product-acceptance")
+        cp, _ = self.cli(INBOX, "submit", "--project", "demo", "--coordinator", "coord1",
+                         "--generation", "2", "--sender", "worker1", "--work-unit", "wu-1",
+                         "--attempt", "1", "--kind", "progress", "--subject", "working",
+                         "--failure-class", "implementation-defect", "--apply", ok=False)
+        self.assertIn("allowed only", cp.stderr)
+
     def test_submit_rejects_non_local_evidence_path(self):
         self.base_project()
         cp, _ = self.submit("progress", evidence=["/etc/passwd"], ok=False)
@@ -315,6 +342,82 @@ class StatusTests(Base):
         self.base_project()
         cp, _ = self.publish(self.executing_payload(), generation=1, ok=False)
         self.assertIn("generation", cp.stderr)
+
+    def increment_payload(self):
+        payload = self.executing_payload()
+        payload.update({
+            "demonstrableNow": "The customer can open the account page",
+            "remainingOutcome": "Connect purchase history and validate mobile workflow",
+            "etaRange": "4-8 hours",
+            "confidence": "medium",
+            "realBlocker": "mobile fixture is not yet restored",
+            "productIncrement": {
+                "id": "pi-account-subscriptions",
+                "stage": "building",
+                "riskTier": "medium",
+                "demonstrationCriterion": "Open a Person and inspect subscriptions on desktop and mobile",
+                "nonGoals": ["billing-provider migration"],
+                "stories": [
+                    {"id": "profile", "title": "Inline subscriptions", "state": "integrated",
+                     "dependsOn": [], "riskContribution": "low"},
+                    {"id": "history", "title": "Purchase history", "state": "executing",
+                     "dependsOn": ["profile"], "riskContribution": "medium"},
+                ],
+            },
+        })
+        return payload
+
+    def test_publish_product_increment_and_customer_first_report(self):
+        self.base_project()
+        self.publish(self.increment_payload())
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["declared"]["productIncrement"]["stories"][1]["dependsOn"], ["profile"])
+        cp, _ = self.cli(STATUS, "report", "--project", "demo", "--format", "markdown")
+        body = cp.stdout
+        self.assertLess(body.index("What the customer will see"), body.index("Executing now"))
+        self.assertIn("Demonstrable now", body)
+        self.assertIn("**ETA / confidence:** 4-8 hours / medium", body)
+        self.assertIn("**One real blocker:** mobile fixture is not yet restored", body)
+
+    def test_legacy_v33_status_remains_valid_without_increment_fields(self):
+        self.base_project()
+        self.publish(self.executing_payload())
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["classification"], "executing")
+        self.assertIsNone(show["declared"]["productIncrement"])
+        cp, _ = self.cli(STATUS, "report", "--project", "demo", "--format", "markdown")
+        self.assertIn("legacy v3.3 snapshot", cp.stdout)
+
+    def test_product_increment_rejects_duplicate_unknown_self_and_cyclic_dependencies(self):
+        self.base_project()
+        cases = []
+        duplicate = self.increment_payload()
+        duplicate["productIncrement"]["stories"][1]["id"] = "profile"
+        cases.append((duplicate, "duplicate"))
+        unknown = self.increment_payload()
+        unknown["productIncrement"]["stories"][1]["dependsOn"] = ["missing"]
+        cases.append((unknown, "unknown"))
+        self_ref = self.increment_payload()
+        self_ref["productIncrement"]["stories"][1]["dependsOn"] = ["history"]
+        cases.append((self_ref, "itself"))
+        cyclic = self.increment_payload()
+        cyclic["productIncrement"]["stories"][0]["dependsOn"] = ["history"]
+        cases.append((cyclic, "cycle"))
+        for payload, message in cases:
+            cp, _ = self.publish(payload, ok=False)
+            self.assertIn(message, cp.stderr)
+
+    def test_product_increment_rejects_invalid_confidence_stage_and_unbounded_stories(self):
+        self.base_project()
+        bad = self.increment_payload(); bad["confidence"] = "certain"
+        cp, _ = self.publish(bad, ok=False); self.assertIn("confidence", cp.stderr)
+        bad = self.increment_payload(); bad["productIncrement"]["stage"] = "mysterious"
+        cp, _ = self.publish(bad, ok=False); self.assertIn("stage", cp.stderr)
+        bad = self.increment_payload()
+        bad["productIncrement"]["stories"] = [
+            {"id": f"s{n}", "title": f"Story {n}", "state": "planned", "dependsOn": []}
+            for n in range(9)]
+        cp, _ = self.publish(bad, ok=False); self.assertIn("1..8", cp.stderr)
 
     def test_invented_child_reference_fails_closed(self):
         self.base_project()

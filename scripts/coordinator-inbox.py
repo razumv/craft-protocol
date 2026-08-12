@@ -1,6 +1,6 @@
 #!/opt/homebrew/bin/python3
 # SPDX-License-Identifier: Apache-2.0
-"""Durable coordinator inbox for worker/auditor reports (Protocol v3.3.0).
+"""Durable coordinator inbox for worker/auditor reports (Protocol v3.4.0).
 
 Worker and auditor reports are written here as durable, coalesced runtime state
 instead of steering an active coordinator turn. A burst of identical or superseded
@@ -41,6 +41,9 @@ KINDS = {"progress", "candidate", "audit-verdict", "terminal-handoff", "blocker"
 # Only these unclaimed kinds wake a coordinator; progress/candidate remain coalesced.
 WAKING_KINDS = {"terminal-handoff", "audit-verdict", "blocker", "observer-terminal"}
 SENDER_ROLES = {"worker", "auditor"}
+FAILURE_CLASSES = {"admission-environment", "implementation-defect", "product-acceptance",
+                   "integration-release", "irreversible-high-risk"}
+FAILURE_KINDS = {"blocker", "terminal-handoff", "audit-verdict", "observer-terminal"}
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$")
 CLAIM_TTL_DEFAULT = int(os.environ.get("CRAFT_INBOX_CLAIM_TTL_SECONDS", "900"))
 DIGEST_LIMIT = int(os.environ.get("CRAFT_INBOX_DIGEST_LIMIT", "200"))
@@ -174,6 +177,12 @@ def cmd_submit(args: argparse.Namespace) -> int:
     attempt = valid_id(args.attempt, "attempt") if args.attempt else ""
     if args.kind not in KINDS:
         fail("unsupported report kind")
+    failure_class = args.failure_class
+    if failure_class is not None:
+        if args.kind not in FAILURE_KINDS:
+            fail("failure class is allowed only for blocker, terminal, verdict, or observer reports")
+        if failure_class not in FAILURE_CLASSES:
+            fail("unsupported failure class")
     subject = valid_text(args.subject, "subject")
     evidence = valid_evidence(args.evidence)
     revision_hint = args.revision if args.revision is not None else None
@@ -209,7 +218,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         key = event_key(project, args.generation, sender, work_unit, attempt, args.kind)
         path = item_path(project, key)
         existing = common.read_json(path)
-        fingerprint = payload_fingerprint(args.kind, subject, evidence, {})
+        fingerprint = payload_fingerprint(args.kind, subject, evidence, {"failureClass": failure_class})
         waking = args.kind in WAKING_KINDS
 
         if existing:
@@ -228,8 +237,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 fail("revision must be newer than the pending item")
             item = dict(existing)
             item.update({
-                "subject": subject, "evidence": evidence, "fingerprint": fingerprint,
-                "revision": revision, "state": "pending", "waking": waking,
+                "subject": subject, "evidence": evidence, "failureClass": failure_class,
+                "fingerprint": fingerprint, "revision": revision, "state": "pending", "waking": waking,
                 "updatedAt": now, "lastSubmittedAt": now,
                 "diagnosticsRevision": int(existing.get("diagnosticsRevision") or 0),
                 # A new fact detaches the item from any prior claim/ack snapshot.
@@ -243,7 +252,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 "coordinatorSessionId": coordinator, "coordinatorGeneration": args.generation,
                 "sender": sender, "senderRole": common.role_of(manifest_s),
                 "workUnit": work_unit, "attempt": attempt or None, "kind": args.kind,
-                "subject": subject, "evidence": evidence, "fingerprint": fingerprint,
+                "subject": subject, "evidence": evidence, "failureClass": failure_class,
+                "fingerprint": fingerprint,
                 "waking": waking, "revision": revision_hint if revision_hint is not None else 1,
                 "state": "pending", "submittedAt": now, "lastSubmittedAt": now, "updatedAt": now,
                 "diagnosticsRevision": 0,
@@ -511,7 +521,8 @@ def cmd_report(args: argparse.Namespace) -> int:
         reg_session, reg_generation = registry_generation(project)
         pending_waking = [
             {"eventKey": i.get("eventKey"), "kind": i.get("kind"), "sender": i.get("sender"),
-             "workUnit": i.get("workUnit"), "attempt": i.get("attempt"), "revision": i.get("revision"),
+             "workUnit": i.get("workUnit"), "attempt": i.get("attempt"),
+             "failureClass": i.get("failureClass"), "revision": i.get("revision"),
              "coordinatorGeneration": i.get("coordinatorGeneration")}
             for i in items
             if i.get("waking") and item_available(i, now) and not i.get("orphaned")
@@ -572,6 +583,7 @@ def parser() -> argparse.ArgumentParser:
         s.add_argument(f"--{name}", required=True)
     s.add_argument("--generation", type=int, required=True)
     s.add_argument("--attempt")
+    s.add_argument("--failure-class", choices=sorted(FAILURE_CLASSES))
     s.add_argument("--evidence", action="append", default=[])
     s.add_argument("--revision", type=int)
     s.add_argument("--apply", action="store_true")

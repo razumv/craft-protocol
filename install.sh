@@ -1,6 +1,6 @@
 #!/bin/zsh
 # SPDX-License-Identifier: Apache-2.0
-# Safe installer for Craft Agents orchestration protocol v3.3.0.
+# Safe installer for Craft Agents orchestration protocol v3.4.0.
 # Dry-run by default. Use --apply only after reviewing README.md.
 set -eu
 
@@ -23,7 +23,7 @@ SKILLS="$WORKSPACE/skills"
 RUNTIME="$CRAFT/runtime"
 LOGS="$CRAFT/logs"
 STAMP=$(date '+%Y%m%d-%H%M%S')
-BACKUP="$CRAFT/backups/orchestration-v3.3.0-$STAMP"
+BACKUP="$CRAFT/backups/orchestration-v3.4.0-$STAMP"
 PYTHON="${CRAFT_PYTHON:-/opt/homebrew/bin/python3}"
 [[ -x "$PYTHON" ]] || PYTHON=$(command -v python3)
 PLIST_NAME="com.craft-protocol.worker-watchdog.plist"
@@ -65,7 +65,7 @@ install_file() {
   fi
 }
 
-# FIRST safety mutation: restore the absolute kill switch before any v3.3.0
+# FIRST safety mutation: restore the absolute kill switch before any v3.4.0
 # script, skill, config, or launchd payload can be copied. Any later failure
 # therefore leaves admission disabled.
 if (( APPLY )); then
