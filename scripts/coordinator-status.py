@@ -53,6 +53,7 @@ LIST_LIMIT = 32
 CONFIDENCE_LEVELS = {"low", "medium", "high"}
 INCREMENT_STAGES = {"discovery", "building", "integrating", "accepting", "deploying", "demonstrating", "complete", "blocked"}
 RISK_TIERS = {"low", "medium", "high"}
+RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
 STORY_STATES = {"planned", "ready", "executing", "integrated", "accepted", "blocked", "failed", "deferred"}
 STALE_REVIEW_GRACE_SECONDS = int(os.environ.get("CRAFT_STATUS_REVIEW_GRACE_SECONDS", "900"))
 
@@ -469,8 +470,9 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
     non_goals = [] if raw_non_goals is None else raw_non_goals
     if not isinstance(non_goals, list) or len(non_goals) > MAX_INCREMENT_STORIES:
         fail(f"productIncrement.nonGoals must be a list of at most {MAX_INCREMENT_STORIES}")
-    if any(not isinstance(item, str) or not item.strip() for item in non_goals):
-        fail("productIncrement.nonGoals entries must be non-empty text")
+    if any(not isinstance(item, str) or not item.strip() or len(item) > TEXT_LIMIT
+           or any(ord(ch) < 32 and ch not in "\t\n" for ch in item) for item in non_goals):
+        fail("productIncrement.nonGoals entries must be bounded non-empty text")
     stories = value.get("stories") or []
     if not isinstance(stories, list) or not stories or len(stories) > MAX_INCREMENT_STORIES:
         fail(f"productIncrement.stories must contain 1..{MAX_INCREMENT_STORIES} stories")
@@ -520,6 +522,9 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
         visited.add(story_id)
     for story_id in sorted(graph):
         visit(story_id)
+    max_story_risk = max((RISK_ORDER[story["riskContribution"]] for story in normalized), default=0)
+    if RISK_ORDER[risk_tier] < max_story_risk:
+        fail("productIncrement.riskTier may not understate story riskContribution")
     return {"id": increment_id, "stage": stage, "riskTier": risk_tier,
             "demonstrationCriterion": demo, "nonGoals": non_goals, "stories": normalized}
 

@@ -445,6 +445,23 @@ class StatusTests(Base):
             cp, _ = self.publish(bad, ok=False); self.assertIn("nonGoals", cp.stderr)
             bad = self.increment_payload(); bad["productIncrement"]["stories"][1]["dependsOn"] = malformed
             cp, _ = self.publish(bad, ok=False); self.assertIn("dependsOn", cp.stderr)
+        for malformed_text in ("x" * 801, "bad\x01goal"):
+            bad = self.increment_payload(); bad["productIncrement"]["nonGoals"] = [malformed_text]
+            cp, _ = self.publish(bad, ok=False); self.assertIn("nonGoals", cp.stderr)
+
+    def test_product_increment_risk_tier_cannot_understate_story_contribution(self):
+        self.base_project()
+        for aggregate, contribution in (("low", "medium"), ("low", "high"), ("medium", "high")):
+            bad = self.increment_payload()
+            bad["productIncrement"]["riskTier"] = aggregate
+            bad["productIncrement"]["stories"][1]["riskContribution"] = contribution
+            cp, _ = self.publish(bad, ok=False)
+            self.assertIn("understate", cp.stderr)
+        valid = self.increment_payload()
+        valid["productIncrement"]["riskTier"] = "high"
+        valid["productIncrement"]["stories"][1]["riskContribution"] = "high"
+        _, published = self.publish(valid)
+        self.assertEqual(published["record"]["declared"]["productIncrement"]["riskTier"], "high")
 
     def test_invented_child_reference_fails_closed(self):
         self.base_project()
