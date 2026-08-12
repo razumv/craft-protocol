@@ -171,6 +171,22 @@ class InboxTests(Base):
         self.assertEqual(second["item"]["revision"], 1)
         self.assertEqual(second["item"]["diagnosticsRevision"], 1)
 
+    def test_v33_fingerprint_and_acknowledged_item_remain_idempotent_without_failure_class(self):
+        self.base_project()
+        kind, subject = "terminal-handoff", "legacy candidate"
+        _, first = self.submit(kind, subject)
+        self.assertNotIn("failureClass", first["item"])
+        _, claim = self.cli(INBOX, "claim", "--project", "demo", "--session", "coord1",
+                            "--generation", "2", "--apply")
+        revision = self.publish_ack_status()
+        self.cli(INBOX, "ack", "--project", "demo", "--session", "coord1", "--generation", "2",
+                 "--token", claim["token"], "--status-revision", str(revision), "--apply")
+        _, again = self.submit(kind, subject)
+        self.assertTrue(again["coalesced"])
+        self.assertEqual(again["item"]["revision"], 1)
+        self.assertEqual(again["item"]["state"], "acknowledged")
+        self.assertNotIn("failureClass", again["item"])
+
     def test_meaningful_revision_replaces_pending_payload(self):
         self.base_project()
         self.submit("progress", "50%")
@@ -418,6 +434,17 @@ class StatusTests(Base):
             {"id": f"s{n}", "title": f"Story {n}", "state": "planned", "dependsOn": []}
             for n in range(9)]
         cp, _ = self.publish(bad, ok=False); self.assertIn("1..8", cp.stderr)
+
+    def test_product_increment_rejects_oversized_customer_fields_and_falsy_non_lists(self):
+        self.base_project()
+        for key in ("demonstrableNow", "remainingOutcome", "etaRange", "realBlocker"):
+            bad = self.increment_payload(); bad[key] = "x" * 801
+            cp, _ = self.publish(bad, ok=False); self.assertIn(key, cp.stderr)
+        for malformed in ("", 0, {}):
+            bad = self.increment_payload(); bad["productIncrement"]["nonGoals"] = malformed
+            cp, _ = self.publish(bad, ok=False); self.assertIn("nonGoals", cp.stderr)
+            bad = self.increment_payload(); bad["productIncrement"]["stories"][1]["dependsOn"] = malformed
+            cp, _ = self.publish(bad, ok=False); self.assertIn("dependsOn", cp.stderr)
 
     def test_invented_child_reference_fails_closed(self):
         self.base_project()

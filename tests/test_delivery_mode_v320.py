@@ -103,6 +103,12 @@ class DeliveryModeV320Tests(unittest.TestCase):
         self.assertIn("real desktop/mobile/user workflow", skill)
         self.assertIn("does not spend product correction budget", spec)
 
+    def test_manifest_generator_covers_release_changelog(self):
+        generator = self.read("tools/generate-manifest.sh")
+        manifest = self.read("manifest.sha256")
+        self.assertIn("CHANGELOG.md", generator)
+        self.assertIn("  CHANGELOG.md", manifest)
+
     def test_research_disposition_accounts_for_all_129_items(self):
         research = self.read("docs/RESEARCH-DISPOSITION-v3.4.md")
         rows = [line for line in research.splitlines() if line.startswith("| ") and line.split("|")[1].strip().isdigit()]

@@ -72,7 +72,7 @@ if (( APPLY )); then
   mkdir -p "$RUNTIME"
   : > "$RUNTIME/self-healing.disabled"
   chmod 600 "$RUNTIME/self-healing.disabled"
-  echo "RESTORED KILL SWITCH $RUNTIME/self-healing.disabled before payload mutation"
+  echo "RESTORED KILL SWITCH $RUNTIME/self-healing.disabled before v3.4.0 payload mutation"
 fi
 
 for name in $files; do

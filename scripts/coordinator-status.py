@@ -446,7 +446,8 @@ def optional_text(payload: dict[str, Any], key: str) -> str | None:
     value = payload.get(key)
     if value is None:
         return None
-    if not isinstance(value, str) or not value.strip() or any(ord(c) < 32 and c not in "\t\n" for c in value):
+    if (not isinstance(value, str) or not value.strip() or len(value) > TEXT_LIMIT
+            or any(ord(c) < 32 and c not in "\t\n" for c in value)):
         fail(f"{key} must be bounded non-empty text or null")
     return value
 
@@ -464,7 +465,8 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
     if risk_tier not in RISK_TIERS:
         fail(f"productIncrement.riskTier must be one of {sorted(RISK_TIERS)}")
     demo = req_text(value, "demonstrationCriterion")
-    non_goals = value.get("nonGoals") or []
+    raw_non_goals = value.get("nonGoals")
+    non_goals = [] if raw_non_goals is None else raw_non_goals
     if not isinstance(non_goals, list) or len(non_goals) > MAX_INCREMENT_STORIES:
         fail(f"productIncrement.nonGoals must be a list of at most {MAX_INCREMENT_STORIES}")
     if any(not isinstance(item, str) or not item.strip() for item in non_goals):
@@ -488,7 +490,8 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
         risk = story.get("riskContribution", "low")
         if risk not in RISK_TIERS:
             fail(f"productIncrement story riskContribution must be one of {sorted(RISK_TIERS)}")
-        dependencies = story.get("dependsOn") or []
+        raw_dependencies = story.get("dependsOn")
+        dependencies = [] if raw_dependencies is None else raw_dependencies
         if (not isinstance(dependencies, list) or len(dependencies) > MAX_INCREMENT_STORIES
                 or any(not isinstance(dep, str) or not dep for dep in dependencies)):
             fail("productIncrement story dependsOn must be a bounded text list")

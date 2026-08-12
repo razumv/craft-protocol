@@ -218,7 +218,10 @@ def cmd_submit(args: argparse.Namespace) -> int:
         key = event_key(project, args.generation, sender, work_unit, attempt, args.kind)
         path = item_path(project, key)
         existing = common.read_json(path)
-        fingerprint = payload_fingerprint(args.kind, subject, evidence, {"failureClass": failure_class})
+        # Preserve the exact v3.3 fingerprint and stored shape when classification
+        # is absent. A JSON null here would spuriously revise/rewake legacy items.
+        fingerprint_extra = {"failureClass": failure_class} if failure_class is not None else {}
+        fingerprint = payload_fingerprint(args.kind, subject, evidence, fingerprint_extra)
         waking = args.kind in WAKING_KINDS
 
         if existing:
@@ -236,8 +239,12 @@ def cmd_submit(args: argparse.Namespace) -> int:
             if revision <= int(existing.get("revision") or 0):
                 fail("revision must be newer than the pending item")
             item = dict(existing)
+            if failure_class is None:
+                item.pop("failureClass", None)
+            else:
+                item["failureClass"] = failure_class
             item.update({
-                "subject": subject, "evidence": evidence, "failureClass": failure_class,
+                "subject": subject, "evidence": evidence,
                 "fingerprint": fingerprint, "revision": revision, "state": "pending", "waking": waking,
                 "updatedAt": now, "lastSubmittedAt": now,
                 "diagnosticsRevision": int(existing.get("diagnosticsRevision") or 0),
@@ -252,8 +259,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 "coordinatorSessionId": coordinator, "coordinatorGeneration": args.generation,
                 "sender": sender, "senderRole": common.role_of(manifest_s),
                 "workUnit": work_unit, "attempt": attempt or None, "kind": args.kind,
-                "subject": subject, "evidence": evidence, "failureClass": failure_class,
-                "fingerprint": fingerprint,
+                "subject": subject, "evidence": evidence, "fingerprint": fingerprint,
                 "waking": waking, "revision": revision_hint if revision_hint is not None else 1,
                 "state": "pending", "submittedAt": now, "lastSubmittedAt": now, "updatedAt": now,
                 "diagnosticsRevision": 0,
@@ -261,6 +267,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 "claimExpiresAt": None, "claimedRevision": None, "claimedStatusRevision": None,
                 "acknowledgedAt": None, "acknowledgedStatusRevision": None,
             }
+            if failure_class is not None:
+                item["failureClass"] = failure_class
         if args.apply:
             common.atomic_json(path, item)
     print(json.dumps({"applied": args.apply, "coalesced": bool(existing), "item": item}, ensure_ascii=False, indent=2))
