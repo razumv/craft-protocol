@@ -280,6 +280,15 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         self.assertEqual(state["targetKind"],"controller"); self.assertEqual(state["targetSessionId"],"controller")
         self.assertIn("RECOVERY ADMISSION",state["message"])
 
+    def test_worker_terminal_status_routes_to_controller_never_direct(self):
+        # The parked coordinator is deaf to queue delivery by definition, so this
+        # wake kind must always take the controller lane, never the direct tick.
+        self.registry()
+        self.incident(kind="coordinator-worker-terminal-status")
+        self.apply(); state=self.controller_state()
+        self.assertEqual(state["targetKind"],"controller")
+        self.assertFalse((self.runtime/"self-healing/coordinator-ticks").exists())
+
     def test_misbound_live_controller_does_not_block_valid_direct_tick(self):
         self.registry(lastHeartbeatAt=NOW-1_900_000,leaseExpiresAt=NOW+1_700_000)
         self.incident(kind="coordinator-session-error")
