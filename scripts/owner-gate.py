@@ -61,7 +61,20 @@ def cmd_create(args: argparse.Namespace) -> int:
 
 
 def cmd_hold(args: argparse.Namespace) -> int:
-    ns = argparse.Namespace(project=args.project, gate="project-hold", work_unit=None,
+    # An open project-wide hold is idempotent. A resolved RESUME is immutable
+    # history, so a repeated HOLD after resume must mint a fresh gate id instead
+    # of idempotently returning the resolved gate and silently not holding.
+    open_hold = next((g for g in all_gates(args.project)
+                      if g.get("state") == "open" and g.get("blockingScope") == "project"
+                      and str(g.get("gateId") or "").startswith("project-hold")), None)
+    if open_hold:
+        print(json.dumps({"ok": True, "idempotent": True, "gate": open_hold}, ensure_ascii=False, indent=2))
+        return 0
+    gate_id = "project-hold"
+    existing = common.read_json(gate_path(args.project, gate_id))
+    if existing and existing.get("state") == "resolved":
+        gate_id = f"project-hold-{common.now_ms()}"
+    ns = argparse.Namespace(project=args.project, gate=gate_id, work_unit=None,
         question=f"Project HOLD: {args.reason}", choices="RESUME", scope="project",
         safe_default="HOLD", evidence=args.evidence, owner_only_category="explicit-hold")
     return cmd_create(ns)
@@ -78,7 +91,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
             raise SystemExit("gate already resolved differently")
         if args.authority != "direct-owner": raise SystemExit("direct-owner authority required")
         if args.choice not in (value.get("choices") or []): raise SystemExit("choice is not allowed")
-        if value.get("gateId") == "project-hold" and args.choice != "RESUME": raise SystemExit("exact RESUME required")
+        if str(value.get("gateId") or "").startswith("project-hold") and args.choice != "RESUME": raise SystemExit("exact RESUME required")
         value.update({"state": "resolved", "choice": args.choice, "authority": args.authority,
                       "authorityEvidence": args.evidence, "resolvedAt": common.now_ms()})
         common.atomic_json(path, value)

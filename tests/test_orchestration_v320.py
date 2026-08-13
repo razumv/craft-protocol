@@ -78,10 +78,45 @@ class OrchestrationV320Test(unittest.TestCase):
         r["fallbackExpiresAt"]=0; (self.runtime/"coordinators/demo.json").write_text(json.dumps(r)); p=self.exec_tool("coordinator-registry.py","inspect","--project","demo",ok=False); self.assertIn("fallback-ttl-expired",p.stdout)
     def test_06_archived_owner_detected(self):
         m=self.manifest("c1"); self.claim(); m["isArchived"]=True; (self.sessions/"c1/session.jsonl").write_text(json.dumps(m)+"\n"); p=self.exec_tool("coordinator-registry.py","inspect","--project","demo",ok=False); self.assertIn("owner-not-live",p.stdout)
+    def test_06b_coordinator_in_worker_terminal_status_is_flagged(self):
+        # A coordinator parked in needs-review is deaf to queued admission wakes;
+        # validate must surface it as an issue instead of reporting healthy.
+        m=self.manifest("c1"); self.claim()
+        m["sessionStatus"]="needs-review"; (self.sessions/"c1/session.jsonl").write_text(json.dumps(m)+"\n")
+        p=self.exec_tool("coordinator-registry.py","inspect","--project","demo",ok=False)
+        self.assertIn("coordinator-worker-terminal-status:needs-review",p.stdout)
+        v=self.exec_tool("coordinator-registry.py","validate",ok=False)
+        self.assertEqual(v.returncode,2); self.assertIn("coordinator-worker-terminal-status",v.stdout)
+        # An intentionally parked HOLD project is not flagged for the same status.
+        row=json.loads((self.runtime/"coordinators/demo.json").read_text()); row["state"]="hold"
+        (self.runtime/"coordinators/demo.json").write_text(json.dumps(row))
+        p=self.exec_tool("coordinator-registry.py","inspect","--project","demo")
+        self.assertNotIn("coordinator-worker-terminal-status",p.stdout)
+
     def test_07_hold_blocks_spawn(self):
         self.exec_tool("owner-gate.py","hold","--project","gve","--reason","owner hold"); p=self.exec_tool("owner-gate.py","check","--project","gve","--action","spawn",ok=False); self.assertEqual(p.returncode,4)
     def test_08_hold_requires_exact_resume(self):
         self.exec_tool("owner-gate.py","hold","--project","gve","--reason","hold"); p=self.exec_tool("owner-gate.py","resolve","--project","gve","--gate","project-hold","--choice","GO","--authority","direct-owner","--evidence","msg",ok=False); self.assertNotEqual(p.returncode,0)
+    def test_08b_rehold_after_resume_creates_fresh_open_gate(self):
+        self.exec_tool("owner-gate.py","hold","--project","gve","--reason","first hold")
+        # An open hold is idempotent and never duplicated.
+        again=json.loads(self.exec_tool("owner-gate.py","hold","--project","gve","--reason","dup").stdout)
+        self.assertTrue(again.get("idempotent")); self.assertEqual(again["gate"]["gateId"],"project-hold")
+        self.exec_tool("owner-gate.py","resolve","--project","gve","--gate","project-hold","--choice","RESUME","--authority","direct-owner","--evidence","resume")
+        self.exec_tool("owner-gate.py","check","--project","gve","--action","spawn")
+        # A repeated HOLD after RESUME mints a fresh open gate instead of
+        # idempotently returning the resolved one and silently not holding.
+        rehold=json.loads(self.exec_tool("owner-gate.py","hold","--project","gve","--reason","second hold").stdout)
+        self.assertFalse(rehold.get("idempotent",False))
+        gate_id=rehold["gate"]["gateId"]
+        self.assertNotEqual(gate_id,"project-hold"); self.assertTrue(gate_id.startswith("project-hold"))
+        self.assertEqual(rehold["gate"]["state"],"open")
+        p=self.exec_tool("owner-gate.py","check","--project","gve","--action","spawn",ok=False); self.assertEqual(p.returncode,4)
+        # The generated hold gate keeps exact-RESUME semantics.
+        p=self.exec_tool("owner-gate.py","resolve","--project","gve","--gate",gate_id,"--choice","GO","--authority","direct-owner","--evidence","msg",ok=False)
+        self.assertNotEqual(p.returncode,0)
+        self.exec_tool("owner-gate.py","resolve","--project","gve","--gate",gate_id,"--choice","RESUME","--authority","direct-owner","--evidence","resume again")
+        self.exec_tool("owner-gate.py","check","--project","gve","--action","spawn")
     def test_09_gate_direct_owner_required(self):
         self.exec_tool("owner-gate.py","create","--project","demo","--gate","g1","--question","Q?","--choices","A,B","--owner-only-category","human-product-judgment-action","--scope","merge"); p=self.exec_tool("owner-gate.py","resolve","--project","demo","--gate","g1","--choice","A","--authority","coordinator","--evidence","relay",ok=False); self.assertNotEqual(p.returncode,0)
     def test_09b_technical_transition_cannot_create_owner_gate(self):

@@ -4,6 +4,13 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.2] — 2026-08-13
+
+### Re-hold and coordinator role-status detection
+
+- `owner-gate.py hold` after a resolved RESUME mints a fresh `project-hold-<ms>` gate instead of idempotently returning the immutable resolved gate and silently not holding; an already-open project-wide hold stays idempotent, and generated hold gates keep project-wide blocking and exact-RESUME semantics;
+- `coordinator-registry.py` inspect/validate flag an authoritative/rotating coordinator whose session sits in a worker-terminal status (`needs-review`/`done`) as `coordinator-worker-terminal-status`: such a session is deaf to queued admission wakes until a direct owner message — role drift observed in production on 2026-08-13; intentionally parked HOLD projects are not flagged.
+
 ## [3.4.1] — 2026-08-13
 
 ### Evidence-aware admission deadline
@@ -165,7 +172,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.1...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.2...HEAD
+[3.4.2]: https://github.com/razumv/craft-protocol/compare/v3.4.1...v3.4.2
 [3.4.1]: https://github.com/razumv/craft-protocol/compare/v3.4.0...v3.4.1
 [3.4.0]: https://github.com/razumv/craft-protocol/compare/v3.3.0...v3.4.0
 [3.3.0]: https://github.com/razumv/craft-protocol/compare/v3.2.0...v3.3.0
