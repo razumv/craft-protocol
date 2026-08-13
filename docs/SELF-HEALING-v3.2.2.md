@@ -135,6 +135,7 @@ Rules:
 5. An incident disappearing locally does not prove consumption. Inspection continues until the runtime receipt is consumed or blocked.
 6. Only runtime `consumed`, backed by a completed newer target turn, ends the cycle.
 7. If `isProcessing` exceeds `CRAFT_ADMISSION_RECOVERY_MIN_AGE_SECONDS` (default 1,800 seconds), Protocol calls guarded recovery once. Any later stuck processing generation in that cycle blocks without a second recovery. If an unconsumed envelope remains idle/not-processing through the deadline, it also blocks because there is no active processing turn eligible for recovery even though the durable generation remains numeric. The 479-minute production failure therefore cannot remain silently pending.
+   Since v3.4.1 the idle deadline is evidence-aware: when the inspected session completed at least one full turn after the receipt's `deliveredAt` (`lastFinalMessageAt > deliveredAt`), the cycle records deterministic liveness-proven consumption (`consumedVia: completed-turn-liveness`) instead of blocking. Ordered message processing means the injected wake reached the session; this covers busy-target consumption-attribution gaps and stale duplicate receipts from a recurring incident fingerprint. A target with no completed turn after delivery still blocks exactly as above.
 8. Schema-v2 `notified` state cannot be inferred safely and requires owner-reviewed reset while the kill switch remains present.
 
 ## Stable incident identity

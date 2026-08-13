@@ -70,7 +70,7 @@
     "processingAgeMs": null,
     "queueDepth": 0,
     "lastFinalMessageId": "assistant-final-a",
-    "lastFinalMessageAt": 1786437060000,
+    "lastFinalMessageAt": 1786428940000,
     "lastErrorMessageId": null,
     "lastErrorMessageAt": null
   },
@@ -110,7 +110,7 @@
       "processingAgeMs": null,
       "queueDepth": 0,
       "lastFinalMessageId": "assistant-final-a",
-      "lastFinalMessageAt": 1786437060000,
+      "lastFinalMessageAt": 1786428940000,
       "lastErrorMessageId": null,
       "lastErrorMessageAt": null
     }

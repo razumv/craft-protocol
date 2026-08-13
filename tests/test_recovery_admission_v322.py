@@ -409,6 +409,51 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         cp,_=self.apply(ok=False,env=later); self.assertEqual(cp.returncode,2)
         self.assertEqual(self.controller_state()["reason"],"pending-admission-not-processing-at-deadline")
 
+    def test_completed_turn_after_delivery_is_liveness_consumed_not_blocked(self):
+        # The runtime failed to attribute consumption on a busy target, but the
+        # session completed a full turn after delivery: the wake demonstrably
+        # reached it. Deadline must record liveness consumption, never block.
+        self.incident(); self.apply()
+        fake=self.fake(); fake["session"]["lastFinalMessageAt"]=NOW+5_000
+        self.put(self.fake_state,fake)
+        later=dict(self.env); later["CRAFT_TEST_NOW_MS"]=str(NOW+61_000)
+        cp,row=self.apply(env=later); self.assertEqual(cp.returncode,0)
+        state=self.controller_state()
+        self.assertEqual(state["phase"],"consumed")
+        self.assertEqual(state["consumedVia"],"completed-turn-liveness")
+        self.assertEqual(state["consumedAt"],NOW+5_000)
+        # Unchanged incident set never redelivers a liveness-consumed cycle.
+        again,_=self.apply(env=later); self.assertEqual(again.returncode,0)
+        self.assertEqual(len(self.records("deliver")),1)
+        self.assertEqual(self.controller_state()["phase"],"consumed")
+
+    def test_stale_duplicate_receipt_with_later_turn_is_liveness_consumed(self):
+        # A recurring incident fingerprint makes the runtime return the original
+        # delivery receipt, so the deadline is instantly exceeded. A final turn
+        # newer than that stale deliveredAt proves the target is live.
+        self.incident(); self.mutate_fake(crashAfterReceipt=True)
+        cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,75)
+        fake=self.fake(); fake["crashAfterReceipt"]=False
+        fake["session"]["lastFinalMessageAt"]=NOW+5_000
+        self.put(self.fake_state,fake)
+        later=dict(self.env); later["CRAFT_TEST_NOW_MS"]=str(NOW+61_000)
+        cp,_=self.apply(env=later); self.assertEqual(cp.returncode,0)
+        state=self.controller_state()
+        self.assertEqual(state["deliveredAt"],NOW)
+        self.assertEqual(state["phase"],"consumed")
+        self.assertEqual(state["consumedVia"],"completed-turn-liveness")
+        self.assertEqual(len(self.fake()["receipts"]),1)
+
+    def test_final_turn_before_delivery_still_blocks_at_deadline(self):
+        # lastFinalMessageAt older than the delivery proves nothing about the
+        # wake; the genuinely deaf target must still hard-block.
+        self.incident(); self.apply()
+        fake=self.fake(); fake["session"]["lastFinalMessageAt"]=NOW-1_000
+        self.put(self.fake_state,fake)
+        later=dict(self.env); later["CRAFT_TEST_NOW_MS"]=str(NOW+61_000)
+        cp,_=self.apply(ok=False,env=later); self.assertEqual(cp.returncode,2)
+        self.assertEqual(self.controller_state()["reason"],"pending-admission-not-processing-at-deadline")
+
     def test_unchanged_block_is_acknowledged_once_then_degraded_without_redelivery(self):
         self.incident(); self.apply(); later=dict(self.env); later["CRAFT_TEST_NOW_MS"]=str(NOW+61_000)
         first,_=self.apply(ok=False,env=later); self.assertEqual(first.returncode,2)

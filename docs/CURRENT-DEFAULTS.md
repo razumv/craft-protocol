@@ -105,6 +105,7 @@ Recovery transition:           previous generation must equal request; resulting
 Recovery CAS busy:              exit 75 retry; does not spend the single correction attempt
 Outstanding envelope:          one per target generation; meaningful incident changes coalesce in place
 Stuck processing deadline:     1800 seconds by default; one guarded recovery attempt, then blocked
+Idle deadline liveness (3.4.1): completed turn after deliveredAt → consumedVia completed-turn-liveness, not blocked
 Direct coordinator lane:       stale/current handoff/terminal wait and v3.3.0 inbox/status/commitment wakes; exact authoritative generation
 Expected runtime version:      required deployment configuration; no package default
 Expected runtime commit:       required deployment configuration; no package default
