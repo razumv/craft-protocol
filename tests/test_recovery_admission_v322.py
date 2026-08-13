@@ -297,6 +297,23 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         self.assertEqual(self.direct_state()["phase"],"blocked")
         self.assertIn("no longer authoritative",self.direct_state()["reason"])
 
+    def test_superseded_generation_block_is_replaced_by_new_generation_cycle(self):
+        self.registry(); self.incident(kind="coordinator-lease-stale",evidence={"generation":7})
+        self.apply(); self.registry(generation=8)
+        cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2)
+        self.assertEqual(self.direct_state()["phase"],"blocked")
+        # A fresh wake addressed to the new authoritative generation supersedes the
+        # dead generation's durable block instead of being walled off forever.
+        self.incident("i8",kind="coordinator-lease-stale",evidence={"generation":8})
+        self.apply()
+        state=self.direct_state()
+        self.assertEqual(str(state["targetGeneration"]),"8")
+        self.assertIn(state["phase"],{"pending-consumption","delivered"})
+        # Same-identity blocks keep acknowledge/stable-degraded semantics: only a
+        # target identity change may supersede, never a mere fingerprint change.
+        coordinator_delivers=[r for r in self.records("deliver") if "coordinator" in r]
+        self.assertEqual(len(coordinator_delivers),2)
+
     def test_hold_suppresses_scheduled_and_incident_direct_ticks(self):
         self.registry(state="hold",lastHeartbeatAt=NOW-2_000_000,leaseExpiresAt=NOW+1_000_000)
         self.incident(kind="coordinator-lease-stale",evidence={"generation":7})

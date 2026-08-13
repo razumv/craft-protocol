@@ -803,6 +803,14 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
         if apply:
             atomic_json(path, blocked)
         return 2, blocked
+    if (state and state.get("phase") == "blocked"
+            and not batch_matches_state(batch, state)):
+        # A durable block binds to its exact target identity/generation. Once the
+        # registry rotates to a new authoritative target, the dead generation's
+        # block must not wall off the successor's wake lane; supersede it with a
+        # fresh cycle for the current target. Same-identity blocks keep the full
+        # acknowledge/stable-degraded semantics below.
+        state = None
     if state and state.get("phase") == "blocked":
         # A hard block is durable and never auto-cleared or redelivered. The
         # first unchanged observation records an acknowledgement and remains a

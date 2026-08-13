@@ -4,6 +4,13 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.3] — 2026-08-13
+
+### Rotation adoption rebind and generation-superseded blocks
+
+- `worker-lease.py` now rebinds a child lease's `parentSessionId` to the coordinator registry's successor when the child is listed in an authoritative/rotating/hold registry's `activeChildren`: creation-time `parent-session::` labels permanently name the archived predecessor, which left adopted children unable to submit inbox reports and invisible to the successor's status synthesis after a rotation (observed live after the magicmarkets generation-7 rotation);
+- `recovery-admission.py` supersedes a durable blocked cycle whose target identity/generation no longer matches the current batch: a dead generation's block no longer walls off the successor's wake lane until a manual reset, while same-identity blocks keep the full acknowledge/stable-degraded semantics.
+
 ## [3.4.2] — 2026-08-13
 
 ### Re-hold and coordinator role-status detection
@@ -172,7 +179,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.2...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.3...HEAD
+[3.4.3]: https://github.com/razumv/craft-protocol/compare/v3.4.2...v3.4.3
 [3.4.2]: https://github.com/razumv/craft-protocol/compare/v3.4.1...v3.4.2
 [3.4.1]: https://github.com/razumv/craft-protocol/compare/v3.4.0...v3.4.1
 [3.4.0]: https://github.com/razumv/craft-protocol/compare/v3.3.0...v3.4.0

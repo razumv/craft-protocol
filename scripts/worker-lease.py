@@ -25,6 +25,7 @@ SESSIONS = Path(os.environ.get("CRAFT_SESSIONS", WORKSPACE / "sessions")).expand
 RUNTIME = Path(os.environ.get("CRAFT_RUNTIME", HOME / ".craft-agent/runtime")).expanduser()
 LEASES = RUNTIME / "worker-leases"
 JOBS = RUNTIME / "worker-jobs"
+COORDINATORS = RUNTIME / "coordinators"
 PID_DIR = Path(os.environ.get("CRAFT_PID_DIR", HOME / ".craft-agent/pids")).expanduser()
 LOCK = RUNTIME / "worker-leases.lock"
 SCHEMA = 1
@@ -174,6 +175,27 @@ def process_cpu_seconds(raw: Any) -> float:
         return 0.0
 
 
+def registry_adopted_parent(session_id: str) -> str | None:
+    """The coordinator registry is machine truth for post-rotation ownership: a
+    two-phase transfer lists adopted children on the successor while creation-time
+    `parent-session::` labels keep naming the archived predecessor forever. Without
+    this rebind, adopted children cannot submit inbox reports and are invisible to
+    the successor's status synthesis."""
+    try:
+        paths = sorted(COORDINATORS.glob("*.json"))
+    except OSError:
+        return None
+    for path in paths:
+        row = read_json(path)
+        if not row or row.get("state") not in {"authoritative", "rotating", "hold"}:
+            continue
+        if session_id in (row.get("activeChildren") or []):
+            owner = str(row.get("coordinatorSessionId") or "")
+            if owner and owner != session_id:
+                return owner
+    return None
+
+
 def lease_path(session_id: str) -> Path:
     return LEASES / f"{session_id}.json"
 
@@ -194,7 +216,8 @@ def lease_from_manifest(manifest: dict[str, Any], state: str = "starting") -> di
     return {
         "schemaVersion": SCHEMA,
         "sessionId": sid,
-        "parentSessionId": label_value(manifest, "parent-session::") or manifest.get("parentSessionId"),
+        "parentSessionId": (registry_adopted_parent(sid) or label_value(manifest, "parent-session::")
+                            or manifest.get("parentSessionId")),
         "role": role_of(manifest),
         "workUnit": label_value(manifest, "work-unit::"),
         "attempt": label_value(manifest, "attempt::"),
@@ -448,7 +471,8 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             old = lease.get("state")
             new = classify(lease, manifest, now_ms())
             lease["state"] = new
-            lease["parentSessionId"] = label_value(manifest, "parent-session::") or manifest.get("parentSessionId")
+            lease["parentSessionId"] = (registry_adopted_parent(sid) or label_value(manifest, "parent-session::")
+                                        or manifest.get("parentSessionId"))
             lease["workUnit"] = label_value(manifest, "work-unit::")
             lease["attempt"] = label_value(manifest, "attempt::")
             lease["worktree"] = expand(manifest.get("workingDirectory") or manifest.get("sdkCwd"))
