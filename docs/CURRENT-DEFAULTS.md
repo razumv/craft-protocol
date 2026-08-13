@@ -45,6 +45,7 @@ Observable-job threshold:      expected runtime >10 minutes
 Heartbeat interval:            10–15 minutes, internal lease only
 Healthy evidence window:       900 seconds
 Stalled evidence threshold:    1800 seconds
+Progress CPU source (3.4.4):   whole descendant process tree of the observable job, not the direct child only
 Infrastructure detour:         1 safe attempt or 20 minutes
 Correction cycles:             1
 Second acceptance failure:     exact escalation; no automatic attempt N+1
