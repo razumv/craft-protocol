@@ -4,6 +4,13 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.10] — 2026-08-14
+
+### Owner-gate board bridge
+
+- add `owner-gate-board.py`: a deterministic operator-side bridge that mirrors every open owner gate to one Craft session card (`🚦 <project> · <gateId>`, question and exact choices in the card notes) and resolves the gate when the owner types exactly one of its choices into the card — resolution goes through `owner-gate.py resolve` with `direct-owner` authority and the owner's message as auditable evidence; ambiguous or unrecognized replies never resolve, project HOLD cards accept only the exact `RESUME`, gates resolved elsewhere complete and archive their card on the next pass;
+- the bridge is a projection, not a second decision surface: no LLM participates, the gate registry stays the single source of truth, and an optional launchd template (`config/launchd.gate-board.template.plist`) runs the sync on a 120-second interval.
+
 ## [3.4.9] — 2026-08-14
 
 ### Version-marker consistency
@@ -225,7 +232,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.9...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.10...HEAD
+[3.4.10]: https://github.com/razumv/craft-protocol/compare/v3.4.9...v3.4.10
 [3.4.9]: https://github.com/razumv/craft-protocol/compare/v3.4.8...v3.4.9
 [3.4.8]: https://github.com/razumv/craft-protocol/compare/v3.4.7...v3.4.8
 [3.4.7]: https://github.com/razumv/craft-protocol/compare/v3.4.6...v3.4.7

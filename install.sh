@@ -1,6 +1,6 @@
 #!/bin/zsh
 # SPDX-License-Identifier: Apache-2.0
-# Safe installer for Craft Agents orchestration protocol v3.4.9.
+# Safe installer for Craft Agents orchestration protocol v3.4.10.
 # Dry-run by default. Use --apply only after reviewing README.md.
 set -eu
 
@@ -23,7 +23,7 @@ SKILLS="$WORKSPACE/skills"
 RUNTIME="$CRAFT/runtime"
 LOGS="$CRAFT/logs"
 STAMP=$(date '+%Y%m%d-%H%M%S')
-BACKUP="$CRAFT/backups/orchestration-v3.4.9-$STAMP"
+BACKUP="$CRAFT/backups/orchestration-v3.4.10-$STAMP"
 PYTHON="${CRAFT_PYTHON:-/opt/homebrew/bin/python3}"
 [[ -x "$PYTHON" ]] || PYTHON=$(command -v python3)
 PLIST_NAME="com.craft-protocol.worker-watchdog.plist"
@@ -34,7 +34,7 @@ files=(
   owner-gate.py recovery-ledger.py completion-certificate.py recovery-incident.py
   worker-lease.py observable-job.py external-wait.py worker-watchdog.py post-archive-reaper.py
   controller-harness.py recovery-admission.py
-  coordinator-inbox.py coordinator-status.py coordinator-commitment.py
+  coordinator-inbox.py coordinator-status.py coordinator-commitment.py owner-gate-board.py
   scan-reapable-workers.py watchdog-cron.sh recovery-admission-cron.sh coordinator-kickoff.md
 )
 
@@ -72,7 +72,7 @@ if (( APPLY )); then
   mkdir -p "$RUNTIME"
   : > "$RUNTIME/self-healing.disabled"
   chmod 600 "$RUNTIME/self-healing.disabled"
-  echo "RESTORED KILL SWITCH $RUNTIME/self-healing.disabled before v3.4.0 payload mutation"
+  echo "RESTORED KILL SWITCH $RUNTIME/self-healing.disabled before payload mutation"
 fi
 
 for name in $files; do
