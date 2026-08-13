@@ -1,10 +1,10 @@
-# Craft Agents Multi-Agent Orchestration Protocol v3.3.0 — Complete Standalone Guide
+# Craft Agents Multi-Agent Orchestration Protocol v3.4.0 — Complete Standalone Guide
 
 [![Protocol tests](https://github.com/razumv/craft-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/razumv/craft-protocol/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-**Snapshot:** 2026-08-11 08:50 Europe/Warsaw
+**Snapshot:** 2026-08-12 23:07 Europe/Warsaw
 **Audience:** operators and contributors building safer coordinator/worker/auditor control planes with Craft Agents.
 **Purpose:** deliver owner-requested product outcomes through autonomous project coordinators while preserving work, preventing split-brain, detecting stalls deterministically, gating irreversible actions, and using evidence as bounded acceptance rather than work for its own sake.
 
@@ -20,7 +20,7 @@ cd craft-protocol
 ./install.sh          # dry-run; no files changed
 ```
 
-Install/start a separately reviewed capability-v2 Craft runtime first. The v3.3.0 production-tested identity is `0.11.4-admission.87951ae` / `87951ae640df64d00534a54dce9b5e8b5922d27c` (including queue-only busy coordinator and recovery-controller delivery), then review the Protocol plan and use `./install.sh --apply`. The Protocol installer restores the kill switch before its first payload copy. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. Self-healing scheduler automations ship permanently disabled. Protocol v3.2.2 requires authenticated admission capability v2 with exact runtime version/commit pinning, durable delivery inspection, and one guarded recovery CAS. Outstanding messages are coalesced until runtime-proven consumption; plain `queued` is never success. Routine stale/current-handoff/terminal-wait events go directly to the exact authoritative coordinator generation, while complex or destructive recovery remains controller-bound/fail-closed. Keep the kill switch present until the explicit workspace ID, expected runtime version/commit, and owner-only server token are configured; review [the v3.2.2 admission guide](docs/SELF-HEALING-v3.2.2.md). Protocol v3.3.0 adds, on top of that unchanged admission lane, a durable coordinator inbox, a per-project product-status snapshot with an owner-facing aggregate report, and observer-bound commitments so report storms cannot extend a coordinator turn and every future wait has a durable observer; review [the v3.3.0 coordinator inbox guide](docs/PROTOCOL-v3.3.md).
+Install/start a separately reviewed capability-v2 Craft runtime first. The v3.3.0 production-tested identity is `0.11.4-admission.87951ae` / `87951ae640df64d00534a54dce9b5e8b5922d27c` (including queue-only busy coordinator and recovery-controller delivery), then review the Protocol plan and use `./install.sh --apply`. The Protocol installer restores the kill switch before its first payload copy. Merge `config/labels.config.json` manually rather than replacing an existing label configuration. Self-healing scheduler automations ship permanently disabled. Protocol v3.2.2 requires authenticated admission capability v2 with exact runtime version/commit pinning, durable delivery inspection, and one guarded recovery CAS. Outstanding messages are coalesced until runtime-proven consumption; plain `queued` is never success. Routine stale/current-handoff/terminal-wait events go directly to the exact authoritative coordinator generation, while complex or destructive recovery remains controller-bound/fail-closed. Keep the kill switch present until the explicit workspace ID, expected runtime version/commit, and owner-only server token are configured; review [the v3.2.2 admission guide](docs/SELF-HEALING-v3.2.2.md). Protocol v3.3.0 adds, on top of that unchanged admission lane, a durable coordinator inbox, a per-project product-status snapshot with an owner-facing aggregate report, and observer-bound commitments so report storms cannot extend a coordinator turn and every future wait has a durable observer; review [the v3.3.0 coordinator inbox guide](docs/PROTOCOL-v3.3.md). Protocol v3.4.0 reuses those primitives and changes the delivery unit to a Product Increment: a bounded story DAG, one integrated candidate, batch CI/deploy, risk-boundary acceptance, classified failures, a real-workflow demonstration, and customer-first owner reporting; review [Product Increments v3.4](docs/PRODUCT-INCREMENTS-v3.4.md). No runtime server upgrade is required beyond the production-tested v3.3 capability-v2 runtime.
 
 ---
 
@@ -78,16 +78,19 @@ Chat claims, silence, status names, and repeated CI polling are not authoritativ
 5. A successor adopts live attempts; it never duplicates them without evidence of terminal failure.
 6. Workers and auditors use `permissionMode: allow-all`; read-only auditing is a behavioral mandate, not Explore mode.
 7. Routine work does not call `SubmitPlan`; it is used only when the owner explicitly requests plan review in that exact session.
-8. Default delivery WIP: one primary visible outcome with **1 worker + risk-tiered acceptance**; absolute ceiling remains **2 workers + 1 auditor per project** and **1 worker + 1 auditor per work-unit**.
-9. Only one global heavy job runs at once.
-10. No audit-of-audit. One focused acceptance failure permits one exact correction and one final re-acceptance; a second failure escalates instead of spawning attempt N+1.
-11. Tests, reports, gates, and certificates verify a candidate; they are not independent indefinite product work.
-12. No irreversible product action without direct owner authority or an exact standing-authority match.
-13. A project HOLD blocks spawn, implementation, merge, and closure until exact direct-owner `RESUME`.
-14. Low-risk reversible work uses coordinator review + scoped CI; Medium/High work retains one focused independent audit and exact certificate gates where required.
-15. Session archive comes **before** guarded harness reaping.
-16. A shared cwd or unknown PID is a hard cleanup refusal.
-17. Coordinators do not send routine updates to the owner-facing infrastructure session, and that session does not acknowledge or poll them without owner request.
+8. Default delivery WIP: one primary **Product Increment**—normally 3–8 coherent stories, but one story is valid when complete—with at most 2 disjoint lightweight story lanes and one integrated candidate.
+9. Only one global heavy job runs at once by default; bounded resource-aware exceptions require explicit authority.
+10. Run scoped checks per story, then one batch CI/deploy and risk-tiered acceptance at the integrated increment boundary; Low risk has no auditor by default.
+11. No audit-of-audit. One product-acceptance failure permits one exact correction and one final re-acceptance; a second or repeated same-root failure escalates instead of spawning attempt N+1.
+12. Admission/environment failure preserves evidence and does not spend product correction budget.
+13. Tests, reports, gates, and certificates verify a candidate; they are not independent indefinite product work.
+14. No irreversible product action without direct owner authority or an exact standing-authority match.
+15. A project HOLD blocks spawn, implementation, merge, and closure until exact direct-owner `RESUME`.
+16. UI completion requires evidence from the real desktop/mobile/user workflow; unit/DOM checks alone are insufficient.
+17. Session archive comes **before** guarded harness reaping.
+18. A shared cwd or unknown PID is a hard cleanup refusal.
+19. Coordinators do not send routine updates to the owner-facing infrastructure session, and that session does not acknowledge or poll them without owner request.
+20. When the owner asks for status, lead with customer outcome, demonstrable workflow, remaining work, ETA/confidence and one blocker; PR/SHA/CI/session/audit details are secondary evidence only.
 
 ---
 
@@ -556,11 +559,14 @@ No terminal handoff until work is clean and remotely preserved.
   --work-unit <unit> \
   --question "Decision question" \
   --choices A,B,C \
+  --owner-only-category human-product-judgment-action \
   --scope implement \
   --safe-default HOLD
 ```
 
 Scopes: `project`, `work-unit`, `spawn`, `implement`, `merge`, `close`.
+
+Every new non-HOLD gate requires a machine-validated owner-only category. Technical PASS-to-next-stage transitions, first CI/audit failure, reversible correction, merge/readback, and ordinary already-authorized deploy are not valid gate categories and must continue autonomously. Existing stored gates remain readable for compatibility.
 
 An unscoped non-project decision does not block unrelated explicit work units. Project-wide blocking must use `scope=project` or the project HOLD gate.
 

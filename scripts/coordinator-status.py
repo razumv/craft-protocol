@@ -1,11 +1,12 @@
 #!/opt/homebrew/bin/python3
 # SPDX-License-Identifier: Apache-2.0
-"""Durable product-status snapshot for autonomous coordinators (Protocol v3.3.0).
+"""Durable product-increment status for autonomous coordinators (Protocol v3.4.0).
 
-A coordinator publishes a declarative product-status snapshot: objective, current
-phase, completed outcomes, current focus, up to three ordered next actions (each
-with a trigger, required evidence, and success/failure branch), and its next review
-time. Everything else in a report — coordinator lease health, active/terminal worker
+A coordinator publishes a declarative product-status snapshot: customer-visible
+objective, what is demonstrable now, remaining outcome, ETA/confidence, one real
+blocker, a bounded dependency-valid Product Increment, current phase, completed
+outcomes, current focus, up to three ordered next actions, and its next review time.
+Everything else in a report — coordinator lease health, active/terminal worker
 leases, external waits, owner gates, inbox pressure, latest immutable candidate/audit
 evidence, freshness, and contradictions — is synthesized independently from runtime
 state and cannot be caller-invented.
@@ -46,8 +47,14 @@ ACTIVE_COMMITMENT_STATES = {"registered", "observing", "overdue", "ready"}
 CLASSIFICATIONS = {"verified", "executing", "waiting-observed", "blocked", "stale", "contradictory"}
 CRED_MARKERS = ("authorization:", "bearer ", "token=", "api_key=", "apikey=", "secret=", "password=", "-----begin")
 MAX_ACTIONS = 3
+MAX_INCREMENT_STORIES = 8
 TEXT_LIMIT = 800
 LIST_LIMIT = 32
+CONFIDENCE_LEVELS = {"low", "medium", "high"}
+INCREMENT_STAGES = {"discovery", "building", "integrating", "accepting", "deploying", "demonstrating", "complete", "blocked"}
+RISK_TIERS = {"low", "medium", "high"}
+RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
+STORY_STATES = {"planned", "ready", "executing", "integrated", "accepted", "blocked", "failed", "deferred"}
 STALE_REVIEW_GRACE_SECONDS = int(os.environ.get("CRAFT_STATUS_REVIEW_GRACE_SECONDS", "900"))
 
 
@@ -434,6 +441,165 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
                               or (item.get("kind") == "terminal-handoff" and bool(item.get("evidence"))))
         if declared.get("phase") == "complete" and not verification_grade:
             fail(f"completed outcome evidence is not verification-grade: {ref}")
+    increment = declared.get("productIncrement") or {}
+    completion = increment.get("completionEvidence") or {}
+    if increment.get("stage") == "complete":
+        bound: dict[str, dict[str, Any]] = {}
+        for key, binding in completion.items():
+            event_key = str(binding.get("eventKey") or "")
+            item = inbox_items.get(event_key)
+            if not item:
+                fail(f"Product Increment completion evidence is not observed in this generation: {key}={event_key}")
+            if (exact_int(item.get("revision"), 0) != binding.get("revision")
+                    or item.get("fingerprint") != binding.get("fingerprint")):
+                fail(f"Product Increment completion evidence immutable binding mismatch: {key}={event_key}")
+            if not item.get("evidence"):
+                fail(f"Product Increment completion evidence has no evidence payload: {key}={event_key}")
+            bound[key] = item
+        if bound["integratedCandidateRef"].get("kind") != "terminal-handoff":
+            fail("integratedCandidateRef must reference a terminal-handoff")
+        acceptance_kind = bound["acceptanceRef"].get("kind")
+        if increment.get("riskTier") in {"medium", "high"} and acceptance_kind != "audit-verdict":
+            fail("Medium/High Product Increment acceptanceRef must reference an audit-verdict")
+        if acceptance_kind == "audit-verdict" and bound["acceptanceRef"].get("senderRole") != "auditor":
+            fail("audit-verdict acceptanceRef must be authored by an auditor")
+        if acceptance_kind not in {"audit-verdict", "terminal-handoff"}:
+            fail("acceptanceRef must reference a verification-grade acceptance report")
+        release = bound["releaseReadbackRef"]
+        if release.get("kind") != "observer-terminal":
+            fail("releaseReadbackRef must reference an observer-terminal receipt")
+        release_waits = [wait for wait in project_waits(project, coordinator)
+                         if wait.get("watcherSessionId") == release.get("sender")
+                         and wait.get("workUnit") == release.get("workUnit")
+                         and wait.get("state") in {"terminal", "deadline", "cleared"}]
+        if len(release_waits) != 1:
+            fail("releaseReadbackRef must retain one exact terminal external-wait provenance binding")
+        demonstration = bound["demonstrationRef"]
+        if demonstration.get("kind") not in {"terminal-handoff", "observer-terminal"}:
+            fail("demonstrationRef must reference a terminal real-workflow report")
+        criterion = str(increment.get("demonstrationCriterion") or "").strip()
+        evidence_text = "\n".join([str(demonstration.get("subject") or ""),
+                                   *[str(item) for item in demonstration.get("evidence") or []]])
+        if criterion not in evidence_text:
+            fail("demonstrationRef evidence must include the exact demonstrationCriterion")
+
+
+def optional_text(payload: dict[str, Any], key: str) -> str | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if (not isinstance(value, str) or not value.strip() or len(value) > TEXT_LIMIT
+            or any(ord(c) < 32 and c not in "\t\n" for c in value)):
+        fail(f"{key} must be bounded non-empty text or null")
+    return value
+
+
+def normalize_increment(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        fail("productIncrement must be an object or null")
+    increment_id = req_text(value, "id")
+    stage = value.get("stage")
+    if stage not in INCREMENT_STAGES:
+        fail(f"productIncrement.stage must be one of {sorted(INCREMENT_STAGES)}")
+    risk_tier = value.get("riskTier")
+    if risk_tier not in RISK_TIERS:
+        fail(f"productIncrement.riskTier must be one of {sorted(RISK_TIERS)}")
+    demo = req_text(value, "demonstrationCriterion")
+    raw_non_goals = value.get("nonGoals")
+    non_goals = [] if raw_non_goals is None else raw_non_goals
+    if not isinstance(non_goals, list) or len(non_goals) > MAX_INCREMENT_STORIES:
+        fail(f"productIncrement.nonGoals must be a list of at most {MAX_INCREMENT_STORIES}")
+    if any(not isinstance(item, str) or not item.strip() or len(item) > TEXT_LIMIT
+           or any(ord(ch) < 32 and ch not in "\t\n" for ch in item) for item in non_goals):
+        fail("productIncrement.nonGoals entries must be bounded non-empty text")
+    stories = value.get("stories") or []
+    if not isinstance(stories, list) or not stories or len(stories) > MAX_INCREMENT_STORIES:
+        fail(f"productIncrement.stories must contain 1..{MAX_INCREMENT_STORIES} stories")
+    normalized: list[dict[str, Any]] = []
+    story_ids: set[str] = set()
+    for story in stories:
+        if not isinstance(story, dict):
+            fail("each productIncrement story must be an object")
+        story_id = req_text(story, "id")
+        if len(story_id) > 128 or story_id in story_ids:
+            fail(f"duplicate or invalid productIncrement story id: {story_id}")
+        story_ids.add(story_id)
+        title = req_text(story, "title")
+        state = story.get("state")
+        if state not in STORY_STATES:
+            fail(f"productIncrement story state must be one of {sorted(STORY_STATES)}")
+        risk = story.get("riskContribution", "low")
+        if risk not in RISK_TIERS:
+            fail(f"productIncrement story riskContribution must be one of {sorted(RISK_TIERS)}")
+        raw_dependencies = story.get("dependsOn")
+        dependencies = [] if raw_dependencies is None else raw_dependencies
+        if (not isinstance(dependencies, list) or len(dependencies) > MAX_INCREMENT_STORIES
+                or any(not isinstance(dep, str) or not dep for dep in dependencies)):
+            fail("productIncrement story dependsOn must be a bounded text list")
+        if len(set(dependencies)) != len(dependencies):
+            fail(f"duplicate dependency in productIncrement story: {story_id}")
+        normalized.append({"id": story_id, "title": title, "state": state,
+                           "dependsOn": dependencies, "riskContribution": risk})
+    graph = {story["id"]: story["dependsOn"] for story in normalized}
+    for story_id, dependencies in graph.items():
+        for dep in dependencies:
+            if dep == story_id:
+                fail(f"productIncrement story may not depend on itself: {story_id}")
+            if dep not in story_ids:
+                fail(f"unknown productIncrement dependency: {story_id} -> {dep}")
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    def visit(story_id: str) -> None:
+        if story_id in visiting:
+            fail(f"productIncrement dependency cycle detected at: {story_id}")
+        if story_id in visited:
+            return
+        visiting.add(story_id)
+        for dep in graph[story_id]:
+            visit(dep)
+        visiting.remove(story_id)
+        visited.add(story_id)
+    for story_id in sorted(graph):
+        visit(story_id)
+    max_story_risk = max((RISK_ORDER[story["riskContribution"]] for story in normalized), default=0)
+    if RISK_ORDER[risk_tier] < max_story_risk:
+        fail("productIncrement.riskTier may not understate story riskContribution")
+    raw_completion = value.get("completionEvidence")
+    completion: dict[str, dict[str, Any]] | None = None
+    if raw_completion is not None:
+        if not isinstance(raw_completion, dict) or set(raw_completion) != {
+                "integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"}:
+            fail("productIncrement.completionEvidence must contain exactly four evidence bindings")
+        completion = {}
+        for key in ("integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"):
+            binding = raw_completion.get(key)
+            if not isinstance(binding, dict) or set(binding) != {"eventKey", "revision", "fingerprint"}:
+                fail(f"productIncrement.completionEvidence.{key} must bind eventKey, revision, and fingerprint")
+            event_key = binding.get("eventKey")
+            fingerprint = binding.get("fingerprint")
+            revision = binding.get("revision")
+            if (not isinstance(event_key, str) or not event_key or len(event_key) > 128
+                    or any(ord(ch) < 32 for ch in event_key)):
+                fail(f"productIncrement.completionEvidence.{key}.eventKey must be bounded text")
+            if (not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint)):
+                fail(f"productIncrement.completionEvidence.{key}.fingerprint must be SHA-256 hex")
+            if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+                fail(f"productIncrement.completionEvidence.{key}.revision must be a positive integer")
+            completion[key] = {"eventKey": event_key, "revision": revision, "fingerprint": fingerprint}
+        if len({binding["eventKey"] for binding in completion.values()}) != 4:
+            fail("productIncrement.completionEvidence event keys must be distinct")
+    if stage == "complete":
+        if any(story["state"] != "accepted" for story in normalized):
+            fail("complete Product Increment requires every story to be accepted")
+        if completion is None:
+            fail("complete Product Increment requires completionEvidence")
+    elif completion is not None:
+        fail("productIncrement.completionEvidence is allowed only at stage complete")
+    return {"id": increment_id, "stage": stage, "riskTier": risk_tier,
+            "demonstrationCriterion": demo, "nonGoals": non_goals, "stories": normalized,
+            "completionEvidence": completion}
 
 
 def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
@@ -441,12 +607,24 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
         fail("declared status payload must be a JSON object")
     scan_secret(payload, "status")
     objective = req_text(payload, "objective")
+    demonstrable_now = optional_text(payload, "demonstrableNow")
+    remaining_outcome = optional_text(payload, "remainingOutcome")
+    eta_range = optional_text(payload, "etaRange")
+    real_blocker = optional_text(payload, "realBlocker")
+    confidence = payload.get("confidence")
+    if confidence is not None and confidence not in CONFIDENCE_LEVELS:
+        fail(f"confidence must be one of {sorted(CONFIDENCE_LEVELS)} or null")
+    product_increment = normalize_increment(payload.get("productIncrement"))
     current_focus = payload.get("currentFocus")
     if current_focus is not None and not isinstance(current_focus, str):
         fail("currentFocus must be text or null")
     phase = payload.get("phase")
     if phase not in PHASES:
         fail(f"phase must be one of {sorted(PHASES)}")
+    if product_increment is not None:
+        increment_complete = product_increment["stage"] == "complete"
+        if (phase == "complete") != increment_complete:
+            fail("Product Increment stage complete and coordinator phase complete must match")
     actions = payload.get("nextActions") or []
     if not isinstance(actions, list) or len(actions) > MAX_ACTIONS:
         fail(f"nextActions must be a list of at most {MAX_ACTIONS}")
@@ -495,7 +673,11 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
             fail(f"{key} entries must be bounded non-empty text")
         normalized_refs[key] = refs
     return {
-        "objective": objective, "phase": phase, "currentFocus": current_focus,
+        "objective": objective, "demonstrableNow": demonstrable_now,
+        "remainingOutcome": remaining_outcome, "etaRange": eta_range,
+        "confidence": confidence, "realBlocker": real_blocker,
+        "productIncrement": product_increment,
+        "phase": phase, "currentFocus": current_focus,
         "completedOutcomes": normalized_completed, "nextActions": norm_actions,
         "childRefs": normalized_refs["childRefs"], "waitRefs": normalized_refs["waitRefs"],
         "gateRefs": normalized_refs["gateRefs"], "blockerRefs": normalized_refs["blockerRefs"],
@@ -537,6 +719,24 @@ def cmd_publish(args: argparse.Namespace) -> int:
                       if commitments.get(r, {}).get("state") in ACTIVE_COMMITMENT_STATES]
             if not active:
                 fail("a waiting phase requires at least one active observable commitment reference")
+        if declared["phase"] == "blocked":
+            open_gate_ids = {g.get("gateId") for g in project_gates(project) if g.get("state") == "open"}
+            open_gate_refs = [r for r in declared["gateRefs"] + declared["blockerRefs"]
+                              if r in open_gate_ids]
+            commitments = {c.get("commitmentId"): c for c in project_commitments(project)
+                           if exact_generation(c.get("generation")) == args.generation}
+            active = [r for r in declared["commitmentRefs"]
+                      if commitments.get(r, {}).get("state") in ACTIVE_COMMITMENT_STATES]
+            if not open_gate_refs and not active:
+                fail("a blocked phase requires an open owner-gate reference or an active observable "
+                     "commitment; reversible technical work must continue autonomously instead of "
+                     "publishing a prose blocker")
+        if declared["phase"] == "hold":
+            holds = [g for g in project_gates(project) if g.get("state") == "open"
+                     and (g.get("gateId") == "project-hold"
+                          or g.get("ownerOnlyCategory") == "explicit-hold")]
+            if not holds:
+                fail("a hold phase requires an open explicit-hold owner gate; a coordinator may not self-hold")
         prior_path = STATUS / f"{project}.json"
         prior_raw = common.read_json(prior_path)
         prior = object_or_none(prior_raw)
@@ -631,8 +831,20 @@ def markdown_report(reports: list[dict[str, Any]], now: int) -> str:
         synth = report["synthesized"]
         lines.append(f"## {report['project']} — `{report['classification']}`")
         lines.append("")
-        lines.append(f"- **Product objective:** {declared.get('objective') or '_not published_'}")
-        lines.append(f"- **Current phase / outcome:** {declared.get('phase') or 'unknown'} — {declared.get('currentFocus') or 'n/a'}")
+        lines.append(f"- **What the customer will see:** {declared.get('objective') or '_not published_'}")
+        lines.append(f"- **Demonstrable now:** {declared.get('demonstrableNow') or '_not published_'}")
+        lines.append(f"- **What remains:** {declared.get('remainingOutcome') or '_not published_'}")
+        lines.append(f"- **ETA / confidence:** {declared.get('etaRange') or '_not published_'} / {declared.get('confidence') or '_not published_'}")
+        lines.append(f"- **One real blocker:** {declared.get('realBlocker') or 'none'}")
+        increment = declared.get("productIncrement") or {}
+        if increment:
+            stories = increment.get("stories") or []
+            accepted = sum(1 for story in stories if story.get("state") in {"accepted", "integrated"})
+            lines.append(f"- **Product Increment:** {increment.get('id')} — {increment.get('stage')} — {accepted}/{len(stories)} integrated or accepted — risk `{increment.get('riskTier')}`")
+            lines.append(f"- **Real-workflow demonstration:** {increment.get('demonstrationCriterion')}")
+        else:
+            lines.append("- **Product Increment:** _not published (legacy v3.3 snapshot)_")
+        lines.append(f"- **Current phase / technical focus:** {declared.get('phase') or 'unknown'} — {declared.get('currentFocus') or 'n/a'}")
         active = ", ".join(f"{w['workUnit'] or w['sessionId']} ({w['state']})" for w in synth["activeWorkers"]) or "none"
         lines.append(f"- **Executing now:** {active}")
         terminal = ", ".join(f"{w['workUnit'] or w['sessionId']}" for w in synth["terminalWorkers"]) or "none"

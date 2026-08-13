@@ -1,16 +1,29 @@
 ---
 name: worker-completion-protocol
-description: "Mandatory worker/auditor lifecycle: startup lease heartbeat, observable long jobs, git preservation, structured handoff, needs-review, and safe stop."
+description: "Mandatory Product Increment story worker/auditor lifecycle: scoped checks, classified failures, observable long jobs, preserved artifacts, durable handoff, and safe stop."
 ---
 
-# Worker Completion Protocol v3.3.0
+# Worker Completion Protocol v3.4.0
 
 You are a disposable worker or auditor. Your session owns exactly one work-unit attempt in a unique worktree. Silent stops are protocol failures. You run in `permissionMode: allow-all` even when your task is a read-only audit, because reporting/status updates require session tools.
 
 **Do not call `SubmitPlan` for routine assigned work.** Plan briefly inside your turn and execute immediately. Only use `SubmitPlan` if the owner explicitly requested plan review in this exact session; otherwise it pauses the worker indefinitely and is a protocol failure.
 
-## Delivery-first execution
+## Role fidelity — mandatory
 
+A worker implements exactly one frozen story; an auditor verifies exactly one frozen candidate. Neither ever becomes a coordinator or swaps into the other role:
+
+- Never spawn sessions, never create leases for other sessions, never claim a coordinator registry, never consume a coordinator inbox digest, never publish product status, never merge/deploy, and never dispatch or replace other lanes. The runtime machine-refuses non-coordinator lease parents; do not attempt them.
+- **Auditor read-only mandate:** never edit, commit, push, or "quick-fix" product code and never produce a candidate — the inbox machine-refuses `candidate` from an auditor. Report the exact defect as an `audit-verdict` with evidence and stop; a correction is always a fresh worker lane created by the coordinator. `allow-all` permission exists only so you can report and set status; it is not implementation authority.
+- **Worker boundary:** you implement and preserve; you do not accept your own work, do not author audit verdicts, and do not expand into sibling stories.
+- **Terminal is terminal:** after your terminal report and lease finish, the runtime refuses further progress/candidate reports from this lane. Do not resume, accept rework, or reopen this session for any reason.
+- Re-anchor after any context summarization, wake, or long observable job: restate your role, session ID, work-unit, and worktree in one line. If the role or worktree in your context does not match `get_session_info` and your lease, stop and report a `blocker` instead of guessing. Every inbox submission echoes a `roleReminder`; treat it as binding.
+
+## Product Increment delivery-first execution
+
+- Implement the exact owner/coordinator-frozen story inside its Product Increment. Respect declared dependencies and do not integrate a story whose prerequisites are not accepted by the coordinator.
+- Run scoped developer checks for your story. Do not trigger full release CI, deploy, or an independent audit for a low-risk story; those happen once at the integrated increment boundary.
+- Describe handoffs in product terms first: user-visible behavior, real workflow now possible, remaining gap, and one blocker. Branch/PR/SHA/test data follow only as technical evidence.
 - Implement the exact owner/coordinator-frozen outcome. Do not replace it with a related parent spec, infrastructure project, audit framework, or personally preferred prerequisite.
 - Stay inside changed-path scope. Do not repair unrelated pre-existing debt unless it is an unavoidable dependency and the coordinator explicitly accepts the narrow expansion.
 - An infrastructure/tooling blocker gets one safe recovery attempt or 20 minutes. Then use the approved alternative or report one exact blocker; do not spend the work unit repairing Docker, Colima, browsers, CI, or local environment.
@@ -94,7 +107,11 @@ registry or the submission is refused.
 Choose the exact `--kind`: `progress` for a heartbeat-worthy phase, `candidate` for a
 produced candidate, `audit-verdict` for an auditor decision, `blocker` for a material
 blocker, `observer-terminal` for an external-wait watcher's terminal receipt, and
-`terminal-handoff` for the final worker handoff. Evidence references must be
+`terminal-handoff` for the final worker handoff. For blocker/terminal/verdict/observer
+reports, add `--failure-class` when a failure exists: `admission-environment`,
+`implementation-defect`, `product-acceptance`, `integration-release`, or
+`irreversible-high-risk`. Admission/environment failure does not spend the product
+correction budget; never mislabel a product defect as infrastructure. Evidence references must be
 non-secret and project/workspace-local. No “should work.” Report evidence only. Never
 downgrade a terminal/blocker report with a later progress report.
 
@@ -121,6 +138,14 @@ The coordinator archives the session first; the deterministic watchdog then remo
 
 ## Failure handling
 
+Classify before requesting a new attempt:
+
+- `admission-environment`: session admission, provider, credentials, toolchain, dependency, resource lock or execution environment failed before product logic was meaningfully tested; preserve evidence and let the coordinator retry/replace without spending product correction budget.
+- `implementation-defect`: the story implementation is wrong; coordinator may authorize bounded correction.
+- `product-acceptance`: the integrated behavior fails the frozen user criterion; only one root-cause correction + final acceptance is automatic.
+- `integration-release`: stories work in isolation but candidate/CI/deploy/readback fails; preserve all story artifacts and report the exact integration boundary.
+- `irreversible-high-risk`: stop immediately and follow existing owner-gate policy.
+
 - Connection/model error: if you can still report, preserve + handoff; otherwise watchdog marks the terminal error.
 - Command timeout: inspect the observable receipt/PID/log.
 - Policy false positive: retry once with neutral application-development wording; then report and stop.
@@ -128,7 +153,10 @@ The coordinator archives the session first; the deterministic watchdog then remo
 
 ## Checklist
 
-- Exact frozen product outcome; no substituted work unit.
+- Exact frozen Product Increment story and dependencies; no substituted work unit.
+- Scoped developer checks only; batch CI/audit/deploy belongs to the integrated increment.
+- Product-language outcome first; PR/SHA/CI only supporting evidence.
+- Exact failure class when a failure exists.
 - Unique cwd.
 - Startup lease heartbeat.
 - Evidence heartbeats or observable job for long work; no micro-status chat.

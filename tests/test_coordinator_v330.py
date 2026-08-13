@@ -13,6 +13,7 @@ SCRIPTS = Path(os.environ.get("CRAFT_TEST_SCRIPTS", ROOT / "scripts"))
 INBOX = SCRIPTS / "coordinator-inbox.py"
 STATUS = SCRIPTS / "coordinator-status.py"
 COMMIT = SCRIPTS / "coordinator-commitment.py"
+GATE = SCRIPTS / "owner-gate.py"
 INCIDENT = SCRIPTS / "recovery-incident.py"
 ADMISSION = SCRIPTS / "recovery-admission.py"
 
@@ -53,12 +54,12 @@ class Base(unittest.TestCase):
                "lastHeartbeatAt": self.now, **extra}
         self.put(self.runtime / "coordinators" / f"{project}.json", row)
 
-    def lease(self, sid="worker1", parent="coord1", work_unit="wu-1", attempt="1", state="running"):
-        self.manifest(sid, role="worker", labels=[f"parent-session::{parent}",
+    def lease(self, sid="worker1", parent="coord1", work_unit="wu-1", attempt="1", state="running", role="worker"):
+        self.manifest(sid, role=role, labels=[f"parent-session::{parent}",
                       f"work-unit::{work_unit}", f"attempt::{attempt}"])
         self.put(self.runtime / "worker-leases" / f"{sid}.json",
                  {"schemaVersion": 1, "sessionId": sid, "parentSessionId": parent,
-                  "role": "worker", "workUnit": work_unit, "attempt": attempt, "state": state})
+                  "role": role, "workUnit": work_unit, "attempt": attempt, "state": state})
 
     def cli(self, script, *args, ok=True, now=None):
         env = self.env if now is None else {**self.env, "CRAFT_TEST_NOW_MS": str(now)}
@@ -129,6 +130,78 @@ class InboxTests(Base):
         cp, _ = self.submit("progress", evidence=["authorization: Bearer sk-1"], ok=False)
         self.assertIn("credential", cp.stderr)
 
+    def test_report_kinds_require_auditor_and_observer_provenance(self):
+        self.base_project()
+        cp, _ = self.submit("audit-verdict", "self approval", ok=False)
+        self.assertIn("auditor", cp.stderr)
+        cp, _ = self.submit("observer-terminal", "unbound observer", ok=False)
+        self.assertIn("external-wait", cp.stderr)
+        self.lease("audit1", work_unit="audit", role="auditor")
+        _, verdict = self.submit("audit-verdict", "PASS", sender="audit1", work_unit="audit")
+        self.assertEqual(verdict["item"]["senderRole"], "auditor")
+        self.lease("watch1", work_unit="release")
+        self.put(self.runtime / "external-waits" / "release.json",
+                 {"waitId": "release", "project": "demo", "coordinatorSessionId": "coord1",
+                  "watcherSessionId": "watch1", "workUnit": "release", "state": "terminal"})
+        _, observed = self.submit("observer-terminal", "release complete", sender="watch1", work_unit="release")
+        self.assertEqual(observed["item"]["kind"], "observer-terminal")
+
+    def test_candidate_requires_worker_sender(self):
+        self.base_project()
+        self.lease("audit1", work_unit="audit", role="auditor")
+        cp, _ = self.submit("candidate", "auditor-built fix", sender="audit1",
+                            work_unit="audit", ok=False)
+        self.assertIn("worker sender", cp.stderr)
+
+    def test_terminal_lane_cannot_send_progress_or_candidate(self):
+        self.base_project()
+        self.lease(state="handoff-ready")
+        for kind in ("progress", "candidate"):
+            cp, _ = self.submit(kind, "zombie lane keeps working", ok=False)
+            self.assertIn("terminal lane", cp.stderr)
+        _, still_terminal = self.submit("terminal-handoff", "final report")
+        self.assertEqual(still_terminal["item"]["kind"], "terminal-handoff")
+
+    def test_role_reminders_re_anchor_sender_and_coordinator(self):
+        self.base_project()
+        _, submitted = self.submit("progress", "50%")
+        self.assertIn("never spawn lanes", submitted["roleReminder"])
+        _, coalesced = self.submit("progress", "50%")
+        self.assertIn("never spawn lanes", coalesced["roleReminder"])
+        self.lease("audit1", work_unit="audit", role="auditor")
+        _, verdict = self.submit("audit-verdict", "PASS", sender="audit1", work_unit="audit")
+        self.assertIn("read-only", verdict["roleReminder"])
+        _, claim = self.cli(INBOX, "claim", "--project", "demo", "--session", "coord1",
+                            "--generation", "2", "--apply")
+        self.assertIn("dispatch workers/auditors", claim["roleReminder"])
+
+    def test_failure_class_is_bounded_and_retained_in_claim(self):
+        self.base_project()
+        _, submitted = self.cli(INBOX, "submit", "--project", "demo", "--coordinator", "coord1",
+                                "--generation", "2", "--sender", "worker1", "--work-unit", "wu-1",
+                                "--attempt", "1", "--kind", "blocker", "--subject", "environment unavailable",
+                                "--failure-class", "admission-environment", "--apply")
+        self.assertEqual(submitted["item"]["failureClass"], "admission-environment")
+        _, claim = self.cli(INBOX, "claim", "--project", "demo", "--session", "coord1",
+                            "--generation", "2", "--apply")
+        self.assertEqual(claim["digest"][0]["failureClass"], "admission-environment")
+
+    def test_failure_class_changes_payload_revision_and_is_not_allowed_on_progress(self):
+        self.base_project()
+        args = ["submit", "--project", "demo", "--coordinator", "coord1", "--generation", "2",
+                "--sender", "worker1", "--work-unit", "wu-1", "--attempt", "1",
+                "--kind", "blocker", "--subject", "failed", "--failure-class"]
+        _, first = self.cli(INBOX, *args, "implementation-defect", "--apply")
+        _, second = self.cli(INBOX, *args, "product-acceptance", "--apply")
+        self.assertEqual(first["item"]["revision"], 1)
+        self.assertEqual(second["item"]["revision"], 2)
+        self.assertEqual(second["item"]["failureClass"], "product-acceptance")
+        cp, _ = self.cli(INBOX, "submit", "--project", "demo", "--coordinator", "coord1",
+                         "--generation", "2", "--sender", "worker1", "--work-unit", "wu-1",
+                         "--attempt", "1", "--kind", "progress", "--subject", "working",
+                         "--failure-class", "implementation-defect", "--apply", ok=False)
+        self.assertIn("allowed only", cp.stderr)
+
     def test_submit_rejects_non_local_evidence_path(self):
         self.base_project()
         cp, _ = self.submit("progress", evidence=["/etc/passwd"], ok=False)
@@ -143,6 +216,22 @@ class InboxTests(Base):
         self.assertTrue(second["coalesced"])
         self.assertEqual(second["item"]["revision"], 1)
         self.assertEqual(second["item"]["diagnosticsRevision"], 1)
+
+    def test_v33_fingerprint_and_acknowledged_item_remain_idempotent_without_failure_class(self):
+        self.base_project()
+        kind, subject = "terminal-handoff", "legacy candidate"
+        _, first = self.submit(kind, subject)
+        self.assertNotIn("failureClass", first["item"])
+        _, claim = self.cli(INBOX, "claim", "--project", "demo", "--session", "coord1",
+                            "--generation", "2", "--apply")
+        revision = self.publish_ack_status()
+        self.cli(INBOX, "ack", "--project", "demo", "--session", "coord1", "--generation", "2",
+                 "--token", claim["token"], "--status-revision", str(revision), "--apply")
+        _, again = self.submit(kind, subject)
+        self.assertTrue(again["coalesced"])
+        self.assertEqual(again["item"]["revision"], 1)
+        self.assertEqual(again["item"]["state"], "acknowledged")
+        self.assertNotIn("failureClass", again["item"])
 
     def test_meaningful_revision_replaces_pending_payload(self):
         self.base_project()
@@ -316,6 +405,187 @@ class StatusTests(Base):
         cp, _ = self.publish(self.executing_payload(), generation=1, ok=False)
         self.assertIn("generation", cp.stderr)
 
+    def increment_payload(self):
+        payload = self.executing_payload()
+        payload.update({
+            "demonstrableNow": "The customer can open the account page",
+            "remainingOutcome": "Connect purchase history and validate mobile workflow",
+            "etaRange": "4-8 hours",
+            "confidence": "medium",
+            "realBlocker": "mobile fixture is not yet restored",
+            "productIncrement": {
+                "id": "pi-account-subscriptions",
+                "stage": "building",
+                "riskTier": "medium",
+                "demonstrationCriterion": "Open a Person and inspect subscriptions on desktop and mobile",
+                "nonGoals": ["billing-provider migration"],
+                "stories": [
+                    {"id": "profile", "title": "Inline subscriptions", "state": "integrated",
+                     "dependsOn": [], "riskContribution": "low"},
+                    {"id": "history", "title": "Purchase history", "state": "executing",
+                     "dependsOn": ["profile"], "riskContribution": "medium"},
+                ],
+            },
+        })
+        return payload
+
+    def test_publish_product_increment_and_customer_first_report(self):
+        self.base_project()
+        self.publish(self.increment_payload())
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["declared"]["productIncrement"]["stories"][1]["dependsOn"], ["profile"])
+        cp, _ = self.cli(STATUS, "report", "--project", "demo", "--format", "markdown")
+        body = cp.stdout
+        self.assertLess(body.index("What the customer will see"), body.index("Executing now"))
+        self.assertIn("Demonstrable now", body)
+        self.assertIn("**ETA / confidence:** 4-8 hours / medium", body)
+        self.assertIn("**One real blocker:** mobile fixture is not yet restored", body)
+
+    def test_legacy_v33_status_remains_valid_without_increment_fields(self):
+        self.base_project()
+        self.publish(self.executing_payload())
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["classification"], "executing")
+        self.assertIsNone(show["declared"]["productIncrement"])
+        cp, _ = self.cli(STATUS, "report", "--project", "demo", "--format", "markdown")
+        self.assertIn("legacy v3.3 snapshot", cp.stdout)
+
+    def test_product_increment_rejects_duplicate_unknown_self_and_cyclic_dependencies(self):
+        self.base_project()
+        cases = []
+        duplicate = self.increment_payload()
+        duplicate["productIncrement"]["stories"][1]["id"] = "profile"
+        cases.append((duplicate, "duplicate"))
+        unknown = self.increment_payload()
+        unknown["productIncrement"]["stories"][1]["dependsOn"] = ["missing"]
+        cases.append((unknown, "unknown"))
+        self_ref = self.increment_payload()
+        self_ref["productIncrement"]["stories"][1]["dependsOn"] = ["history"]
+        cases.append((self_ref, "itself"))
+        cyclic = self.increment_payload()
+        cyclic["productIncrement"]["stories"][0]["dependsOn"] = ["history"]
+        cases.append((cyclic, "cycle"))
+        for payload, message in cases:
+            cp, _ = self.publish(payload, ok=False)
+            self.assertIn(message, cp.stderr)
+
+    def test_product_increment_rejects_invalid_confidence_stage_and_unbounded_stories(self):
+        self.base_project()
+        bad = self.increment_payload(); bad["confidence"] = "certain"
+        cp, _ = self.publish(bad, ok=False); self.assertIn("confidence", cp.stderr)
+        bad = self.increment_payload(); bad["productIncrement"]["stage"] = "mysterious"
+        cp, _ = self.publish(bad, ok=False); self.assertIn("stage", cp.stderr)
+        bad = self.increment_payload()
+        bad["productIncrement"]["stories"] = [
+            {"id": f"s{n}", "title": f"Story {n}", "state": "planned", "dependsOn": []}
+            for n in range(9)]
+        cp, _ = self.publish(bad, ok=False); self.assertIn("1..8", cp.stderr)
+
+    def test_product_increment_rejects_oversized_customer_fields_and_falsy_non_lists(self):
+        self.base_project()
+        for key in ("demonstrableNow", "remainingOutcome", "etaRange", "realBlocker"):
+            bad = self.increment_payload(); bad[key] = "x" * 801
+            cp, _ = self.publish(bad, ok=False); self.assertIn(key, cp.stderr)
+        for malformed in ("", 0, {}):
+            bad = self.increment_payload(); bad["productIncrement"]["nonGoals"] = malformed
+            cp, _ = self.publish(bad, ok=False); self.assertIn("nonGoals", cp.stderr)
+            bad = self.increment_payload(); bad["productIncrement"]["stories"][1]["dependsOn"] = malformed
+            cp, _ = self.publish(bad, ok=False); self.assertIn("dependsOn", cp.stderr)
+        for malformed_text in ("x" * 801, "bad\x01goal"):
+            bad = self.increment_payload(); bad["productIncrement"]["nonGoals"] = [malformed_text]
+            cp, _ = self.publish(bad, ok=False); self.assertIn("nonGoals", cp.stderr)
+
+    def test_product_increment_risk_tier_cannot_understate_story_contribution(self):
+        self.base_project()
+        for aggregate, contribution in (("low", "medium"), ("low", "high"), ("medium", "high")):
+            bad = self.increment_payload()
+            bad["productIncrement"]["riskTier"] = aggregate
+            bad["productIncrement"]["stories"][1]["riskContribution"] = contribution
+            cp, _ = self.publish(bad, ok=False)
+            self.assertIn("understate", cp.stderr)
+        valid = self.increment_payload()
+        valid["productIncrement"]["riskTier"] = "high"
+        valid["productIncrement"]["stories"][1]["riskContribution"] = "high"
+        _, published = self.publish(valid)
+        self.assertEqual(published["record"]["declared"]["productIncrement"]["riskTier"], "high")
+
+    def completion_payload(self):
+        criterion = "Open a Person and inspect subscriptions on desktop and mobile"
+        reports = [
+            ("worker1", "candidate", "worker", "terminal-handoff", "integrated candidate", ["sha:abc123"]),
+            ("worker2", "accept", "auditor", "audit-verdict", "integrated acceptance PASS", ["audit:pass@abc123"]),
+            ("worker3", "release", "worker", "observer-terminal", "production readback succeeded", ["run:release-42"]),
+            ("worker4", "demo", "worker", "terminal-handoff", "real workflow demonstrated", [f"demo:{criterion}"]),
+        ]
+        items = []
+        for sender, work_unit, role, kind, subject, evidence in reports:
+            self.lease(sender, work_unit=work_unit, state="handoff-ready", role=role)
+            if kind == "observer-terminal":
+                self.put(self.runtime / "external-waits" / "release-readback.json",
+                         {"waitId": "release-readback", "project": "demo", "coordinatorSessionId": "coord1",
+                          "watcherSessionId": sender, "workUnit": work_unit, "state": "terminal"})
+            _, submitted = self.submit(kind, subject, sender=sender, work_unit=work_unit, evidence=evidence)
+            items.append(submitted["item"])
+        refs = [item["eventKey"] for item in items]
+        payload = self.increment_payload()
+        payload.update({"phase": "complete", "currentFocus": "Customer workflow verified",
+                        "remainingOutcome": "Nothing remains", "realBlocker": None,
+                        "nextActions": [], "childRefs": [], "completedOutcomes": [
+                            {"summary": "Product Increment delivered", "evidenceRef": refs[0]}]})
+        payload.pop("nextReviewInSeconds", None)
+        payload["productIncrement"].update({
+            "stage": "complete",
+            "stories": [
+                {"id": "profile", "title": "Inline subscriptions", "state": "accepted",
+                 "dependsOn": [], "riskContribution": "low"},
+                {"id": "history", "title": "Purchase history", "state": "accepted",
+                 "dependsOn": ["profile"], "riskContribution": "medium"}],
+            "completionEvidence": {
+                key: {"eventKey": item["eventKey"], "revision": item["revision"],
+                      "fingerprint": item["fingerprint"]}
+                for key, item in zip(("integratedCandidateRef", "acceptanceRef",
+                                      "releaseReadbackRef", "demonstrationRef"), items)}})
+        return payload
+
+    def test_complete_increment_requires_accepted_stories_and_phase_alignment(self):
+        self.base_project()
+        bad = self.increment_payload(); bad["productIncrement"]["stage"] = "complete"
+        cp, _ = self.publish(bad, ok=False); self.assertIn("every story", cp.stderr)
+        bad = self.increment_payload(); bad["phase"] = "complete"; bad["nextActions"] = []
+        bad.pop("nextReviewInSeconds", None); bad["childRefs"] = []
+        cp, _ = self.publish(bad, ok=False); self.assertIn("must match", cp.stderr)
+
+    def test_complete_increment_requires_exact_current_generation_evidence(self):
+        self.base_project()
+        payload = self.completion_payload()
+        _, published = self.publish(payload)
+        self.assertEqual(published["record"]["declared"]["productIncrement"]["stage"], "complete")
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["classification"], "verified")
+        for key in ("integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"):
+            bad = self.completion_payload()
+            bad["productIncrement"]["completionEvidence"][key]["eventKey"] = "missing"
+            cp, _ = self.publish(bad, ok=False); self.assertIn("not observed", cp.stderr)
+        bad = self.completion_payload()
+        bad["productIncrement"]["completionEvidence"]["acceptanceRef"]["revision"] += 1
+        cp, _ = self.publish(bad, ok=False); self.assertIn("binding mismatch", cp.stderr)
+        bad = self.completion_payload()
+        bad["productIncrement"]["completionEvidence"]["acceptanceRef"]["fingerprint"] = "0" * 64
+        cp, _ = self.publish(bad, ok=False); self.assertIn("binding mismatch", cp.stderr)
+
+    def test_complete_increment_rejects_wrong_evidence_kind_and_unbound_demo(self):
+        self.base_project()
+        payload = self.completion_payload()
+        completion = payload["productIncrement"]["completionEvidence"]
+        completion["releaseReadbackRef"] = dict(completion["acceptanceRef"])
+        cp, _ = self.publish(payload, ok=False); self.assertIn("distinct", cp.stderr)
+        payload = self.completion_payload()
+        demo_ref = payload["productIncrement"]["completionEvidence"]["demonstrationRef"]["eventKey"]
+        item_path = next((self.runtime / "coordinator-inbox" / "demo").glob(f"{demo_ref}.json"))
+        item = json.loads(item_path.read_text()); item["evidence"] = ["demo:some other workflow"]
+        self.put(item_path, item)
+        cp, _ = self.publish(payload, ok=False); self.assertIn("demonstrationCriterion", cp.stderr)
+
     def test_invented_child_reference_fails_closed(self):
         self.base_project()
         payload = self.executing_payload()
@@ -388,13 +658,40 @@ class StatusTests(Base):
         self.assertEqual(show["classification"], "blocked")
         self.assertEqual(show["issues"], [])
 
-    def test_unobserved_blocked_status_remains_stale(self):
+    def test_unobserved_blocked_publish_fails_closed_and_stored_snapshot_remains_stale(self):
         self.base_project(); self.lease(state="handoff-ready")
-        self.publish({"objective": "x", "phase": "blocked", "currentFocus": "prose blocker",
-                      "nextActions": []})
+        cp, _ = self.publish({"objective": "x", "phase": "blocked", "currentFocus": "prose blocker",
+                              "nextActions": []}, ok=False)
+        self.assertIn("blocked phase requires", cp.stderr)
+        # A legacy stored prose-blocked snapshot still classifies stale, never healthy.
+        self.put(self.runtime / "coordinator-status" / "demo.json",
+                 {"schemaVersion": 1, "project": "demo", "coordinatorSessionId": "coord1",
+                  "generation": 2, "revision": 1, "publishedAt": self.now, "updatedAt": self.now,
+                  "declared": {"objective": "x", "phase": "blocked",
+                               "currentFocus": "prose blocker", "nextActions": []}})
         _, show = self.cli(STATUS, "show", "--project", "demo")
         self.assertEqual(show["classification"], "stale")
         self.assertIn("no-observed-activity", show["issues"])
+
+    def test_blocked_publish_with_open_gate_reference_is_allowed(self):
+        self.base_project()
+        self.cli(GATE, "create", "--project", "demo", "--gate", "ship-decision",
+                 "--question", "Ship the paid tier to production now?", "--choices", "SHIP,WAIT",
+                 "--owner-only-category", "human-product-judgment-action",
+                 "--scope", "work-unit", "--work-unit", "wu-1")
+        _, pub = self.publish({"objective": "x", "phase": "blocked", "currentFocus": "owner decision",
+                               "gateRefs": ["ship-decision"], "nextActions": []})
+        self.assertEqual(pub["revision"], 1)
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["classification"], "blocked")
+
+    def test_hold_publish_requires_open_explicit_hold_gate(self):
+        self.base_project()
+        cp, _ = self.publish({"objective": "x", "phase": "hold", "nextActions": []}, ok=False)
+        self.assertIn("self-hold", cp.stderr)
+        self.cli(GATE, "hold", "--project", "demo", "--reason", "direct owner hold")
+        _, pub = self.publish({"objective": "x", "phase": "hold", "nextActions": []})
+        self.assertEqual(pub["revision"], 1)
 
     def test_contradiction_complete_with_active_workers(self):
         self.base_project()
@@ -418,16 +715,18 @@ class StatusTests(Base):
         self.assertIn("requires nextReview", cp.stderr)
 
     def test_nonterminal_latest_evidence_is_executing_not_verified(self):
-        self.base_project(); self.lease(state="handoff-ready")
+        self.base_project()
         self.submit("candidate", "candidate ready")
+        self.lease(state="handoff-ready")
         payload = self.executing_payload(); payload["childRefs"] = ["worker1"]
         self.publish(payload)
         _, show = self.cli(STATUS, "show", "--project", "demo")
         self.assertEqual(show["classification"], "executing")
 
     def test_candidate_only_cannot_verify_completion(self):
-        self.base_project(); self.lease(state="handoff-ready")
+        self.base_project()
         _, submitted = self.submit("candidate", "candidate ready")
+        self.lease(state="handoff-ready")
         cp, _ = self.publish({"objective": "Ship API", "phase": "complete", "nextActions": [],
                               "completedOutcomes": [{"summary": "candidate accepted",
                                                      "evidenceRef": submitted["item"]["eventKey"]}]}, ok=False)
@@ -444,7 +743,9 @@ class StatusTests(Base):
         self.assertEqual(published["revision"], 1)
         _, show = self.cli(STATUS, "show", "--project", "demo")
         self.assertEqual(show["classification"], "verified")
-        self.submit("candidate", "later unrelated candidate")
+        self.lease("worker2", work_unit="wu-2")
+        self.submit("candidate", "later unrelated candidate", sender="worker2", work_unit="wu-2")
+        self.lease("worker2", work_unit="wu-2", state="handoff-ready")
         _, still_verified = self.cli(STATUS, "show", "--project", "demo")
         self.assertEqual(still_verified["classification"], "verified")
         cp, _ = self.publish({"objective": "Ship API", "phase": "complete", "nextActions": [],

@@ -83,9 +83,12 @@ class OrchestrationV320Test(unittest.TestCase):
     def test_08_hold_requires_exact_resume(self):
         self.exec_tool("owner-gate.py","hold","--project","gve","--reason","hold"); p=self.exec_tool("owner-gate.py","resolve","--project","gve","--gate","project-hold","--choice","GO","--authority","direct-owner","--evidence","msg",ok=False); self.assertNotEqual(p.returncode,0)
     def test_09_gate_direct_owner_required(self):
-        self.exec_tool("owner-gate.py","create","--project","demo","--gate","g1","--question","Q?","--choices","A,B","--scope","merge"); p=self.exec_tool("owner-gate.py","resolve","--project","demo","--gate","g1","--choice","A","--authority","coordinator","--evidence","relay",ok=False); self.assertNotEqual(p.returncode,0)
+        self.exec_tool("owner-gate.py","create","--project","demo","--gate","g1","--question","Q?","--choices","A,B","--owner-only-category","human-product-judgment-action","--scope","merge"); p=self.exec_tool("owner-gate.py","resolve","--project","demo","--gate","g1","--choice","A","--authority","coordinator","--evidence","relay",ok=False); self.assertNotEqual(p.returncode,0)
+    def test_09b_technical_transition_cannot_create_owner_gate(self):
+        p=self.exec_tool("owner-gate.py","create","--project","demo","--gate","technical","--question","Continue after CI?","--choices","CONTINUE,HOLD","--scope","implement",ok=False)
+        self.assertNotEqual(p.returncode,0); self.assertIn("--owner-only-category",p.stderr); self.assertIn("required",p.stderr)
     def test_10_resolved_gate_allows_action(self):
-        self.exec_tool("owner-gate.py","create","--project","demo","--gate","g1","--question","Q?","--choices","A,B","--scope","merge"); self.exec_tool("owner-gate.py","resolve","--project","demo","--gate","g1","--choice","A","--authority","direct-owner","--evidence","msg"); self.exec_tool("owner-gate.py","check","--project","demo","--action","merge")
+        self.exec_tool("owner-gate.py","create","--project","demo","--gate","g1","--question","Q?","--choices","A,B","--owner-only-category","irreversible-destructive","--scope","merge"); self.exec_tool("owner-gate.py","resolve","--project","demo","--gate","g1","--choice","A","--authority","direct-owner","--evidence","msg"); self.exec_tool("owner-gate.py","check","--project","demo","--action","merge")
     def test_11_valid_completion_certificate(self): self.exec_tool("completion-certificate.py","validate","--file",str(self.cert()))
     def test_12_changed_head_rejected(self):
         p=self.exec_tool("completion-certificate.py","validate","--file",str(self.cert(auditedSha="c"*40)),ok=False); self.assertIn("audited-head-mismatch",p.stdout)
@@ -100,7 +103,7 @@ class OrchestrationV320Test(unittest.TestCase):
     def test_16_metadata_and_complexity_drift(self):
         self.manifest("c1",messages=600,tokens=210000); self.claim(); p=self.exec_tool("coordinator-reconcile.py",ok=False); self.assertIn("rotation-recommended",p.stdout); self.assertIn("canonical-name-drift",p.stdout)
     def test_17_unscoped_gate_does_not_block_unrelated_unit(self):
-        self.exec_tool("owner-gate.py","create","--project","demo","--gate","policy","--question","Q?","--choices","A,B","--scope","implement")
+        self.exec_tool("owner-gate.py","create","--project","demo","--gate","policy","--question","Q?","--choices","A,B","--owner-only-category","conflicting-direct-owner-priorities","--scope","implement")
         self.exec_tool("owner-gate.py","check","--project","demo","--work-unit","unrelated","--action","implement")
     def test_18_shared_native_project_does_not_cross_scope(self):
         self.manifest("c1",project="client"); self.claim("c1","client")

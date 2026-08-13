@@ -104,6 +104,43 @@ class ReliabilityToolsTest(unittest.TestCase):
         self.exec_tool("worker-lease.py", "heartbeat", "--session", "missing")
         self.assertFalse(lease.exists())
 
+    def test_create_refuses_role_drift_parents(self):
+        # Self-parented lane is refused.
+        self.manifest("selfy")
+        proc = self.exec_tool("worker-lease.py", "create", "--session", "selfy",
+                              "--parent", "selfy", check=False)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("self-parented", proc.stderr)
+        # A live worker parenting a sub-lane is refused; only coordinators own lanes.
+        self.manifest("rogue-parent")
+        self.manifest("child")
+        proc = self.exec_tool("worker-lease.py", "create", "--session", "child",
+                              "--parent", "rogue-parent", check=False)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("not a live coordinator", proc.stderr)
+        # A live coordinator parent is accepted.
+        coord = self.manifest("coord-parent")
+        value = json.loads(coord.read_text().splitlines()[0])
+        value["labels"] = ["agent-role::coordinator"]
+        coord.write_text(json.dumps(value) + "\n")
+        self.exec_tool("worker-lease.py", "create", "--session", "child",
+                       "--parent", "coord-parent")
+        # An absent parent manifest stays permitted for watchdog backfill.
+        self.manifest("orphan")
+        self.exec_tool("worker-lease.py", "create", "--session", "orphan",
+                       "--parent", "missing-coordinator")
+
+    def test_create_refuses_worktree_collision(self):
+        shared = self.root / "shared-wt"
+        self.manifest("lane1", worktree=shared)
+        self.exec_tool("worker-lease.py", "create", "--session", "lane1")
+        # Idempotent re-create for the same session stays allowed.
+        self.exec_tool("worker-lease.py", "create", "--session", "lane1")
+        self.manifest("lane2", worktree=shared)
+        proc = self.exec_tool("worker-lease.py", "create", "--session", "lane2", check=False)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("worktree already", proc.stderr)
+
     def test_observable_job_writes_exit_receipt(self):
         self.manifest("job")
         self.exec_tool("worker-lease.py", "create", "--session", "job")

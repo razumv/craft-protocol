@@ -1,4 +1,4 @@
-# Protocol v3.3.0 defaults
+# Protocol v3.4.0 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -33,13 +33,14 @@ Coordinator lease:             3600 seconds
 ## Execution limits
 
 ```text
-Primary outcomes per project:  1
-Default implementation workers:1
+Primary Product Increments:    1 per project
+Typical increment batch:       3–8 related stories or ~4–16 hours; 1 story allowed when complete
+Parallel lightweight stories:  up to 2 disjoint DAG lanes
 Workers per project ceiling:   2
-Auditors per project ceiling:  1
-Workers per work-unit:         1
-Auditors per work-unit:        1
-Global heavy jobs:             1
+Auditors per increment ceiling:1, only at Medium/High integrated risk boundary
+Workers per story/work-unit:   1; duplicate live story lanes prohibited
+Integration candidates:        1 at a time
+Global heavy jobs:             1 by default; bounded resource-aware exceptions require explicit authority
 Observable-job threshold:      expected runtime >10 minutes
 Heartbeat interval:            10–15 minutes, internal lease only
 Healthy evidence window:       900 seconds
@@ -52,15 +53,18 @@ Second acceptance failure:     exact escalation; no automatic attempt N+1
 ## Acceptance and communication
 
 ```text
-Low risk:                      coordinator review + scoped CI
-Medium risk:                   1 focused independent audit
-High risk:                     1 focused audit + CI/readback/gates/certificate
+Low increment risk:            scoped story checks + coordinator integration review + 1 batch CI
+Medium increment risk:         1 focused independent audit of immutable integrated candidate
+High increment risk:           1 focused integrated audit + CI/readback/gates/certificate
+UI completion:                 real desktop/mobile/user-workflow evidence required
 Audit-of-audit:                prohibited
 Owner-facing routine polling:  prohibited
 Coordinator routine updates:   prohibited
 Owner-requested status query:  allowed
 Exact owner decision request:  allowed
 Material milestone report:     candidate/verdict/merge/readback/blocker only
+Owner status order:             customer outcome → demonstrable now → remaining → ETA/confidence → one blocker → technical evidence
+Owner status lead prohibited:   PR/SHA/CI/session/audit/protocol mechanics
 ```
 
 See [Delivery Mode and Role Separation](DELIVERY-MODE-v3.2.0.md).
@@ -121,21 +125,29 @@ Controller harness invariant:  exactly 1 persistent active; zero stale receipts
 Harness identity:              PID + process start token + command SHA-256
 Notifier cleanup:              archive first; exact guarded reap only
 Kill-switch sentinel:          $HOME/.craft-agent/runtime/self-healing.disabled
-Installer first mutation:      create/restore kill switch before copying v3.3.0 payload
+Installer first mutation:      create/restore kill switch before copying v3.4.0 payload
 Activation order:              runtime f8679cdc first → Protocol → verify-runtime → report-only → canary approval
 ```
 
-## Coordinator inbox, product status, and commitments (v3.3.0)
+## Coordinator inbox, Product Increment status, and commitments (v3.4.0)
 
 ```text
 Inbox storage:                 ~/.craft-agent/runtime/coordinator-inbox/<project>/<event-key>.json
 Inbox claims:                  ~/.craft-agent/runtime/coordinator-inbox-claims/<project>.json
 Report kinds:                  progress, candidate, audit-verdict, terminal-handoff, blocker, observer-terminal
+Report kind roles:             audit-verdict auditor-only; candidate worker-only; progress/candidate refused from terminal lanes
+Role re-anchor:                binding roleReminder echoed on every inbox submit/claim
+Lease creation refusals:       self-parented lane, non-coordinator parent, live-lane worktree collision
+Blocked/hold publish gates:    blocked needs open owner-gate ref or active commitment; hold needs open explicit-hold gate
+Failure classes:               admission-environment, implementation-defect, product-acceptance, integration-release, irreversible-high-risk
+Failure-class scope:           blocker/terminal/verdict/observer reports only; participates in payload fingerprint
 Waking kinds:                  terminal-handoff, audit-verdict, blocker, observer-terminal
 Coalescing key:                project + generation + sender + work-unit + attempt + kind
 Claim TTL:                     900 seconds; unacked items return on expiry; no report deleted on claim
 Ack evidence:                  same token/generation + published status revision or exact terminal evidence
 Status storage:                ~/.craft-agent/runtime/coordinator-status/<project>.json
+Status customer fields:        demonstrableNow, remainingOutcome, etaRange, confidence, realBlocker
+Status Product Increment:      ID, stage, risk tier, real-workflow criterion, non-goals, 1..8 acyclic stories
 Status next actions:           up to 3 ordered; each needs trigger + required evidence + success/failure branch
 Status classifications:        verified, executing, waiting-observed, blocked, stale, contradictory
 Commitment storage:            ~/.craft-agent/runtime/coordinator-commitments/<project>/<id>.json

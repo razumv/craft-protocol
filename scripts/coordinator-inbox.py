@@ -1,6 +1,6 @@
 #!/opt/homebrew/bin/python3
 # SPDX-License-Identifier: Apache-2.0
-"""Durable coordinator inbox for worker/auditor reports (Protocol v3.3.0).
+"""Durable coordinator inbox for worker/auditor reports (Protocol v3.4.0).
 
 Worker and auditor reports are written here as durable, coalesced runtime state
 instead of steering an active coordinator turn. A burst of identical or superseded
@@ -33,6 +33,7 @@ INBOX = RUNTIME / "coordinator-inbox"
 CLAIMS = RUNTIME / "coordinator-inbox-claims"
 COORDINATORS = RUNTIME / "coordinators"
 LEASES = RUNTIME / "worker-leases"
+WAITS = RUNTIME / "external-waits"
 STATUS = RUNTIME / "coordinator-status"
 LOCK = RUNTIME / "coordinator-inbox.lock"
 SCHEMA = 1
@@ -41,6 +42,22 @@ KINDS = {"progress", "candidate", "audit-verdict", "terminal-handoff", "blocker"
 # Only these unclaimed kinds wake a coordinator; progress/candidate remain coalesced.
 WAKING_KINDS = {"terminal-handoff", "audit-verdict", "blocker", "observer-terminal"}
 SENDER_ROLES = {"worker", "auditor"}
+# Deterministic role re-anchor echoed on every submit/claim so a long-context agent
+# is reminded of its exact role contract each time it touches the inbox.
+ROLE_REMINDERS = {
+    "coordinator": ("coordinator: consume this digest in one bounded step, act, publish "
+                    "product-status, then ack with that revision; dispatch workers/auditors "
+                    "instead of implementing or auditing yourself, and continue autonomously "
+                    "without new owner questions outside owner-only categories"),
+    "worker": ("worker: one frozen story in your unique worktree — preserve to git, report "
+               "here, finish lease, needs-review, stop; never spawn lanes, audit, or merge"),
+    "auditor": ("auditor: verify the frozen candidate read-only and report an audit-verdict "
+                "with evidence; never edit, commit, or fix code — a correction is a new "
+                "worker lane"),
+}
+FAILURE_CLASSES = {"admission-environment", "implementation-defect", "product-acceptance",
+                   "integration-release", "irreversible-high-risk"}
+FAILURE_KINDS = {"blocker", "terminal-handoff", "audit-verdict", "observer-terminal"}
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$")
 CLAIM_TTL_DEFAULT = int(os.environ.get("CRAFT_INBOX_CLAIM_TTL_SECONDS", "900"))
 DIGEST_LIMIT = int(os.environ.get("CRAFT_INBOX_DIGEST_LIMIT", "200"))
@@ -174,6 +191,12 @@ def cmd_submit(args: argparse.Namespace) -> int:
     attempt = valid_id(args.attempt, "attempt") if args.attempt else ""
     if args.kind not in KINDS:
         fail("unsupported report kind")
+    failure_class = args.failure_class
+    if failure_class is not None:
+        if args.kind not in FAILURE_KINDS:
+            fail("failure class is allowed only for blocker, terminal, verdict, or observer reports")
+        if failure_class not in FAILURE_CLASSES:
+            fail("unsupported failure class")
     subject = valid_text(args.subject, "subject")
     evidence = valid_evidence(args.evidence)
     revision_hint = args.revision if args.revision is not None else None
@@ -191,11 +214,18 @@ def cmd_submit(args: argparse.Namespace) -> int:
         manifest_s = common.read_manifest(sender)
         if not common.session_live(manifest_s):
             fail("sender session is not live")
-        if common.role_of(manifest_s) not in SENDER_ROLES:
+        sender_role = common.role_of(manifest_s)
+        if sender_role not in SENDER_ROLES:
             fail("sender must have worker/auditor role")
+        if args.kind == "audit-verdict" and sender_role != "auditor":
+            fail("audit-verdict requires an auditor sender")
+        if args.kind == "candidate" and sender_role != "worker":
+            fail("candidate reports require a worker sender; an auditor verifies read-only and reports an audit-verdict")
         lease = common.read_json(LEASES / f"{sender}.json")
         if not lease or lease.get("sessionId") != sender:
             fail("sender lease is missing")
+        if args.kind in {"progress", "candidate"} and lease.get("state") == "handoff-ready":
+            fail("terminal lane may not send progress/candidate reports; a terminal handoff is never downgraded and a rework needs a fresh lane")
         if lease.get("parentSessionId") != coordinator:
             fail("sender lease is not bound to this coordinator")
         if str(lease.get("workUnit") or "") != work_unit:
@@ -205,11 +235,25 @@ def cmd_submit(args: argparse.Namespace) -> int:
             fail("sender lease is missing an exact attempt binding")
         if lease_attempt != attempt:
             fail("attempt does not match sender lease")
+        if args.kind == "observer-terminal":
+            waits = [row for path in sorted(WAITS.glob("*.json"))
+                     if isinstance((row := common.read_json(path)), dict)]
+            matching_waits = [wait for wait in waits if wait
+                              and wait.get("project") == project
+                              and wait.get("coordinatorSessionId") == coordinator
+                              and wait.get("watcherSessionId") == sender
+                              and wait.get("workUnit") == work_unit
+                              and wait.get("state") in {"terminal", "deadline", "cleared"}]
+            if len(matching_waits) != 1:
+                fail("observer-terminal requires one exact terminal external-wait binding")
 
         key = event_key(project, args.generation, sender, work_unit, attempt, args.kind)
         path = item_path(project, key)
         existing = common.read_json(path)
-        fingerprint = payload_fingerprint(args.kind, subject, evidence, {})
+        # Preserve the exact v3.3 fingerprint and stored shape when classification
+        # is absent. A JSON null here would spuriously revise/rewake legacy items.
+        fingerprint_extra = {"failureClass": failure_class} if failure_class is not None else {}
+        fingerprint = payload_fingerprint(args.kind, subject, evidence, fingerprint_extra)
         waking = args.kind in WAKING_KINDS
 
         if existing:
@@ -220,16 +264,21 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 existing["updatedAt"] = now
                 if args.apply:
                     common.atomic_json(path, existing)
-                print(json.dumps({"applied": args.apply, "coalesced": True, "item": existing}, ensure_ascii=False, indent=2))
+                print(json.dumps({"applied": args.apply, "coalesced": True, "item": existing,
+                                  "roleReminder": ROLE_REMINDERS[sender_role]}, ensure_ascii=False, indent=2))
                 return 0
             # Meaningful newer revision replaces the pending payload under the same key.
             revision = revision_hint if revision_hint is not None else int(existing.get("revision") or 0) + 1
             if revision <= int(existing.get("revision") or 0):
                 fail("revision must be newer than the pending item")
             item = dict(existing)
+            if failure_class is None:
+                item.pop("failureClass", None)
+            else:
+                item["failureClass"] = failure_class
             item.update({
-                "subject": subject, "evidence": evidence, "fingerprint": fingerprint,
-                "revision": revision, "state": "pending", "waking": waking,
+                "subject": subject, "evidence": evidence,
+                "fingerprint": fingerprint, "revision": revision, "state": "pending", "waking": waking,
                 "updatedAt": now, "lastSubmittedAt": now,
                 "diagnosticsRevision": int(existing.get("diagnosticsRevision") or 0),
                 # A new fact detaches the item from any prior claim/ack snapshot.
@@ -241,7 +290,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
             item = {
                 "schemaVersion": SCHEMA, "project": project, "eventKey": key,
                 "coordinatorSessionId": coordinator, "coordinatorGeneration": args.generation,
-                "sender": sender, "senderRole": common.role_of(manifest_s),
+                "sender": sender, "senderRole": sender_role,
                 "workUnit": work_unit, "attempt": attempt or None, "kind": args.kind,
                 "subject": subject, "evidence": evidence, "fingerprint": fingerprint,
                 "waking": waking, "revision": revision_hint if revision_hint is not None else 1,
@@ -251,9 +300,12 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 "claimExpiresAt": None, "claimedRevision": None, "claimedStatusRevision": None,
                 "acknowledgedAt": None, "acknowledgedStatusRevision": None,
             }
+            if failure_class is not None:
+                item["failureClass"] = failure_class
         if args.apply:
             common.atomic_json(path, item)
-    print(json.dumps({"applied": args.apply, "coalesced": bool(existing), "item": item}, ensure_ascii=False, indent=2))
+    print(json.dumps({"applied": args.apply, "coalesced": bool(existing), "item": item,
+                      "roleReminder": ROLE_REMINDERS[sender_role]}, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -320,7 +372,8 @@ def cmd_claim(args: argparse.Namespace) -> int:
         digest = [d for k in claim["items"] if (d := common.read_json(item_path(project, k)))]
     print(json.dumps({"applied": args.apply, "idempotent": reuse and newly == 0, "token": token,
                       "expiresAt": expires, "count": len(digest), "newlyClaimed": newly,
-                      "waking": sum(1 for i in digest if i.get("waking")), "digest": digest},
+                      "waking": sum(1 for i in digest if i.get("waking")), "digest": digest,
+                      "roleReminder": ROLE_REMINDERS["coordinator"]},
                      ensure_ascii=False, indent=2))
     return 0
 
@@ -511,7 +564,8 @@ def cmd_report(args: argparse.Namespace) -> int:
         reg_session, reg_generation = registry_generation(project)
         pending_waking = [
             {"eventKey": i.get("eventKey"), "kind": i.get("kind"), "sender": i.get("sender"),
-             "workUnit": i.get("workUnit"), "attempt": i.get("attempt"), "revision": i.get("revision"),
+             "workUnit": i.get("workUnit"), "attempt": i.get("attempt"),
+             "failureClass": i.get("failureClass"), "revision": i.get("revision"),
              "coordinatorGeneration": i.get("coordinatorGeneration")}
             for i in items
             if i.get("waking") and item_available(i, now) and not i.get("orphaned")
@@ -572,6 +626,7 @@ def parser() -> argparse.ArgumentParser:
         s.add_argument(f"--{name}", required=True)
     s.add_argument("--generation", type=int, required=True)
     s.add_argument("--attempt")
+    s.add_argument("--failure-class", choices=sorted(FAILURE_CLASSES))
     s.add_argument("--evidence", action="append", default=[])
     s.add_argument("--revision", type=int)
     s.add_argument("--apply", action="store_true")
