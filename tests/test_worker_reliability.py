@@ -214,6 +214,42 @@ class ReliabilityToolsTest(unittest.TestCase):
             time.sleep(0.05)
         self.assertEqual(value1.get("exitCode"), 0)
 
+    def test_descendant_process_tree_cpu_counts_as_progress(self):
+        # A4 regression: supervisor alive, direct driver nearly idle, a descendant
+        # (Blender) burning CPU. Tree CPU must count as progress evidence; a tree
+        # with no CPU growth must still classify stalled.
+        proc = subprocess.Popen(["/bin/sleep", "300"])
+        try:
+            self.manifest("gta")
+            self.exec_tool("worker-lease.py", "create", "--session", "gta")
+            jobs = self.runtime / "worker-jobs"
+            jobs.mkdir(parents=True, exist_ok=True)
+            (jobs / "gta.json").write_text(json.dumps(
+                {"sessionId": "gta", "childPid": proc.pid, "exitCode": None}))
+            psfile = self.root / "ps.txt"
+            psfile.write_text(f"{proc.pid} 1 0:00.05\n99999 {proc.pid} 8:20.00\n")
+            env = dict(self.env)
+            env["CRAFT_TEST_PS_FILE"] = str(psfile)
+            run = lambda: subprocess.run([str(SCRIPTS / "worker-lease.py"), "reconcile", "--apply"],
+                                         env=env, check=True, capture_output=True, timeout=20)
+            lease_path = self.runtime / "worker-leases/gta.json"
+            run()
+            lease = json.loads(lease_path.read_text())
+            self.assertGreater(lease["childCpuSeconds"], 500)  # descendant CPU visible
+            # Stale evidence + flat tree CPU → stalled, exactly as before.
+            lease["lastHeartbeatAt"] = lease["lastEvidenceAt"] = 0
+            lease_path.write_text(json.dumps(lease))
+            run()
+            self.assertEqual(json.loads(lease_path.read_text())["state"], "stalled")
+            # Descendant CPU growth alone revives the lane to running.
+            psfile.write_text(f"{proc.pid} 1 0:00.05\n99999 {proc.pid} 9:00.00\n")
+            run()
+            lease = json.loads(lease_path.read_text())
+            self.assertEqual(lease["state"], "running")
+            self.assertGreater(lease["childCpuSeconds"], 530)
+        finally:
+            proc.kill()
+
     def test_live_coordinator_blocks_reap_of_archived_worker_sharing_cwd(self):
         code = (
             "import importlib.util,tempfile,pathlib;"

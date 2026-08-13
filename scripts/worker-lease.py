@@ -157,9 +157,9 @@ def log_mtime_ms(raw: str | None) -> int:
         return 0
 
 
-def process_cpu_seconds(raw: Any) -> float:
+def parse_ps_time(raw: str) -> float:
     try:
-        result = os.popen(f"ps -o time= -p {int(raw)}").read().strip()
+        result = raw.strip()
         if not result:
             return 0.0
         days = 0
@@ -173,6 +173,67 @@ def process_cpu_seconds(raw: Any) -> float:
         return days * 86400 + hours * 3600 + minutes * 60 + seconds
     except Exception:
         return 0.0
+
+
+def process_cpu_seconds(raw: Any) -> float:
+    try:
+        return parse_ps_time(os.popen(f"ps -o time= -p {int(raw)}").read())
+    except Exception:
+        return 0.0
+
+
+def process_snapshot() -> list[tuple[int, int, float]]:
+    override = os.environ.get("CRAFT_TEST_PS_FILE")
+    try:
+        if override:
+            text = Path(override).expanduser().read_text(encoding="utf-8", errors="ignore")
+        else:
+            text = os.popen("ps -axo pid=,ppid=,time=").read()
+    except Exception:
+        return []
+    rows: list[tuple[int, int, float]] = []
+    for line in text.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            rows.append((int(parts[0]), int(parts[1]), parse_ps_time(parts[2])))
+        except ValueError:
+            continue
+    return rows
+
+
+def process_tree_cpu_seconds(raw: Any) -> float:
+    """Aggregate CPU across the observable job's whole descendant tree.
+
+    A supervisor whose nearly-idle driver delegates the heavy work to a
+    descendant (e.g. python -> Blender) is objectively progressing; measuring
+    only the direct child demoted such live lanes to suspect/stalled."""
+    try:
+        root = int(raw)
+    except Exception:
+        return 0.0
+    rows = process_snapshot()
+    if not rows:
+        return process_cpu_seconds(root)
+    children: dict[int, list[int]] = {}
+    cpu: dict[int, float] = {}
+    for pid, ppid, seconds in rows:
+        cpu[pid] = seconds
+        children.setdefault(ppid, []).append(pid)
+    if root not in cpu:
+        return process_cpu_seconds(root)
+    total = 0.0
+    stack = [root]
+    visited: set[int] = set()
+    while stack:
+        pid = stack.pop()
+        if pid in visited:
+            continue
+        visited.add(pid)
+        total += cpu.get(pid, 0.0)
+        stack.extend(children.get(pid, []))
+    return total
 
 
 def registry_adopted_parent(session_id: str) -> str | None:
@@ -272,7 +333,7 @@ def classify(lease: dict[str, Any], manifest: dict[str, Any], now: int) -> str:
     old_log_time = int(lease.get("logMtime") or 0)
     old_cpu = float(lease.get("childCpuSeconds") or 0.0)
     log_time = log_mtime_ms(log_path)
-    cpu_time = process_cpu_seconds(child_pid) if child_pid and pid_alive(child_pid) else 0.0
+    cpu_time = process_tree_cpu_seconds(child_pid) if child_pid and pid_alive(child_pid) else 0.0
     lease["childJobPid"] = child_pid
     lease["childCpuSeconds"] = cpu_time
     lease["logPath"] = log_path

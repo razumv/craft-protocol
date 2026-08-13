@@ -4,6 +4,13 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.4] — 2026-08-13
+
+### Descendant process-tree liveness
+
+- `worker-lease.py` measures observable-job progress across the job's whole descendant process tree instead of the direct child PID only: a supervisor whose nearly-idle driver delegates heavy work to a descendant (python → Blender) was repeatedly demoted to `suspect`/`stalled` despite objective CPU progress, terminating a 12-hour GTA A4 build at its ceiling without output;
+- tree CPU aggregates over one `ps -axo pid,ppid,time` snapshot with cycle protection and falls back to the direct-child measurement when the snapshot is unavailable; flat tree CPU with stale evidence still classifies `stalled` exactly as before.
+
 ## [3.4.3] — 2026-08-13
 
 ### Rotation adoption rebind and generation-superseded blocks
@@ -179,7 +186,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.3...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.4...HEAD
+[3.4.4]: https://github.com/razumv/craft-protocol/compare/v3.4.3...v3.4.4
 [3.4.3]: https://github.com/razumv/craft-protocol/compare/v3.4.2...v3.4.3
 [3.4.2]: https://github.com/razumv/craft-protocol/compare/v3.4.1...v3.4.2
 [3.4.1]: https://github.com/razumv/craft-protocol/compare/v3.4.0...v3.4.1
