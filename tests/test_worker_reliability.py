@@ -104,6 +104,27 @@ class ReliabilityToolsTest(unittest.TestCase):
         self.exec_tool("worker-lease.py", "heartbeat", "--session", "missing")
         self.assertFalse(lease.exists())
 
+    def test_reconcile_rebinds_adopted_children_to_registry_successor(self):
+        # Children keep creation-time parent-session labels naming the archived
+        # predecessor; the successor registry's activeChildren is machine truth.
+        self.manifest("child")  # label parent-session::parent
+        registry = self.runtime / "coordinators/demo.json"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(json.dumps({
+            "project": "demo", "state": "authoritative",
+            "coordinatorSessionId": "successor", "generation": 2,
+            "activeChildren": ["child"]}))
+        self.manifest("stray")  # not adopted by any registry
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
+        child = json.loads((self.runtime / "worker-leases/child.json").read_text())
+        self.assertEqual(child["parentSessionId"], "successor")
+        stray = json.loads((self.runtime / "worker-leases/stray.json").read_text())
+        self.assertEqual(stray["parentSessionId"], "parent")
+        # Rebind is stable across repeated reconciles.
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
+        child = json.loads((self.runtime / "worker-leases/child.json").read_text())
+        self.assertEqual(child["parentSessionId"], "successor")
+
     def test_create_refuses_role_drift_parents(self):
         # Self-parented lane is refused.
         self.manifest("selfy")
