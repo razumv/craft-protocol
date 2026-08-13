@@ -83,6 +83,14 @@ If evidence changed, defer or allow deterministic detection to resolve the incid
 6. Rotation is allowed only after two failed wake cycles and preservation proof. Use a verified project-bound Codex bridge session to spawn exactly one Sol/medium/allow-all successor. Verify successor project binding, provider, labels, cwd, and uniqueness before two-phase registry transfer. Adopt all live workers/auditors; do not restart them solely because the coordinator died.
 7. If no safe bridge exists, escalate. Never create an unbound coordinator.
 
+### Coordinator parked in a worker-terminal session status
+
+`coordinator-worker-terminal-status` means an authoritative/rotating coordinator's session sits in `needs-review`/`done` — worker role drift that leaves it deaf to queued admission wakes. Queue-only delivery is futile by definition, so this incident is controller-bound with the standard coordinator stages:
+
+1. `wake-1`/`wake-2`: send the exact incident evidence directly to the coordinator session and ask it to clear its session status, renew ownership, and reconcile; a completed coordinator turn with a fresh heartbeat resolves the cycle.
+2. If two wake cycles fail (the direct message also did not produce a completed turn), the `rotation` stage applies: preservation proof, then one bounded rotation through a verified project-bound bridge exactly as for a stale/error coordinator. The successor adopts all live children.
+3. Never edit the session status yourself and never archive the parked coordinator without preservation proof and rotation.
+
 ### Terminal child handoff
 
 Archive/reap only if all are proven:

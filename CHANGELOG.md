@@ -4,6 +4,13 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.6] — 2026-08-13
+
+### Deaf-coordinator incident routing
+
+- emit a deterministic `coordinator-worker-terminal-status` incident when an authoritative/rotating coordinator's session sits in a worker-terminal status (`needs-review`/`done`): such a session is deaf to queued admission wakes, so the incident always takes the recovery-controller lane (never the direct tick) and carries the standard coordinator stages — two direct-message wake attempts, then one bounded preservation-proven rotation;
+- the v3.4.2 registry-validate flag remains; this release adds the missing wake path so a parked coordinator is recovered autonomously instead of waiting for a direct owner nudge (5 hours of production deafness were observed on 2026-08-13).
+
 ## [3.4.5] — 2026-08-13
 
 ### Complexity-threshold flagging and scoped reset
@@ -193,7 +200,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.5...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.6...HEAD
+[3.4.6]: https://github.com/razumv/craft-protocol/compare/v3.4.5...v3.4.6
 [3.4.5]: https://github.com/razumv/craft-protocol/compare/v3.4.4...v3.4.5
 [3.4.4]: https://github.com/razumv/craft-protocol/compare/v3.4.3...v3.4.4
 [3.4.3]: https://github.com/razumv/craft-protocol/compare/v3.4.2...v3.4.3

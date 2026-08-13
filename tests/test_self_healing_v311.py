@@ -37,6 +37,24 @@ class SelfHealingV311Test(unittest.TestCase):
         return cp, json.loads(cp.stdout) if cp.returncode==0 and cp.stdout else None
     def base(self): self.manifest("coord",cwd="/tmp/project"); self.registry()
 
+    def test_worker_terminal_status_coordinator_emits_incident(self):
+        # An authoritative coordinator parked in a worker-terminal session status is
+        # deaf to queued wakes; detection must surface it deterministically.
+        self.manifest("coord", status="needs-review", cwd="/tmp/project"); self.registry()
+        _, d = self.cli("detect")
+        rows = [x for x in d["observations"] if x["kind"] == "coordinator-worker-terminal-status"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["evidence"]["sessionStatus"], "needs-review")
+        self.assertEqual(rows[0]["project"], "alpha")
+        # A HOLD-parked project is intentional rest, never flagged.
+        self.registry(state="hold")
+        _, d = self.cli("detect")
+        self.assertNotIn("coordinator-worker-terminal-status", [x["kind"] for x in d["observations"]])
+        # An active coordinator is clean.
+        self.manifest("coord", status="in_progress", cwd="/tmp/project"); self.registry()
+        _, d = self.cli("detect")
+        self.assertNotIn("coordinator-worker-terminal-status", [x["kind"] for x in d["observations"]])
+
     def test_stale_coordinator_is_idempotent(self):
         self.manifest("coord"); self.registry(leaseExpiresAt=self.now-1000)
         _,a=self.cli("detect","--apply"); _,b=self.cli("detect","--apply")

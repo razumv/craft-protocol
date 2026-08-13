@@ -33,6 +33,7 @@ ACTION_MATRIX = {
     "coordinator-lease-stale": ["wake-coordinator", "renew-request", "bridge-rotation-after-two-failures"],
     "coordinator-session-error": ["wake-coordinator", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
     "coordinator-pi-sigterm": ["wake-coordinator", "renew-request", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
+    "coordinator-worker-terminal-status": ["wake-coordinator", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
     "fallback-ttl-expired": ["codex-repatriation"],
     "transfer-stuck": ["inspect-transfer", "wake-coordinator", "owner-escalation"],
     "worker-suspect": ["inspect-progress", "wake-coordinator"],
@@ -195,6 +196,13 @@ def collect_observations():
             if started and now-started > TRANSFER_STUCK_SECONDS*1000:
                 out.append(observation("transfer-stuck", "critical", project, sid,
                     {"transferStartedAt": started, "pendingSessionId": record.get("pendingSessionId"), "generation": record.get("generation")}))
+        session_status = (manifest or {}).get("sessionStatus")
+        if record.get("state") in {"authoritative", "rotating"} and session_status in {"needs-review", "done"}:
+            # A coordinator parked in a worker-terminal session status is deaf to
+            # queued admission wakes (role drift observed live on 2026-08-13); a
+            # direct wake is futile, so the controller owns the recovery stages.
+            out.append(observation("coordinator-worker-terminal-status", "high", project, sid,
+                {"sessionStatus": session_status, "generation": record.get("generation")}))
         terminal_error = terminal_session_error(manifest)
         if terminal_error:
             out.append(observation("coordinator-session-error", "high", project, sid,
@@ -375,11 +383,14 @@ def mutate(iid, fn):
         if not row: fail(f"incident not found: {iid}")
         fn(row); common.atomic_json(incident_path(iid), row); return row
 
+COORDINATOR_RECOVERY_KINDS = {"coordinator-lease-stale", "coordinator-session-error",
+                              "coordinator-pi-sigterm", "coordinator-worker-terminal-status"}
+
 def claim_limit(row):
-    return COORDINATOR_MAX_ATTEMPTS if row.get("kind") in {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm"} else MAX_ATTEMPTS
+    return COORDINATOR_MAX_ATTEMPTS if row.get("kind") in COORDINATOR_RECOVERY_KINDS else MAX_ATTEMPTS
 
 def coordinator_incident(row):
-    return row.get("kind") in {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm"}
+    return row.get("kind") in COORDINATOR_RECOVERY_KINDS
 
 def claim_stage(row, attempt_number):
     if not coordinator_incident(row): return "recover"
