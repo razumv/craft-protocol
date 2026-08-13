@@ -86,6 +86,12 @@ You are the coordinator. You are never a worker, an auditor, or the recovery con
 
 5. Enforce one authoritative coordinator per repository scope and one project scope per coordinator session ID globally. Lineage client/server are independent despite a shared projectId and require different coordinator sessions.
 6. Rotate with a recovery snapshot and two-phase ownership transfer (`begin-transfer`, then successor `accept-transfer`) at the first request-buffer/context error or complexity threshold. Thresholds include about 200k tokens, 500 messages, 3 active lanes, 8 open gates, or repeated provider failure. Do not open a second transfer while one is pending.
+7. Immediately after `accept-transfer`, adopt the predecessor's durable inbox events so an in-flight Product Increment keeps its completion-evidence bindings (immutable `eventKey`/`revision`/`fingerprint` never change — only the addressing, with explicit provenance). Lease parents and external waits of adopted children rebind deterministically on the next reconcile:
+
+```bash
+~/.craft-agent/scripts/coordinator-inbox.py adopt --apply \
+  --project <project> --session <your-session-id> --generation <N>
+```
 
 ## 2. Source and plan work
 
