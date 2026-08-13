@@ -297,6 +297,25 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         self.assertEqual(self.direct_state()["phase"],"blocked")
         self.assertIn("no longer authoritative",self.direct_state()["reason"])
 
+    def test_reset_project_selector_touches_only_that_project(self):
+        ticks = self.runtime / "self-healing/coordinator-ticks"
+        ticks.mkdir(parents=True, exist_ok=True)
+        (ticks / "aaaa.json").write_text(json.dumps(
+            {"schemaVersion": 3, "phase": "blocked", "project": "alpha"}))
+        (ticks / "bbbb.json").write_text(json.dumps(
+            {"schemaVersion": 3, "phase": "pending-consumption", "project": "beta"}))
+        # Scoped reset touches only alpha and ignores beta's in-flight delivery.
+        _, out = self.cli("reset", "--project", "alpha", "--apply")
+        self.assertEqual(len(out["reset"]), 1)
+        self.assertFalse((ticks / "aaaa.json").exists())
+        self.assertTrue((ticks / "bbbb.json").exists())
+        # Unscoped reset still refuses while beta is mid-delivery.
+        cp, _ = self.cli("reset", "--apply", ok=False)
+        self.assertNotEqual(cp.returncode, 0)
+        self.assertTrue((ticks / "bbbb.json").exists())
+        cp, _ = self.cli("reset", "--project", "missing", "--apply", ok=False)
+        self.assertIn("no admission state", cp.stdout + cp.stderr)
+
     def test_superseded_generation_block_is_replaced_by_new_generation_cycle(self):
         self.registry(); self.incident(kind="coordinator-lease-stale",evidence={"generation":7})
         self.apply(); self.registry(generation=8)

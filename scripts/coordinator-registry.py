@@ -271,6 +271,18 @@ def inspect_one(project: str) -> dict[str, Any]:
         if (value.get("state") in {"authoritative", "rotating"}
                 and manifest.get("sessionStatus") in {"needs-review", "done"}):
             issues.append(f"coordinator-worker-terminal-status:{manifest.get('sessionStatus')}")
+        # Rotation thresholds were prompt-only guidance; a coordinator past them
+        # keeps dying mid-turn instead of rotating. Flag it machine-side so the
+        # owner/watchdog sees the pressure before the deaths.
+        if value.get("state") in {"authoritative", "rotating"}:
+            max_messages = int(os.environ.get("CRAFT_COORDINATOR_MAX_MESSAGES", "500"))
+            max_tokens = int(os.environ.get("CRAFT_COORDINATOR_MAX_TOKENS", "200000"))
+            messages = manifest.get("messageCount")
+            tokens = (manifest.get("tokenUsage") or {}).get("totalTokens") if isinstance(manifest.get("tokenUsage"), dict) else None
+            if isinstance(messages, int) and messages >= max_messages:
+                issues.append(f"coordinator-complexity-threshold:messages={messages}")
+            if isinstance(tokens, int) and tokens >= max_tokens:
+                issues.append(f"coordinator-complexity-threshold:tokens={tokens}")
         if manifest.get("projectId") != value.get("projectId"): issues.append("native-project-binding-drift")
         if manifest.get("llmConnection") != value.get("connection") or manifest.get("model") != value.get("model"): issues.append("provider-record-drift")
         labels = set(manifest.get("labels") or [])
