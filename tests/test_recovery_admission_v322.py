@@ -247,7 +247,7 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         self.registry(lastHeartbeatAt=NOW-1_900_000,leaseExpiresAt=NOW+1_700_000)
         self.apply(); state=self.direct_state()
         self.assertEqual(state["targetGeneration"],"7"); self.assertTrue(state["incidentIds"][0].startswith("tick-"))
-        self.assertIn("COORDINATOR TICK v3.2.2",state["message"]); self.assertEqual(len(self.records("deliver")),1)
+        self.assertIn("COORDINATOR TICK",state["message"]); self.assertIn("admission lane v3.2.2",state["message"]); self.assertEqual(len(self.records("deliver")),1)
 
     def test_ambiguous_cross_project_owner_gets_no_scheduled_direct_tick(self):
         self.registry(lastHeartbeatAt=NOW-1_900_000,leaseExpiresAt=NOW+1_700_000)

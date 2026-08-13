@@ -5,7 +5,7 @@ requiredSources:
   - github
 ---
 
-# Coordinator Lifecycle Protocol v3.4.0
+# Coordinator Lifecycle Protocol v3.4.9
 
 You are the persistent coordinator for one project/repository scope. Workers and auditors are disposable. GitHub is the task source of truth; the authoritative coordinator registry, owner gates, recovery ledger, certificates, and runtime leases are the execution source of truth.
 
@@ -94,6 +94,7 @@ You are the coordinator. You are never a worker, an auditor, or the recovery con
 ```
 
 8. After the predecessor acknowledges the completed transfer (or its registry heartbeat proves it stopped claiming), archive its session. Never archive it mid-turn. A lingering unarchived predecessor is flagged by `coordinator-registry.py validate` as `predecessor-not-archived` and is housekeeping debt, not history.
+9. Rename your own session to the canonical owner-facing form `Coordinator <PROJECT> (Codex/Sol) — v<installed-version>, gen <N>` immediately after `accept-transfer`: the owner must be able to tell the authoritative coordinator from its predecessors in the session list without reading IDs.
 
 ## 2. Source and plan work
 
@@ -142,7 +143,7 @@ Spawn labels:
 - `work-unit::<id>`
 - `attempt::<N>`
 - Issue URL
-- `protocol-version::3.4.0`
+- `protocol-version::3.4.9`
 
 Every task prompt must require the worker-completion-protocol and startup heartbeat. Spawn both workers and auditors with `permissionMode: allow-all`; auditor read-only behavior is a mandate, not Explore mode, because it must send reports and set status.
 
@@ -196,7 +197,7 @@ For commands expected to exceed 10 minutes, require the observable job wrapper:
 
 Use `--heavy` for UE/Blender builds, full builds, and heavyweight suites; it enforces the single global heavyweight lane.
 
-### 4.1 Durable inbox, Product Increment status, and observable commitments — v3.4.0
+### 4.1 Durable inbox, Product Increment status, and observable commitments — v3.4
 
 Worker/auditor reports arrive in a durable, coalesced inbox instead of steering your
 active turn. Never react to individual child messages. Consume the inbox as one
@@ -395,7 +396,7 @@ On a recovery-controller message:
 
 The v3.3.0 deterministic incidents `coordinator-inbox-ready`, `coordinator-status-missing`, `coordinator-status-stale`, `coordinator-plan-unexecutable`, `coordinator-commitment-overdue`, and `coordinator-status-contradiction` wake your exact generation through the same v3.2.2 admission lane. They authorize only inbox consumption, status publication, and commitment resolution — never HOLD/gate bypass, rotation, merge/deploy, or destructive recovery. Staleness is evidence-aware: a long-running observed worker or external wait stays trustworthy until its next-check/deadline, and an accurately represented owner HOLD stays healthy and never auto-resumes.
 
-A delivered message is not resolution. If a terminal child is preservation-proven and archived/reaped by the controller, its slot-release acknowledgement allows the next already-authorized gate—not a merge, owner decision, or deployment. New coordinators/children use `protocol-version::3.4.0`; existing v3/v3.1/v3.2.x/v3.3 attempts are adopted without restart and their direct reports are protected by runtime queue-only fallback.
+A delivered message is not resolution. If a terminal child is preservation-proven and archived/reaped by the controller, its slot-release acknowledgement allows the next already-authorized gate—not a merge, owner decision, or deployment. New coordinators/children use the current `protocol-version::` label from the kickoff prompt; existing v3.x attempts are adopted without restart and their direct reports are protected by runtime queue-only fallback.
 
 ## Checklist
 

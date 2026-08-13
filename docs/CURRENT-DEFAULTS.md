@@ -1,4 +1,4 @@
-# Protocol v3.4.0 defaults
+# Protocol v3.4.9 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -131,7 +131,7 @@ Controller harness invariant:  exactly 1 persistent active; zero stale receipts
 Harness identity:              PID + process start token + command SHA-256
 Notifier cleanup:              archive first; exact guarded reap only
 Kill-switch sentinel:          $HOME/.craft-agent/runtime/self-healing.disabled
-Installer first mutation:      create/restore kill switch before copying v3.4.0 payload
+Installer first mutation:      create/restore kill switch before copying the current payload
 Activation order:              runtime f8679cdc first → Protocol → verify-runtime → report-only → canary approval
 ```
 
