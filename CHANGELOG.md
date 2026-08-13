@@ -4,6 +4,14 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.1] — 2026-08-13
+
+### Evidence-aware admission deadline
+
+- treat an idle pending admission whose target completed at least one full turn after the delivery timestamp as deterministic liveness-proven consumption (`consumedVia: completed-turn-liveness`) instead of hard-blocking `pending-admission-not-processing-at-deadline`; ordered message processing means the injected wake reached the session;
+- this closes two production false-positive block loops observed on busy v3.4.0 coordinators: runtime consumption-attribution gaps under interleaved worker/controller messages, and stale duplicate delivery receipts returned for a recurring incident fingerprint whose original `deliveredAt` instantly exceeds the deadline;
+- a genuinely deaf target — no completed turn after delivery — still hard-blocks exactly as before; recovery-CAS, stable-block acknowledgement, redelivery, and reset semantics are unchanged.
+
 ## [3.4.0] — 2026-08-13
 
 ### Product Increments and role fidelity
@@ -157,7 +165,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.0...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.1...HEAD
+[3.4.1]: https://github.com/razumv/craft-protocol/compare/v3.4.0...v3.4.1
 [3.4.0]: https://github.com/razumv/craft-protocol/compare/v3.3.0...v3.4.0
 [3.3.0]: https://github.com/razumv/craft-protocol/compare/v3.2.0...v3.3.0
 [3.2.1]: https://github.com/razumv/craft-protocol/compare/v3.2.0...v3.2.1

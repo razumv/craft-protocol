@@ -912,8 +912,22 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
 
     started = session_inspection.get("processingStartedAt")
     stuck = session_inspection.get("isProcessing") and isinstance(started, int) and now-started >= RECOVERY_MIN_AGE_MS
-    idle_expired = (not session_inspection.get("isProcessing") and
-                    now-int(state.get("deliveredAt") or state.get("preparedAt") or now) >= RECOVERY_MIN_AGE_MS)
+    delivered_at = int(state.get("deliveredAt") or state.get("preparedAt") or now)
+    last_final_at = session_inspection.get("lastFinalMessageAt")
+    completed_turn_after_delivery = (isinstance(last_final_at, int) and not isinstance(last_final_at, bool)
+                                     and last_final_at > delivered_at)
+    idle_expired = (not session_inspection.get("isProcessing") and now-delivered_at >= RECOVERY_MIN_AGE_MS)
+    if idle_expired and completed_turn_after_delivery:
+        # The runtime never attributed consumption, yet the target completed at
+        # least one full turn after this delivery: ordered message processing means
+        # the injected wake reached the session. Busy-session attribution gaps and
+        # stale duplicate receipts from a recurring incident fingerprint both land
+        # here; hard-blocking would sever the wake lane of a demonstrably live
+        # target, so record deterministic liveness-proven consumption instead.
+        state.update(phase="consumed", consumedAt=last_final_at,
+                     consumedVia="completed-turn-liveness")
+        atomic_json(path, state)
+        return 0, state
     if idle_expired:
         state = hard_block(state, now, "pending-admission-not-processing-at-deadline")
         atomic_json(path, state)
