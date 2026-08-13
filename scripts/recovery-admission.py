@@ -1094,6 +1094,18 @@ def disarm(args: argparse.Namespace) -> int:
 
 def reset(args: argparse.Namespace) -> int:
     paths = [STATE, *sorted(TICK_STATES.glob("*.json"))]
+    if getattr(args, "project", None):
+        # A scoped reset touches only the named project's tick state; an unrelated
+        # in-flight delivery elsewhere no longer forces the operator to wait.
+        wanted = args.project.strip().lower()
+        scoped = []
+        for path in paths:
+            state = read_json(path)
+            if state and str(state.get("project") or "").lower() == wanted:
+                scoped.append(path)
+        if not scoped:
+            raise AdmissionError(f"no admission state found for project: {wanted}")
+        paths = scoped
     changed = []
     for path in paths:
         state = read_json(path)
@@ -1144,6 +1156,7 @@ def main() -> int:
     cmd = sub.add_parser("reset")
     cmd.add_argument("--apply", action="store_true")
     cmd.add_argument("--force", action="store_true")
+    cmd.add_argument("--project")
     cmd.set_defaults(func=reset)
     args = parser.parse_args()
     try:

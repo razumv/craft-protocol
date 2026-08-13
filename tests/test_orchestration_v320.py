@@ -93,6 +93,18 @@ class OrchestrationV320Test(unittest.TestCase):
         p=self.exec_tool("coordinator-registry.py","inspect","--project","demo")
         self.assertNotIn("coordinator-worker-terminal-status",p.stdout)
 
+    def test_06c_complexity_threshold_is_flagged(self):
+        # Rotation thresholds are machine-flagged before context deaths, not after.
+        m=self.manifest("c1", messages=501, tokens=250_000); self.claim()
+        p=self.exec_tool("coordinator-registry.py","inspect","--project","demo",ok=False)
+        self.assertIn("coordinator-complexity-threshold:messages=501",p.stdout)
+        self.assertIn("coordinator-complexity-threshold:tokens=250000",p.stdout)
+        # Below thresholds no flag is raised.
+        m["messageCount"]=10; m["tokenUsage"]={"totalTokens":1000}
+        (self.sessions/"c1/session.jsonl").write_text(json.dumps(m)+"\n")
+        p=self.exec_tool("coordinator-registry.py","inspect","--project","demo")
+        self.assertNotIn("coordinator-complexity-threshold",p.stdout)
+
     def test_07_hold_blocks_spawn(self):
         self.exec_tool("owner-gate.py","hold","--project","gve","--reason","owner hold"); p=self.exec_tool("owner-gate.py","check","--project","gve","--action","spawn",ok=False); self.assertEqual(p.returncode,4)
     def test_08_hold_requires_exact_resume(self):

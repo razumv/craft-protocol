@@ -78,6 +78,7 @@ Messages:                      approximately 500
 Active lanes:                  3
 Open gates:                    8
 Immediate trigger:             request-buffer/context failure
+Machine flag (3.4.5):          coordinator-complexity-threshold from registry validate at 500 msgs / 200k tokens
 Provider trigger:              repeated connection/SIGTERM failure
 ```
 

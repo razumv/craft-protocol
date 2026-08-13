@@ -4,6 +4,13 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.5] — 2026-08-13
+
+### Complexity-threshold flagging and scoped reset
+
+- `coordinator-registry.py` inspect/validate flag `coordinator-complexity-threshold` when an authoritative/rotating coordinator session passes the rotation guidance thresholds (default 500 messages / 200k tokens, tunable via `CRAFT_COORDINATOR_MAX_MESSAGES`/`CRAFT_COORDINATOR_MAX_TOKENS`): rotation pressure becomes machine-visible before context-exhaustion turn deaths instead of after (three silent mid-turn deaths were observed on a generation-6 coordinator before its rotation on 2026-08-13);
+- `recovery-admission.py reset` accepts `--project` to clear one project's admission state without waiting for unrelated in-flight deliveries elsewhere.
+
 ## [3.4.4] — 2026-08-13
 
 ### Descendant process-tree liveness
@@ -186,7 +193,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.4...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.5...HEAD
+[3.4.5]: https://github.com/razumv/craft-protocol/compare/v3.4.4...v3.4.5
 [3.4.4]: https://github.com/razumv/craft-protocol/compare/v3.4.3...v3.4.4
 [3.4.3]: https://github.com/razumv/craft-protocol/compare/v3.4.2...v3.4.3
 [3.4.2]: https://github.com/razumv/craft-protocol/compare/v3.4.1...v3.4.2
