@@ -36,6 +36,7 @@ STATE = Path(os.environ.get("CRAFT_ADMISSION_STATE", RUNTIME / "self-healing/adm
 TICK_STATES = Path(os.environ.get("CRAFT_COORDINATOR_TICK_STATES", RUNTIME / "self-healing/coordinator-ticks")).expanduser()
 LOCK = Path(os.environ.get("CRAFT_ADMISSION_LOCK", RUNTIME / "self-healing/admission.lock")).expanduser()
 DISABLED = Path(os.environ.get("CRAFT_SELF_HEALING_DISABLED", RUNTIME / "self-healing.disabled")).expanduser()
+PROTOCOL_VERSION = "v3.4.9"
 AUTOMATION_ID = os.environ.get("CRAFT_RECOVERY_NOTIFIER_AUTOMATION_ID", "a322-admission")
 LEGACY_AUTOMATION_IDS = {"a321-notifier", "a31101", "a31102"}
 CONTROLLER_ACTION_ID = "a322-controller-recovery"
@@ -582,14 +583,17 @@ def scope_for(batch: dict[str, Any], initial_fingerprint: str) -> dict[str, str]
 
 
 def cycle_message(batch: dict[str, Any], fp: str, ids: list[str]) -> str:
+    # PROTOCOL_VERSION is the installed protocol; the admission lane wire format
+    # stays v3.2.2 — its identifier is baked into occurrence/idempotency keys.
     if batch["targetType"] == "coordinator":
-        return ("COORDINATOR TICK v3.2.2\n"
+        return (f"COORDINATOR TICK {PROTOCOL_VERSION} (admission lane v3.2.2)\n"
                 f"project: {batch['project']}\ncoordinatorGeneration: {batch['coordinatorGeneration']}\n"
                 f"fingerprint: {fp}\nincidentIds: {','.join(ids)}\n"
                 "Reconcile the exact registry generation, active children, and external waits; continue executable lanes. "
                 "Renew authority only through a completed coordinator turn. Do not rotate, reap, bypass gates, or send routine owner-facing reports. "
                 "Re-read the installed coordinator-lifecycle-protocol skill if any of its rules is not immediately recalled; the installed protocol version is authoritative over your spawn-time copy.\n")
-    return ("RECOVERY ADMISSION v3.2.2\n" f"fingerprint: {fp}\nincidentIds: {','.join(ids)}\n"
+    return (f"RECOVERY ADMISSION {PROTOCOL_VERSION} (admission lane v3.2.2)\n"
+            f"fingerprint: {fp}\nincidentIds: {','.join(ids)}\n"
             "Acquire the bounded controller lease and apply only ledger-authorized complex recovery.\n")
 
 

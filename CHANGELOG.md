@@ -4,6 +4,14 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.9] — 2026-08-14
+
+### Version-marker consistency
+
+- skill headers, the kickoff prompt, spawn labels, and `CURRENT-DEFAULTS.md` now carry the current protocol version (a live coordinator had honestly reported an owner-visible "installed v3.4.0 vs owner-requested v3.4.7" discrepancy because patch releases only bumped the changelog/installer/readme); a regression test pins every marker to the latest released changelog version;
+- admission messages carry the installed protocol version in the header — `COORDINATOR TICK v3.4.9 (admission lane v3.2.2)` — while the admission wire format and all occurrence/idempotency keys remain the stable v3.2.2 contract;
+- a rotation successor renames its session to the canonical owner-facing form `Coordinator <PROJECT> (Codex/Sol) — v<version>, gen <N>` immediately after `accept-transfer`.
+
 ## [3.4.8] — 2026-08-14
 
 ### Bounded session housekeeping
@@ -217,7 +225,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.8...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.9...HEAD
+[3.4.9]: https://github.com/razumv/craft-protocol/compare/v3.4.8...v3.4.9
 [3.4.8]: https://github.com/razumv/craft-protocol/compare/v3.4.7...v3.4.8
 [3.4.7]: https://github.com/razumv/craft-protocol/compare/v3.4.6...v3.4.7
 [3.4.6]: https://github.com/razumv/craft-protocol/compare/v3.4.5...v3.4.6

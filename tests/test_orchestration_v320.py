@@ -37,6 +37,24 @@ class OrchestrationV320Test(unittest.TestCase):
             "mergedMainRunIds":["run-3"],"mergedMainAllSuccess":True,"unresolvedGates":[]}
         value.update(changes); p=self.root/"cert.json"; p.write_text(json.dumps(value)); return p
 
+    def test_00_version_markers_match_changelog(self):
+        # Patch releases must not leave stale version markers that make live
+        # coordinators report an owner-visible protocol discrepancy.
+        import re
+        changelog = (ROOT / "CHANGELOG.md").read_text()
+        released = re.search(r"^## \[(\d+\.\d+\.\d+)\]", changelog, re.M).group(1)
+        version = f"v{released}"
+        self.assertIn(f"# Coordinator Lifecycle Protocol {version}",
+                      (ROOT / "skills/coordinator-lifecycle-protocol/SKILL.md").read_text())
+        self.assertIn(f"# Worker Completion Protocol {version}",
+                      (ROOT / "skills/worker-completion-protocol/SKILL.md").read_text())
+        self.assertIn(f"Protocol {version}",
+                      (ROOT / "skills/self-healing-controller/SKILL.md").read_text())
+        self.assertIn(f"(canonical {version})", (ROOT / "scripts/coordinator-kickoff.md").read_text())
+        self.assertIn(f"protocol v{released}.", (ROOT / "install.sh").read_text())
+        self.assertIn(f'PROTOCOL_VERSION = "{version}"',
+                      (ROOT / "scripts/recovery-admission.py").read_text())
+
     def test_01_claim_and_renew(self):
         self.manifest("c1"); self.claim(); self.exec_tool("coordinator-registry.py","renew","--project","demo","--session","c1")
     def test_01b_completed_assistant_activity_renews_exact_owner(self):
