@@ -266,6 +266,11 @@ def inspect_one(project: str) -> dict[str, Any]:
     if value.get("state") != "hold" and value.get("leaseExpiresAt") is not None and now > int(value["leaseExpiresAt"]): issues.append("coordinator-lease-stale")
     if value.get("fallbackExpiresAt") is not None and now > int(value["fallbackExpiresAt"]): issues.append("fallback-ttl-expired")
     if manifest:
+        # A coordinator parked in a worker-terminal session status is deaf to queued
+        # admission wakes until a direct owner message; that is role drift, not rest.
+        if (value.get("state") in {"authoritative", "rotating"}
+                and manifest.get("sessionStatus") in {"needs-review", "done"}):
+            issues.append(f"coordinator-worker-terminal-status:{manifest.get('sessionStatus')}")
         if manifest.get("projectId") != value.get("projectId"): issues.append("native-project-binding-drift")
         if manifest.get("llmConnection") != value.get("connection") or manifest.get("model") != value.get("model"): issues.append("provider-record-drift")
         labels = set(manifest.get("labels") or [])
