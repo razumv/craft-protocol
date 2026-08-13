@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.craft-protocol.gate-board</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-c</string>
+    <string>export CRAFT_RPC_CLI=$(/opt/homebrew/bin/python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.craft-agent/runtime/self-healing/persistent-controller.json')))['rpcCli'])"); export CRAFT_SERVER_URL=$(/opt/homebrew/bin/python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.craft-agent/runtime/self-healing/persistent-controller.json')))['serverUrl'])"); export CRAFT_SERVER_TOKEN=$(cat ~/.config/craft-agent-headless/server-token); /opt/homebrew/bin/python3 ~/.craft-agent/scripts/owner-gate-board.py sync --apply</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>120</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/razumv/.craft-agent/logs/gate-board.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/razumv/.craft-agent/logs/gate-board.log</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
