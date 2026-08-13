@@ -4,7 +4,9 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
-### Protocol v3.4.0 candidate — Product Increments
+## [3.4.0] — 2026-08-13
+
+### Product Increments and role fidelity
 
 - change the delivery unit from issue-by-issue candidate churn to one customer-visible Product Increment with a bounded acyclic story DAG, one integrated immutable candidate, one batch CI, one merge/deploy/readback and one real-workflow demonstration;
 - extend existing product status backward-compatibly with demonstrable-now, remaining outcome, ETA range, confidence, one real blocker and a validated 1–8-story increment object; customer-facing aggregate reports now lead with product meaning and place PR/SHA/CI/session/audit evidence last;
@@ -12,7 +14,7 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - move independent acceptance to the aggregate increment risk boundary: Low uses scoped story checks + coordinator integration review + batch CI, Medium/High use one focused final-candidate audit, and UI completion requires real desktop/mobile/user-workflow evidence;
 - add optional durable failure classes for blocker/terminal/verdict/observer reports (`admission-environment`, `implementation-defect`, `product-acceptance`, `integration-release`, `irreversible-high-risk`) and keep recovery attempt accounting separate;
 - document deliberate Geolance adoption and dispositions for all 129 DeepSeek problem statements while rejecting a new scheduler/database/queue/service, role hierarchy, vector-memory platform, semantic tool execution and stack-specific infrastructure remedies in the protocol core;
-- preserve all v3.3 admission, generation-fencing, inbox claim/ack, status compatibility, observer, owner-gate, worktree and recovery behavior; no runtime server upgrade or production activation is included in this candidate;
+- preserve all v3.3 admission, generation-fencing, inbox claim/ack, status compatibility, observer, owner-gate, worktree and recovery behavior; no runtime server upgrade is required beyond the production-tested v3.3 capability-v2 runtime;
 - harden role fidelity and autonomous continuation: lease creation refuses self-parented lanes, non-coordinator parents and live-lane worktree collisions; the inbox refuses `candidate` from auditors and `progress`/`candidate` from terminal lanes and echoes a binding `roleReminder` on every submit/claim; publishing `blocked` requires an open owner-gate reference or active observable commitment and `hold` requires an open explicit-hold gate; coordinator/worker/controller skills and the kickoff prompt gain explicit role-fidelity, re-anchoring and owner-question-discipline rules.
 
 ## [3.3.0] — 2026-08-12
@@ -155,7 +157,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.3.0...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.0...HEAD
+[3.4.0]: https://github.com/razumv/craft-protocol/compare/v3.3.0...v3.4.0
 [3.3.0]: https://github.com/razumv/craft-protocol/compare/v3.2.0...v3.3.0
 [3.2.1]: https://github.com/razumv/craft-protocol/compare/v3.2.0...v3.2.1
 [3.2.0]: https://github.com/razumv/craft-protocol/compare/v3.1.1...v3.2.0

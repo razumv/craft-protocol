@@ -239,7 +239,7 @@ The installer defaults to dry-run. It prints planned destinations and performs n
 
 The installer:
 
-1. creates/restores mode-0600 `~/.craft-agent/runtime/self-healing.disabled` before copying any v3.3.0 payload;
+1. creates/restores mode-0600 `~/.craft-agent/runtime/self-healing.disabled` before copying any v3.4.0 payload;
 2. backs up overwritten protocol files into a timestamped directory;
 3. installs scripts under `~/.craft-agent/scripts`;
 4. installs canonical skills under the selected workspace;
