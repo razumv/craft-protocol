@@ -4,6 +4,15 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.8] — 2026-08-14
+
+### Bounded session housekeeping
+
+- coordinators gain a standing bounded housekeeping duty: at every material transition archive up to five preservation-proven terminal children (`handoff-ready` + `pushed`/`merged`); `worker-lease.py report` exposes the machine-visible `archivableBacklog`, and letting it grow is a protocol violation (123 unarchived worker/auditor sessions had accumulated in production because cleanup was owed only "before replacement");
+- a rotation now ends with the successor archiving the acknowledged predecessor; `coordinator-registry.py` validate flags `predecessor-not-archived:<sid>` (five live predecessors had accumulated after one rotation day);
+- the recovery controller's startup housekeeping is distinct from its incident budget: archive up to five terminal prior recovery controller/notifier sessions per turn, with the guarded harness reap only for registered priors (29 unarchived controller sessions had accumulated under the old two-registered-only rule);
+- every coordinator tick now instructs the target to re-read the installed coordinator skill when any rule is not immediately recalled: the installed protocol version is authoritative over the spawn-time copy, so fleet-wide protocol upgrades propagate on the next wake instead of the next respawn.
+
 ## [3.4.7] — 2026-08-14
 
 ### Completion-evidence continuity across rotation
@@ -208,7 +217,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.7...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.8...HEAD
+[3.4.8]: https://github.com/razumv/craft-protocol/compare/v3.4.7...v3.4.8
 [3.4.7]: https://github.com/razumv/craft-protocol/compare/v3.4.6...v3.4.7
 [3.4.6]: https://github.com/razumv/craft-protocol/compare/v3.4.5...v3.4.6
 [3.4.5]: https://github.com/razumv/craft-protocol/compare/v3.4.4...v3.4.5

@@ -40,14 +40,14 @@ Registration failure is a hard refusal: report it, set `needs-review`, and stop.
 ```
 
 6. If another live controller owns it, set this session `needs-review` and stop. The next scheduled controller will archive/reap it.
-7. Run `controller-harness.py report`. Clean at most two prior registered recovery controllers: require terminal/not-processing and no background task; archive each prior session first, then:
+7. Run `controller-harness.py report`. Perform startup housekeeping distinct from the incident budget: archive up to five terminal prior recovery controller/notifier sessions per turn (require terminal/not-processing and no background task; archive each prior session first). For registered priors, follow the archive with the guarded harness reap; an unregistered terminal recovery session is archived without a reap — there is no receipt to guard:
 
 ```bash
 ~/.craft-agent/scripts/controller-harness.py reap \
   --session <prior> --current-session <self> --apply
 ```
 
-Never archive yourself. PID reuse, app/non-harness command, unknown ownership, non-terminal status, or missing archive proof is a hard refusal. One active registered controller plus one terminal awaiting next-run reap is healthy; growth beyond that must be escalated and stops incident work.
+Never archive yourself. PID reuse, app/non-harness command, unknown ownership, non-terminal status, or missing archive proof is a hard refusal. One active registered controller plus one terminal awaiting next-run reap is healthy; growth beyond that must be worked down by the bounded startup housekeeping above, and continued growth despite it must be escalated.
 8. Run `recovery-incident.py detect --apply` and `list --state open`.
 9. Claim incidents one at a time in severity/age order. Obey the returned `claimStage` and `claimAllowedActions` exactly. Incident actions require your live within-budget singleton controller lease. An expired claim/controller cannot be heartbeated or mutated.
 10. Renew the singleton controller lease after each evidence batch/incident and before any potentially long verification:

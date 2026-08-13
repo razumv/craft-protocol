@@ -161,6 +161,7 @@ Commitment bindings:           worker-lease, external-wait, owner-gate, schedule
 Commitment deadline range:     60..604800 seconds
 Owner aggregate report:        coordinator-status.py report --all --format markdown|json
 Reconcile cadence:             watchdog, every 300 seconds, before the incident scan
+Housekeeping (3.4.8):          up to 5 preservation-proven terminal children archived per material transition; predecessor archived after handoff; archivableBacklog in worker-lease report
 Deaf-coordinator wake (3.4.6): coordinator-worker-terminal-status, controller-bound, wake-1/wake-2/rotation stages
 New incidents:                 coordinator-inbox-ready, coordinator-status-missing, coordinator-status-stale,
                                coordinator-plan-unexecutable, coordinator-commitment-overdue, coordinator-status-contradiction

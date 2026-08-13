@@ -104,6 +104,19 @@ class ReliabilityToolsTest(unittest.TestCase):
         self.exec_tool("worker-lease.py", "heartbeat", "--session", "missing")
         self.assertFalse(lease.exists())
 
+    def test_report_exposes_archivable_backlog(self):
+        self.manifest("done1", status="needs-review")
+        self.manifest("done2", status="needs-review")
+        self.manifest("dirty", status="needs-review")
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
+        for sid, preservation in (("done1", "pushed"), ("done2", "merged")):
+            lease_path = self.runtime / f"worker-leases/{sid}.json"
+            lease = json.loads(lease_path.read_text())
+            lease["preservationState"] = preservation
+            lease_path.write_text(json.dumps(lease))
+        report = json.loads(self.exec_tool("worker-lease.py", "report").stdout)
+        self.assertEqual(report["archivableBacklog"], 2)  # dirty stays unknown → excluded
+
     def test_reconcile_rebinds_adopted_children_to_registry_successor(self):
         # Children keep creation-time parent-session labels naming the archived
         # predecessor; the successor registry's activeChildren is machine truth.

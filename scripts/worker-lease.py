@@ -579,7 +579,12 @@ def cmd_report(_: argparse.Namespace) -> int:
         sharing = value.get("cwdCollisionSessions") or []
         if sharing and value.get("worktree"):
             collisions[str(value["worktree"])] = sharing
-    print(json.dumps({"summary": summary, "cwdCollisions": collisions, "leases": rows}, ensure_ascii=False, indent=2))
+    # A lease exists only while its session is unarchived, so every terminal
+    # preservation-proven lease is archivable housekeeping debt.
+    archivable = sum(1 for value in rows if value.get("state") == "handoff-ready"
+                     and value.get("preservationState") in {"pushed", "merged"})
+    print(json.dumps({"summary": summary, "archivableBacklog": archivable,
+                      "cwdCollisions": collisions, "leases": rows}, ensure_ascii=False, indent=2))
     return 0
 
 

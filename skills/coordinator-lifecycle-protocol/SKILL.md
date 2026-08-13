@@ -93,6 +93,8 @@ You are the coordinator. You are never a worker, an auditor, or the recovery con
   --project <project> --session <your-session-id> --generation <N>
 ```
 
+8. After the predecessor acknowledges the completed transfer (or its registry heartbeat proves it stopped claiming), archive its session. Never archive it mid-turn. A lingering unarchived predecessor is flagged by `coordinator-registry.py validate` as `predecessor-not-archived` and is housekeeping debt, not history.
+
 ## 2. Source and plan work
 
 Source only from GitHub: active milestone → open issues → dependencies/Project fields → next unblocked issue. Freeze each task package: exact criterion, boundaries, unacceptable near-solutions, verification, and return gate.
@@ -376,7 +378,7 @@ session, role, work-unit, attempt, issue, worktree, branch/PR,
 dependencies, lease state, last evidence, preservation, verdict, next action
 ```
 
-At material state transitions only—dispatch, candidate handoff, terminal job, acceptance verdict, merge/gate change, or rotation—reconcile leases, snapshot, and publish the durable product-status snapshot (§4.1). All milestones, blockers, and gates stay in GitHub/runtime; do not send them to the owner-facing architecture session. The owner obtains an on-demand aggregate via `coordinator-status.py report --all --format markdown`; coordinators never send periodic reports to the architecture session. Do not perform full sweeps or send acknowledgements for routine heartbeats/messages. Archive/reap terminal attempts before any replacement.
+At material state transitions only—dispatch, candidate handoff, terminal job, acceptance verdict, merge/gate change, or rotation—reconcile leases, snapshot, and publish the durable product-status snapshot (§4.1). At the same transitions perform bounded housekeeping: archive up to five of your preservation-proven terminal children (lease `handoff-ready` with preservation `pushed`/`merged`; archive first, then the guarded post-archive reaper). `worker-lease.py report` exposes the machine-visible `archivableBacklog`; letting it grow is a protocol violation, not tidiness preference. Dirty/unproven/shared-cwd lanes stay untouched exactly as before. All milestones, blockers, and gates stay in GitHub/runtime; do not send them to the owner-facing architecture session. The owner obtains an on-demand aggregate via `coordinator-status.py report --all --format markdown`; coordinators never send periodic reports to the architecture session. Do not perform full sweeps or send acknowledgements for routine heartbeats/messages. Archive/reap terminal attempts before any replacement.
 
 ## 10. v3.1.1 self-healing integration
 
