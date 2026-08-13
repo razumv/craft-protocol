@@ -719,6 +719,24 @@ def cmd_publish(args: argparse.Namespace) -> int:
                       if commitments.get(r, {}).get("state") in ACTIVE_COMMITMENT_STATES]
             if not active:
                 fail("a waiting phase requires at least one active observable commitment reference")
+        if declared["phase"] == "blocked":
+            open_gate_ids = {g.get("gateId") for g in project_gates(project) if g.get("state") == "open"}
+            open_gate_refs = [r for r in declared["gateRefs"] + declared["blockerRefs"]
+                              if r in open_gate_ids]
+            commitments = {c.get("commitmentId"): c for c in project_commitments(project)
+                           if exact_generation(c.get("generation")) == args.generation}
+            active = [r for r in declared["commitmentRefs"]
+                      if commitments.get(r, {}).get("state") in ACTIVE_COMMITMENT_STATES]
+            if not open_gate_refs and not active:
+                fail("a blocked phase requires an open owner-gate reference or an active observable "
+                     "commitment; reversible technical work must continue autonomously instead of "
+                     "publishing a prose blocker")
+        if declared["phase"] == "hold":
+            holds = [g for g in project_gates(project) if g.get("state") == "open"
+                     and (g.get("gateId") == "project-hold"
+                          or g.get("ownerOnlyCategory") == "explicit-hold")]
+            if not holds:
+                fail("a hold phase requires an open explicit-hold owner gate; a coordinator may not self-hold")
         prior_path = STATUS / f"{project}.json"
         prior_raw = common.read_json(prior_path)
         prior = object_or_none(prior_raw)

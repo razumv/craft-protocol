@@ -42,6 +42,19 @@ KINDS = {"progress", "candidate", "audit-verdict", "terminal-handoff", "blocker"
 # Only these unclaimed kinds wake a coordinator; progress/candidate remain coalesced.
 WAKING_KINDS = {"terminal-handoff", "audit-verdict", "blocker", "observer-terminal"}
 SENDER_ROLES = {"worker", "auditor"}
+# Deterministic role re-anchor echoed on every submit/claim so a long-context agent
+# is reminded of its exact role contract each time it touches the inbox.
+ROLE_REMINDERS = {
+    "coordinator": ("coordinator: consume this digest in one bounded step, act, publish "
+                    "product-status, then ack with that revision; dispatch workers/auditors "
+                    "instead of implementing or auditing yourself, and continue autonomously "
+                    "without new owner questions outside owner-only categories"),
+    "worker": ("worker: one frozen story in your unique worktree — preserve to git, report "
+               "here, finish lease, needs-review, stop; never spawn lanes, audit, or merge"),
+    "auditor": ("auditor: verify the frozen candidate read-only and report an audit-verdict "
+                "with evidence; never edit, commit, or fix code — a correction is a new "
+                "worker lane"),
+}
 FAILURE_CLASSES = {"admission-environment", "implementation-defect", "product-acceptance",
                    "integration-release", "irreversible-high-risk"}
 FAILURE_KINDS = {"blocker", "terminal-handoff", "audit-verdict", "observer-terminal"}
@@ -206,9 +219,13 @@ def cmd_submit(args: argparse.Namespace) -> int:
             fail("sender must have worker/auditor role")
         if args.kind == "audit-verdict" and sender_role != "auditor":
             fail("audit-verdict requires an auditor sender")
+        if args.kind == "candidate" and sender_role != "worker":
+            fail("candidate reports require a worker sender; an auditor verifies read-only and reports an audit-verdict")
         lease = common.read_json(LEASES / f"{sender}.json")
         if not lease or lease.get("sessionId") != sender:
             fail("sender lease is missing")
+        if args.kind in {"progress", "candidate"} and lease.get("state") == "handoff-ready":
+            fail("terminal lane may not send progress/candidate reports; a terminal handoff is never downgraded and a rework needs a fresh lane")
         if lease.get("parentSessionId") != coordinator:
             fail("sender lease is not bound to this coordinator")
         if str(lease.get("workUnit") or "") != work_unit:
@@ -247,7 +264,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 existing["updatedAt"] = now
                 if args.apply:
                     common.atomic_json(path, existing)
-                print(json.dumps({"applied": args.apply, "coalesced": True, "item": existing}, ensure_ascii=False, indent=2))
+                print(json.dumps({"applied": args.apply, "coalesced": True, "item": existing,
+                                  "roleReminder": ROLE_REMINDERS[sender_role]}, ensure_ascii=False, indent=2))
                 return 0
             # Meaningful newer revision replaces the pending payload under the same key.
             revision = revision_hint if revision_hint is not None else int(existing.get("revision") or 0) + 1
@@ -286,7 +304,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 item["failureClass"] = failure_class
         if args.apply:
             common.atomic_json(path, item)
-    print(json.dumps({"applied": args.apply, "coalesced": bool(existing), "item": item}, ensure_ascii=False, indent=2))
+    print(json.dumps({"applied": args.apply, "coalesced": bool(existing), "item": item,
+                      "roleReminder": ROLE_REMINDERS[sender_role]}, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -353,7 +372,8 @@ def cmd_claim(args: argparse.Namespace) -> int:
         digest = [d for k in claim["items"] if (d := common.read_json(item_path(project, k)))]
     print(json.dumps({"applied": args.apply, "idempotent": reuse and newly == 0, "token": token,
                       "expiresAt": expires, "count": len(digest), "newlyClaimed": newly,
-                      "waking": sum(1 for i in digest if i.get("waking")), "digest": digest},
+                      "waking": sum(1 for i in digest if i.get("waking")), "digest": digest,
+                      "roleReminder": ROLE_REMINDERS["coordinator"]},
                      ensure_ascii=False, indent=2))
     return 0
 

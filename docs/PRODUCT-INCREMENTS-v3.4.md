@@ -96,6 +96,18 @@ PR numbers, commits, SHAs, CI runs, sessions, audits and protocol mechanics are 
 
 The aggregate `coordinator-status.py report --all --format markdown` uses the same order.
 
+## Role fidelity
+
+Coordinators coordinate, workers implement exactly one frozen story, auditors verify exactly one frozen candidate read-only, and the recovery controller only wakes and reconciles. Role drift — a coordinator implementing code, an auditor fixing defects, a worker spawning sub-lanes or continuing after handoff — is refused by the runtime rather than left to prompt memory:
+
+- lease creation refuses self-parented lanes, parents that are not live coordinators, and worktrees already owned by another live lane;
+- the inbox refuses `candidate` reports from auditors, `audit-verdict` reports from non-auditors, and `progress`/`candidate` reports from a terminal (`handoff-ready`) lane;
+- every inbox submit/claim response echoes a binding `roleReminder` that re-anchors the agent's role contract against long-context drift;
+- publishing a `blocked` phase requires an open owner-gate reference or an active observable commitment, and publishing `hold` requires an open explicit-hold gate — a coordinator cannot self-hold or idle behind a prose blocker;
+- registry claims remain restricted to live `agent-role::coordinator` sessions, and a role-label change removes the lease at the next reconcile.
+
+Skills additionally require each role to re-anchor after every wake, tick, and context summarization: restate the role in one line, verify the `agent-role::` label and (for coordinators) registry generation, and re-read the role skill whenever any rule is not immediately recalled. Spawn prompts must pin the child's role and its prohibited transitions explicitly.
+
 ## Compatibility and anti-scope
 
 Legacy v3.3 status snapshots remain valid; missing v3.4 fields render as not published. Inbox event identity, claim/ack retention, generation fencing and runtime schemas remain compatible.

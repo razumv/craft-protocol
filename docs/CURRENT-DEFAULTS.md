@@ -135,6 +135,10 @@ Activation order:              runtime f8679cdc first → Protocol → verify-ru
 Inbox storage:                 ~/.craft-agent/runtime/coordinator-inbox/<project>/<event-key>.json
 Inbox claims:                  ~/.craft-agent/runtime/coordinator-inbox-claims/<project>.json
 Report kinds:                  progress, candidate, audit-verdict, terminal-handoff, blocker, observer-terminal
+Report kind roles:             audit-verdict auditor-only; candidate worker-only; progress/candidate refused from terminal lanes
+Role re-anchor:                binding roleReminder echoed on every inbox submit/claim
+Lease creation refusals:       self-parented lane, non-coordinator parent, live-lane worktree collision
+Blocked/hold publish gates:    blocked needs open owner-gate ref or active commitment; hold needs open explicit-hold gate
 Failure classes:               admission-environment, implementation-defect, product-acceptance, integration-release, irreversible-high-risk
 Failure-class scope:           blocker/terminal/verdict/observer reports only; participates in payload fingerprint
 Waking kinds:                  terminal-handoff, audit-verdict, blocker, observer-terminal

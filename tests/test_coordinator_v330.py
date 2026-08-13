@@ -13,6 +13,7 @@ SCRIPTS = Path(os.environ.get("CRAFT_TEST_SCRIPTS", ROOT / "scripts"))
 INBOX = SCRIPTS / "coordinator-inbox.py"
 STATUS = SCRIPTS / "coordinator-status.py"
 COMMIT = SCRIPTS / "coordinator-commitment.py"
+GATE = SCRIPTS / "owner-gate.py"
 INCIDENT = SCRIPTS / "recovery-incident.py"
 ADMISSION = SCRIPTS / "recovery-admission.py"
 
@@ -144,6 +145,35 @@ class InboxTests(Base):
                   "watcherSessionId": "watch1", "workUnit": "release", "state": "terminal"})
         _, observed = self.submit("observer-terminal", "release complete", sender="watch1", work_unit="release")
         self.assertEqual(observed["item"]["kind"], "observer-terminal")
+
+    def test_candidate_requires_worker_sender(self):
+        self.base_project()
+        self.lease("audit1", work_unit="audit", role="auditor")
+        cp, _ = self.submit("candidate", "auditor-built fix", sender="audit1",
+                            work_unit="audit", ok=False)
+        self.assertIn("worker sender", cp.stderr)
+
+    def test_terminal_lane_cannot_send_progress_or_candidate(self):
+        self.base_project()
+        self.lease(state="handoff-ready")
+        for kind in ("progress", "candidate"):
+            cp, _ = self.submit(kind, "zombie lane keeps working", ok=False)
+            self.assertIn("terminal lane", cp.stderr)
+        _, still_terminal = self.submit("terminal-handoff", "final report")
+        self.assertEqual(still_terminal["item"]["kind"], "terminal-handoff")
+
+    def test_role_reminders_re_anchor_sender_and_coordinator(self):
+        self.base_project()
+        _, submitted = self.submit("progress", "50%")
+        self.assertIn("never spawn lanes", submitted["roleReminder"])
+        _, coalesced = self.submit("progress", "50%")
+        self.assertIn("never spawn lanes", coalesced["roleReminder"])
+        self.lease("audit1", work_unit="audit", role="auditor")
+        _, verdict = self.submit("audit-verdict", "PASS", sender="audit1", work_unit="audit")
+        self.assertIn("read-only", verdict["roleReminder"])
+        _, claim = self.cli(INBOX, "claim", "--project", "demo", "--session", "coord1",
+                            "--generation", "2", "--apply")
+        self.assertIn("dispatch workers/auditors", claim["roleReminder"])
 
     def test_failure_class_is_bounded_and_retained_in_claim(self):
         self.base_project()
@@ -628,13 +658,40 @@ class StatusTests(Base):
         self.assertEqual(show["classification"], "blocked")
         self.assertEqual(show["issues"], [])
 
-    def test_unobserved_blocked_status_remains_stale(self):
+    def test_unobserved_blocked_publish_fails_closed_and_stored_snapshot_remains_stale(self):
         self.base_project(); self.lease(state="handoff-ready")
-        self.publish({"objective": "x", "phase": "blocked", "currentFocus": "prose blocker",
-                      "nextActions": []})
+        cp, _ = self.publish({"objective": "x", "phase": "blocked", "currentFocus": "prose blocker",
+                              "nextActions": []}, ok=False)
+        self.assertIn("blocked phase requires", cp.stderr)
+        # A legacy stored prose-blocked snapshot still classifies stale, never healthy.
+        self.put(self.runtime / "coordinator-status" / "demo.json",
+                 {"schemaVersion": 1, "project": "demo", "coordinatorSessionId": "coord1",
+                  "generation": 2, "revision": 1, "publishedAt": self.now, "updatedAt": self.now,
+                  "declared": {"objective": "x", "phase": "blocked",
+                               "currentFocus": "prose blocker", "nextActions": []}})
         _, show = self.cli(STATUS, "show", "--project", "demo")
         self.assertEqual(show["classification"], "stale")
         self.assertIn("no-observed-activity", show["issues"])
+
+    def test_blocked_publish_with_open_gate_reference_is_allowed(self):
+        self.base_project()
+        self.cli(GATE, "create", "--project", "demo", "--gate", "ship-decision",
+                 "--question", "Ship the paid tier to production now?", "--choices", "SHIP,WAIT",
+                 "--owner-only-category", "human-product-judgment-action",
+                 "--scope", "work-unit", "--work-unit", "wu-1")
+        _, pub = self.publish({"objective": "x", "phase": "blocked", "currentFocus": "owner decision",
+                               "gateRefs": ["ship-decision"], "nextActions": []})
+        self.assertEqual(pub["revision"], 1)
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["classification"], "blocked")
+
+    def test_hold_publish_requires_open_explicit_hold_gate(self):
+        self.base_project()
+        cp, _ = self.publish({"objective": "x", "phase": "hold", "nextActions": []}, ok=False)
+        self.assertIn("self-hold", cp.stderr)
+        self.cli(GATE, "hold", "--project", "demo", "--reason", "direct owner hold")
+        _, pub = self.publish({"objective": "x", "phase": "hold", "nextActions": []})
+        self.assertEqual(pub["revision"], 1)
 
     def test_contradiction_complete_with_active_workers(self):
         self.base_project()
@@ -658,16 +715,18 @@ class StatusTests(Base):
         self.assertIn("requires nextReview", cp.stderr)
 
     def test_nonterminal_latest_evidence_is_executing_not_verified(self):
-        self.base_project(); self.lease(state="handoff-ready")
+        self.base_project()
         self.submit("candidate", "candidate ready")
+        self.lease(state="handoff-ready")
         payload = self.executing_payload(); payload["childRefs"] = ["worker1"]
         self.publish(payload)
         _, show = self.cli(STATUS, "show", "--project", "demo")
         self.assertEqual(show["classification"], "executing")
 
     def test_candidate_only_cannot_verify_completion(self):
-        self.base_project(); self.lease(state="handoff-ready")
+        self.base_project()
         _, submitted = self.submit("candidate", "candidate ready")
+        self.lease(state="handoff-ready")
         cp, _ = self.publish({"objective": "Ship API", "phase": "complete", "nextActions": [],
                               "completedOutcomes": [{"summary": "candidate accepted",
                                                      "evidenceRef": submitted["item"]["eventKey"]}]}, ok=False)
@@ -684,7 +743,9 @@ class StatusTests(Base):
         self.assertEqual(published["revision"], 1)
         _, show = self.cli(STATUS, "show", "--project", "demo")
         self.assertEqual(show["classification"], "verified")
-        self.submit("candidate", "later unrelated candidate")
+        self.lease("worker2", work_unit="wu-2")
+        self.submit("candidate", "later unrelated candidate", sender="worker2", work_unit="wu-2")
+        self.lease("worker2", work_unit="wu-2", state="handoff-ready")
         _, still_verified = self.cli(STATUS, "show", "--project", "demo")
         self.assertEqual(still_verified["classification"], "verified")
         cp, _ = self.publish({"objective": "Ship API", "phase": "complete", "nextActions": [],

@@ -286,6 +286,41 @@ def classify(lease: dict[str, Any], manifest: dict[str, Any], now: int) -> str:
     return "stalled"
 
 
+def refuse_role_drift_create(session_id: str, value: dict[str, Any]) -> None:
+    """Role fidelity: a child lane is owned by exactly one live coordinator and one
+    unique worktree. A worker/auditor parenting its own sub-lanes, or two live lanes
+    sharing a cwd, is refused at creation instead of detected later."""
+    parent = value.get("parentSessionId")
+    if parent == session_id:
+        raise SystemExit(f"refusing self-parented lease: {session_id}")
+    if parent:
+        parent_manifest = read_manifest(str(parent))
+        # A missing parent manifest stays permitted: the deterministic watchdog
+        # backfills leases after a coordinator crash and must not fail closed.
+        if parent_manifest and (parent_manifest.get("isArchived")
+                                or role_of(parent_manifest) != "coordinator"):
+            raise SystemExit(
+                f"refusing lease: parent {parent} is not a live coordinator "
+                f"(role={role_of(parent_manifest)})")
+    worktree = value.get("worktree")
+    if not worktree:
+        return
+    for sid, other in all_manifests().items():
+        if sid == session_id or other.get("isArchived") or role_of(other) not in ROLES:
+            continue
+        if expand(other.get("workingDirectory") or other.get("sdkCwd")) == worktree:
+            raise SystemExit(f"refusing lease: worktree already owned by live session {sid}: {worktree}")
+    for path in LEASES.glob("*.json"):
+        if path.stem == session_id:
+            continue
+        other_lease = read_json(path)
+        if (other_lease and other_lease.get("worktree") == worktree
+                and other_lease.get("state") not in TERMINAL_STATES):
+            other_manifest = read_manifest(path.stem)
+            if other_manifest and not other_manifest.get("isArchived"):
+                raise SystemExit(f"refusing lease: worktree already leased by live session {path.stem}: {worktree}")
+
+
 def cmd_create(args: argparse.Namespace) -> int:
     with locked():
         manifest = read_manifest(args.session)
@@ -303,6 +338,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             raw = getattr(args, arg, None)
             if raw is not None:
                 value[key] = expand(raw) if key == "worktree" else raw
+        refuse_role_drift_create(args.session, value)
         value["state"] = args.state
         value["lastHeartbeatAt"] = now_ms()
         save_lease(value)
