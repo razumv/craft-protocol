@@ -109,6 +109,7 @@ Outstanding envelope:          one per target generation; meaningful incident ch
 Stuck processing deadline:     1800 seconds by default; one guarded recovery attempt, then blocked
 Idle deadline liveness (3.4.1): completed turn after deliveredAt → consumedVia completed-turn-liveness, not blocked
 Rotation adoption (3.4.3):     lease parent rebinds to registry successor via activeChildren; labels stay historical
+Evidence adoption (3.4.7):     inbox adopt re-addresses predecessor events, immutable bindings survive; waits rebind on reconcile
 Block supersede (3.4.3):       durable block of a superseded target identity yields to the new generation's cycle
 Direct coordinator lane:       stale/current handoff/terminal wait and v3.3.0 inbox/status/commitment wakes; exact authoritative generation
 Expected runtime version:      required deployment configuration; no package default

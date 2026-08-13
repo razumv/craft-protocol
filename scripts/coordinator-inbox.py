@@ -446,6 +446,58 @@ def cmd_ack(args: argparse.Namespace) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- adopt
+
+def cmd_adopt(args: argparse.Namespace) -> int:
+    """Re-address the exact predecessor's durable events to the current generation.
+
+    A two-phase rotation preserves children and product state, but inbox events of
+    the dead generation become orphaned: the successor cannot claim/ack them and
+    Product Increment completion evidence loses its bindings mid-flight. Adoption
+    keeps the immutable eventKey/revision/fingerprint identity untouched — only the
+    addressing changes, with explicit provenance — so every fail-closed completion
+    check keeps working unchanged. One registry predecessor hop only."""
+    project = clean_project(args.project)
+    now = common.now_ms()
+    with common.file_lock(LOCK):
+        row = common.read_json(COORDINATORS / f"{project}.json") or {}
+        authoritative_coordinator(project, args.session, args.generation)
+        predecessor = str(row.get("predecessorSessionId") or "")
+        if not predecessor:
+            fail("registry records no predecessor to adopt from")
+        if predecessor == args.session:
+            fail("registry predecessor equals the current coordinator")
+        adopted: list[str] = []
+        for path in sorted(inbox_dir(project).glob("*.json")):
+            item = common.read_json(path)
+            if not item or item.get("coordinatorSessionId") != predecessor:
+                continue
+            if int(item.get("coordinatorGeneration") or -1) == args.generation:
+                continue
+            updated = dict(item)
+            updated.update({
+                "coordinatorSessionId": args.session, "coordinatorGeneration": args.generation,
+                "adoptedFromSession": predecessor,
+                "adoptedFromGeneration": item.get("coordinatorGeneration"),
+                "adoptedAt": now, "updatedAt": now,
+                # A claim snapshot of the dead generation is meaningless; a pending
+                # item becomes claimable by the successor, acknowledged stays final.
+                "claimToken": None, "claimedByGeneration": None, "claimedAt": None,
+                "claimExpiresAt": None, "claimedRevision": None, "claimedStatusRevision": None,
+            })
+            updated.pop("orphaned", None)
+            updated.pop("orphanReason", None)
+            if item.get("state") == "claimed":
+                updated["state"] = "pending"
+            if args.apply:
+                common.atomic_json(path, updated)
+            adopted.append(str(updated["eventKey"]))
+    print(json.dumps({"applied": args.apply, "predecessor": predecessor,
+                      "adoptedCount": len(adopted), "adopted": sorted(adopted),
+                      "roleReminder": ROLE_REMINDERS["coordinator"]}, ensure_ascii=False, indent=2))
+    return 0
+
+
 # --------------------------------------------------------------------------- release
 
 def cmd_release(args: argparse.Namespace) -> int:
@@ -643,6 +695,11 @@ def parser() -> argparse.ArgumentParser:
     a.add_argument("--status-revision", type=int)
     a.add_argument("--items", nargs="*"); a.add_argument("--apply", action="store_true")
     a.set_defaults(func=cmd_ack)
+
+    ad = sub.add_parser("adopt")
+    ad.add_argument("--project", required=True); ad.add_argument("--session", required=True)
+    ad.add_argument("--generation", type=int, required=True)
+    ad.add_argument("--apply", action="store_true"); ad.set_defaults(func=cmd_adopt)
 
     r = sub.add_parser("release")
     r.add_argument("--project", required=True); r.add_argument("--session", required=True)

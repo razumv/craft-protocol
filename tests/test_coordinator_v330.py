@@ -370,6 +370,33 @@ class InboxTests(Base):
         _, report = self.cli(INBOX, "report", "--project", "demo")
         self.assertEqual(report["projects"][0]["summary"]["pending"], 1)
 
+    def test_adopt_requires_predecessor_and_exact_authority(self):
+        self.base_project()
+        cp, _ = self.cli(INBOX, "adopt", "--project", "demo", "--session", "coord1",
+                         "--generation", "2", "--apply", ok=False)
+        self.assertIn("no predecessor", cp.stderr)
+        self.coordinator("coord2")
+        self.registry(sid="coord2", generation=3, predecessorSessionId="coord1")
+        cp, _ = self.cli(INBOX, "adopt", "--project", "demo", "--session", "coord1",
+                         "--generation", "3", "--apply", ok=False)
+        self.assertIn("mismatch", cp.stderr)
+
+    def test_adopted_pending_items_are_claimable_by_successor(self):
+        self.base_project()
+        self.submit("terminal-handoff", "candidate from gen2")
+        self.coordinator("coord2")
+        self.registry(sid="coord2", generation=3, predecessorSessionId="coord1")
+        _, adopted = self.cli(INBOX, "adopt", "--project", "demo", "--session", "coord2",
+                              "--generation", "3", "--apply")
+        self.assertEqual(adopted["adoptedCount"], 1)
+        _, claim = self.cli(INBOX, "claim", "--project", "demo", "--session", "coord2",
+                            "--generation", "3", "--apply")
+        self.assertEqual(claim["count"], 1)
+        item = claim["digest"][0]
+        self.assertEqual(item["adoptedFromSession"], "coord1")
+        self.assertEqual(item["adoptedFromGeneration"], 2)
+        self.assertEqual(item["coordinatorGeneration"], 3)
+
     def test_superseded_generation_items_do_not_wake(self):
         self.base_project()
         self.submit("terminal-handoff", "candidate")
@@ -572,6 +599,30 @@ class StatusTests(Base):
         bad = self.completion_payload()
         bad["productIncrement"]["completionEvidence"]["acceptanceRef"]["fingerprint"] = "0" * 64
         cp, _ = self.publish(bad, ok=False); self.assertIn("binding mismatch", cp.stderr)
+
+    def test_rotation_adoption_preserves_completion_evidence(self):
+        # The money path: a Product Increment completes mid-rotation without
+        # re-running acceptance — immutable evidence bindings survive adoption.
+        self.base_project()
+        payload = self.completion_payload()
+        self.coordinator("coord2")
+        self.registry(sid="coord2", generation=3, predecessorSessionId="coord1")
+        publish2 = lambda ok=True: self.cli(
+            STATUS, "publish", "--project", "demo", "--session", "coord2",
+            "--generation", "3", "--json", json.dumps(payload), "--apply", ok=ok)
+        cp, _ = publish2(ok=False)
+        self.assertIn("not observed in this generation", cp.stderr)
+        _, adopted = self.cli(INBOX, "adopt", "--project", "demo", "--session", "coord2",
+                              "--generation", "3", "--apply")
+        self.assertGreaterEqual(adopted["adoptedCount"], 4)
+        # The deterministic external-wait rebind has its own tests; simulate its result.
+        wpath = self.runtime / "external-waits/release-readback.json"
+        wait = json.loads(wpath.read_text()); wait["coordinatorSessionId"] = "coord2"
+        self.put(wpath, wait)
+        _, pub = publish2()
+        self.assertEqual(pub["record"]["declared"]["productIncrement"]["stage"], "complete")
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["classification"], "verified")
 
     def test_complete_increment_rejects_wrong_evidence_kind_and_unbound_demo(self):
         self.base_project()

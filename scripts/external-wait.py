@@ -215,7 +215,29 @@ def cmd_register(args: argparse.Namespace) -> int:
     return 0
 
 
+def adopted_owner(row: dict[str, Any]) -> str | None:
+    """Post-rotation wait adoption mirrors the worker-lease rebind: the registry's
+    activeChildren is machine truth. Without it an adopted watcher's wait reads
+    `watcher-lease-missing-or-mismatched` (the lease parent already moved to the
+    successor) and a cleared readback wait loses its completion provenance."""
+    project = str(row.get("project") or "")
+    watcher = str(row.get("watcherSessionId") or "")
+    coordinator = str(row.get("coordinatorSessionId") or "")
+    if not project or not watcher:
+        return None
+    registry = read_json(COORDINATORS / f"{project}.json") or {}
+    owner = str(registry.get("coordinatorSessionId") or "")
+    if (registry.get("state") in {"authoritative", "rotating", "hold"} and owner
+            and owner != coordinator and watcher in (registry.get("activeChildren") or [])):
+        return owner
+    return None
+
+
 def reconcile_row(row: dict[str, Any], now: int) -> dict[str, Any]:
+    owner = adopted_owner(row)
+    if owner:
+        row = {**row, "coordinatorSessionId": owner,
+               "adoptedFromCoordinator": row.get("coordinatorSessionId"), "adoptedAt": now}
     if row.get("state") in {"cleared", "clearing"}:
         return row
     watcher = str(row.get("watcherSessionId") or "")

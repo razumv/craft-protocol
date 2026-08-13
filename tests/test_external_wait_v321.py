@@ -129,6 +129,37 @@ class ExternalWaitV321Test(unittest.TestCase):
         states = {w["waitId"]: w["state"] for w in row["waits"]}
         self.assertEqual(states["deadline"], "deadline")
 
+    def test_rotation_rebinds_adopted_watcher_wait_to_successor(self):
+        # After a rotation the adopted watcher's lease parent moves to the successor
+        # (v3.4.3); without the wait rebind the same wait would read
+        # watcher-lease-missing-or-mismatched and go unobserved.
+        self.register()
+        self.manifest("coord2", "coordinator")
+        self.put(self.runtime / "coordinators/alpha.json", {
+            "schemaVersion": 1, "project": "alpha", "coordinatorSessionId": "coord2",
+            "state": "authoritative", "leaseExpiresAt": NOW + 3_600_000,
+            "predecessorSessionId": "coord", "activeChildren": ["watch"]})
+        lease = json.loads((self.runtime / "worker-leases/watch.json").read_text())
+        lease["parentSessionId"] = "coord2"
+        self.put(self.runtime / "worker-leases/watch.json", lease)
+        _, rec = self.cli("external-wait.py", "reconcile", "--apply")
+        wait = rec["waits"][0]
+        self.assertEqual(wait["coordinatorSessionId"], "coord2")
+        self.assertEqual(wait["adoptedFromCoordinator"], "coord")
+        self.assertEqual(wait["state"], "observing")
+
+    def test_unadopted_watcher_wait_is_not_rebound(self):
+        self.register()
+        self.manifest("coord2", "coordinator")
+        self.put(self.runtime / "coordinators/alpha.json", {
+            "schemaVersion": 1, "project": "alpha", "coordinatorSessionId": "coord2",
+            "state": "authoritative", "leaseExpiresAt": NOW + 3_600_000,
+            "predecessorSessionId": "coord", "activeChildren": []})
+        _, rec = self.cli("external-wait.py", "reconcile", "--apply")
+        wait = rec["waits"][0]
+        self.assertEqual(wait["coordinatorSessionId"], "coord")
+        self.assertNotIn("adoptedFromCoordinator", wait)
+
     def test_concurrent_register_has_one_winner(self):
         command = [str(SCRIPTS / "external-wait.py"), "register", "--wait-id", "race",
                    "--project", "alpha", "--coordinator", "coord", "--work-unit", "325",

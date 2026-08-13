@@ -4,6 +4,14 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.7] — 2026-08-14
+
+### Completion-evidence continuity across rotation
+
+- add `coordinator-inbox.py adopt`: the exact authoritative successor re-addresses the registry predecessor's durable events to the current generation with explicit provenance (`adoptedFromSession`/`adoptedFromGeneration`/`adoptedAt`); immutable `eventKey`/`revision`/`fingerprint` identity never changes, so every fail-closed Product Increment completion check keeps working unchanged and an in-flight increment completes after rotation without re-running acceptance; one registry predecessor hop only, dead-generation claim snapshots are dropped, pending items become claimable and acknowledged items stay final;
+- `external-wait.py` reconcile rebinds a wait to the registry successor when its watcher is listed in the authoritative registry's `activeChildren` (explicit `adoptedFromCoordinator` provenance): without this, the v3.4.3 lease rebind made adopted watcher waits read `watcher-lease-missing-or-mismatched` and cleared readback waits lost their completion provenance;
+- the coordinator skill and kickoff prompt add the post-`accept-transfer` adoption step.
+
 ## [3.4.6] — 2026-08-13
 
 ### Deaf-coordinator incident routing
@@ -200,7 +208,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.6...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.7...HEAD
+[3.4.7]: https://github.com/razumv/craft-protocol/compare/v3.4.6...v3.4.7
 [3.4.6]: https://github.com/razumv/craft-protocol/compare/v3.4.5...v3.4.6
 [3.4.5]: https://github.com/razumv/craft-protocol/compare/v3.4.4...v3.4.5
 [3.4.4]: https://github.com/razumv/craft-protocol/compare/v3.4.3...v3.4.4
