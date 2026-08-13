@@ -13,6 +13,16 @@ HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("orch_common", HERE / "orchestration-common.py")
 common = importlib.util.module_from_spec(spec); spec.loader.exec_module(common)  # type: ignore
 ROOT = common.RUNTIME / "owner-gates"; LOCK = common.RUNTIME / "owner-gates.lock"; SCHEMA = 1
+OWNER_ONLY_CATEGORIES = (
+    "explicit-hold",
+    "human-product-judgment-action",
+    "irreversible-destructive",
+    "secrets-credentials",
+    "money-entitlements",
+    "legal-privacy-security-exception",
+    "high-blast-radius-public-release",
+    "conflicting-direct-owner-priorities",
+)
 
 
 def clean(raw: str) -> str:
@@ -33,6 +43,9 @@ def all_gates(project: str | None = None) -> list[dict[str, Any]]:
 def cmd_create(args: argparse.Namespace) -> int:
     choices = [x.strip() for x in args.choices.split(",") if x.strip()]
     if not choices: raise SystemExit("at least one choice required")
+    category = getattr(args, "owner_only_category", None)
+    if category not in OWNER_ONLY_CATEGORIES:
+        raise SystemExit("owner-only category required; reversible technical transitions and bounded corrections must continue autonomously")
     path = gate_path(args.project, args.gate)
     with common.file_lock(LOCK):
         existing = common.read_json(path)
@@ -40,7 +53,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             print(json.dumps({"ok": True, "idempotent": True, "gate": existing}, indent=2)); return 0
         value = {"schemaVersion": SCHEMA, "project": clean(args.project).lower(), "gateId": clean(args.gate),
                  "workUnit": args.work_unit, "question": args.question, "choices": choices,
-                 "blockingScope": args.scope, "safeDefault": args.safe_default,
+                 "ownerOnlyCategory": category, "blockingScope": args.scope, "safeDefault": args.safe_default,
                  "state": "open", "createdAt": common.now_ms(), "resolvedAt": None,
                  "choice": None, "authority": None, "evidence": args.evidence}
         common.atomic_json(path, value)
@@ -50,7 +63,7 @@ def cmd_create(args: argparse.Namespace) -> int:
 def cmd_hold(args: argparse.Namespace) -> int:
     ns = argparse.Namespace(project=args.project, gate="project-hold", work_unit=None,
         question=f"Project HOLD: {args.reason}", choices="RESUME", scope="project",
-        safe_default="HOLD", evidence=args.evidence)
+        safe_default="HOLD", evidence=args.evidence, owner_only_category="explicit-hold")
     return cmd_create(ns)
 
 
@@ -100,13 +113,14 @@ def cmd_inbox(args: argparse.Namespace) -> int:
     rows = [g for g in all_gates(args.project) if g.get("state") == "open"]
     compact = [{"project": g.get("project"), "gateId": g.get("gateId"), "workUnit": g.get("workUnit"),
                 "question": g.get("question"), "choices": g.get("choices"),
+                "ownerOnlyCategory": g.get("ownerOnlyCategory"),
                 "safeDefault": g.get("safeDefault"), "blockingScope": g.get("blockingScope")} for g in rows]
     print(json.dumps({"openCount": len(compact), "decisions": compact}, ensure_ascii=False, indent=2)); return 0
 
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__); sub = p.add_subparsers(dest="command", required=True)
-    c = sub.add_parser("create"); c.add_argument("--project", required=True); c.add_argument("--gate", required=True); c.add_argument("--work-unit"); c.add_argument("--question", required=True); c.add_argument("--choices", required=True); c.add_argument("--scope", default="work-unit", choices=["project", "work-unit", "spawn", "implement", "merge", "close"]); c.add_argument("--safe-default", default="BLOCK"); c.add_argument("--evidence"); c.set_defaults(func=cmd_create)
+    c = sub.add_parser("create"); c.add_argument("--project", required=True); c.add_argument("--gate", required=True); c.add_argument("--work-unit"); c.add_argument("--question", required=True); c.add_argument("--choices", required=True); c.add_argument("--owner-only-category", required=True, choices=OWNER_ONLY_CATEGORIES); c.add_argument("--scope", default="work-unit", choices=["project", "work-unit", "spawn", "implement", "merge", "close"]); c.add_argument("--safe-default", default="BLOCK"); c.add_argument("--evidence"); c.set_defaults(func=cmd_create)
     h = sub.add_parser("hold"); h.add_argument("--project", required=True); h.add_argument("--reason", required=True); h.add_argument("--evidence"); h.set_defaults(func=cmd_hold)
     r = sub.add_parser("resolve"); r.add_argument("--project", required=True); r.add_argument("--gate", required=True); r.add_argument("--choice", required=True); r.add_argument("--authority", required=True); r.add_argument("--evidence", required=True); r.set_defaults(func=cmd_resolve)
     k = sub.add_parser("check"); k.add_argument("--project", required=True); k.add_argument("--work-unit"); k.add_argument("--action", required=True, choices=["spawn", "implement", "merge", "close"]); k.set_defaults(func=cmd_check)

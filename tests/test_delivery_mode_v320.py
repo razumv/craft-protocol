@@ -38,6 +38,8 @@ class DeliveryModeV320Tests(unittest.TestCase):
         self.assertIn("Coordinators decide and execute reversible or evidence-backed technical choices", skill)
         self.assertIn("Risk tier alone does not create an owner gate", skill)
         self.assertIn("A vague gate without concrete evidence and an owner-only category is invalid", skill)
+        self.assertIn("Automatic continuation is mandatory", skill)
+        self.assertIn("immediately execute one correction without opening an owner gate", skill)
         self.assertIn("Evidence-backed technical choices are coordinator authority", delivery)
         self.assertIn("Risk tier сам по себе не создаёт owner gate", kickoff)
         for text in (skill, delivery):
@@ -102,6 +104,8 @@ class DeliveryModeV320Tests(unittest.TestCase):
         self.assertIn("UI completion", skill)
         self.assertIn("real desktop/mobile/user workflow", skill)
         self.assertIn("does not spend product correction budget", spec)
+        self.assertIn("Advance automatically across the DAG", spec)
+        self.assertIn("Human-stop boundary", spec)
 
     def test_manifest_generator_covers_release_changelog(self):
         generator = self.read("tools/generate-manifest.sh")

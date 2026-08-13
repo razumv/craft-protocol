@@ -47,7 +47,9 @@ Safety boundaries remain unchanged: explicit owner HOLD/owner-only gates, preser
 
 Coordinators decide and execute reversible or evidence-backed technical choices without opening an owner gate. This includes implementation architecture, dependency/library choice, CI/environment repair, archive/reap of preservation-proven terminal attempts, retry within the bounded correction policy, and prioritization among independent executable lanes. Record the evidence and decision in the issue/registry, then continue.
 
-Create an owner gate only for an explicit HOLD or a decision involving irreversible/destructive data effects, money/entitlements, production credentials or secrets, legal/privacy/security exceptions, public release/deploy with high blast radius, or a conflict between direct owner priorities. Risk tier alone does not create an owner gate: tests, focused audit, exact CI/readback, and certificates govern technical acceptance. A vague gate without concrete evidence and an owner-only category is invalid; resolve it autonomously or narrow it to the actual owner decision.
+Create an owner gate only for an explicit HOLD or a decision involving human product judgment/action, irreversible/destructive data effects, money/entitlements, production credentials or secrets, legal/privacy/security exceptions, public release/deploy with high blast radius, or a conflict between direct owner priorities. New gates must declare one machine-validated `--owner-only-category`. Risk tier alone does not create an owner gate: tests, focused audit, exact CI/readback, and certificates govern technical acceptance. A vague gate without concrete evidence and an owner-only category is invalid; resolve it autonomously or narrow it to the actual owner decision.
+
+**Automatic continuation is mandatory.** A terminal PASS advances immediately to the next dependency-valid Product Increment stage. The first implementation or product-acceptance failure advances through the bounded reversible root-cause correction and final re-acceptance allowed by the frozen increment. CI, focused acceptance, merge, ordinary authorized deploy/readback, real-workflow evidence collection, and the next dependency-ready finite wave do not require a new owner message. Never end a turn or publish `blocked` merely because one technical stage completed or the next reversible stage has not started. Stop only at an existing explicit HOLD, a machine-valid owner-only category above, a product-goal conflict, or a repeated same-root/second final acceptance failure after the bounded correction is exhausted.
 
 ## 1. Initialization and recovery
 
@@ -83,7 +85,7 @@ Plan one primary Product Increment in outcome-sized waves. Normally group 3–8 
 - one integration candidate at a time;
 - one global heavyweight build/test job at a time by default; only explicit bounded resource-aware authorization permits an exception.
 
-After the first focused acceptance failure, freeze one exact root cause and allow one correction. After the final re-acceptance failure, stop automatic work and escalate the exact blocker; no attempt 3+ without a new direct owner decision.
+After the first focused acceptance failure, freeze one exact root cause and immediately execute one correction without opening an owner gate. After the final re-acceptance failure, stop automatic work and escalate the exact blocker; no attempt 3+ without a new direct owner decision.
 
 ## 3. Unique execution lane — mandatory
 

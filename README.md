@@ -559,11 +559,14 @@ No terminal handoff until work is clean and remotely preserved.
   --work-unit <unit> \
   --question "Decision question" \
   --choices A,B,C \
+  --owner-only-category human-product-judgment-action \
   --scope implement \
   --safe-default HOLD
 ```
 
 Scopes: `project`, `work-unit`, `spawn`, `implement`, `merge`, `close`.
+
+Every new non-HOLD gate requires a machine-validated owner-only category. Technical PASS-to-next-stage transitions, first CI/audit failure, reversible correction, merge/readback, and ordinary already-authorized deploy are not valid gate categories and must continue autonomously. Existing stored gates remain readable for compatibility.
 
 An unscoped non-project decision does not block unrelated explicit work units. Project-wide blocking must use `scope=project` or the project HOLD gate.
 

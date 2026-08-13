@@ -35,6 +35,7 @@ The story graph must be bounded and acyclic. Duplicate IDs, duplicate edges, unk
 8. Merge once, deploy/read back once and execute the named real user workflow.
 9. Reuse exact unchanged evidence; do not rerun acceptance for report freshness.
 10. `stage=complete` is fail-closed: every story must be `accepted`, coordinator phase must also be `complete`, and `completionEvidence` must bind four distinct current-generation inbox events by exact `eventKey + revision + fingerprint`. Medium/High acceptance must bind an auditor-authored `audit-verdict`; release readback must bind `observer-terminal` from the exact terminal external-wait watcher; demonstration evidence must contain the exact case-sensitive named demonstration criterion.
+11. Advance automatically across the DAG. PASS, CI completion, focused acceptance, merge, ordinary authorized deploy/readback, real-workflow evidence collection, and the next dependency-ready finite wave never require a fresh owner message merely because a stage boundary was crossed.
 
 One global heavyweight lane remains the default. A bounded exception requires explicit resource-aware authority and practical memory/CPU guards. Integration remains serialized around one candidate.
 
@@ -69,12 +70,16 @@ Accounting rules:
 
 - admission/environment failure preserves evidence and retries/replaces; it does not spend product correction budget;
 - implementation defects permit bounded coordinator-owned correction;
-- first product-acceptance failure permits one exact root-cause correction and one final acceptance;
+- first product-acceptance failure automatically executes one exact reversible root-cause correction and one final acceptance without creating an owner gate;
 - second acceptance failure or repeated same-root failure escalates the exact blocker;
 - irreversible/high-risk failure stops immediately under existing owner-gate rules;
 - infrastructure repair remains bounded to one safe attempt or 20 minutes and cannot replace product work.
 
 Recovery-controller attempt accounting remains separate. v3.4 does not rewrite recovery admission.
+
+## Human-stop boundary
+
+A coordinator may pause for the owner only when the next step requires an explicit HOLD resolution, human product judgment or physical action, irreversible/destructive effects, money/entitlements, production secrets or credentials, legal/privacy/security exception, high-blast-radius public release, conflicting direct owner priorities, product-goal change, or a repeated same-root/second final acceptance failure after the bounded correction is exhausted. New owner gates must declare one of these machine-validated owner-only categories. Technical stage completion, Medium/High risk by itself, first CI/audit failure, reversible correction, merge/readback, and ordinary authorized deploy are not owner-stop categories.
 
 ## Owner communication contract
 
