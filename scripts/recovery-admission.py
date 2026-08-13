@@ -587,7 +587,8 @@ def cycle_message(batch: dict[str, Any], fp: str, ids: list[str]) -> str:
                 f"project: {batch['project']}\ncoordinatorGeneration: {batch['coordinatorGeneration']}\n"
                 f"fingerprint: {fp}\nincidentIds: {','.join(ids)}\n"
                 "Reconcile the exact registry generation, active children, and external waits; continue executable lanes. "
-                "Renew authority only through a completed coordinator turn. Do not rotate, reap, bypass gates, or send routine owner-facing reports.\n")
+                "Renew authority only through a completed coordinator turn. Do not rotate, reap, bypass gates, or send routine owner-facing reports. "
+                "Re-read the installed coordinator-lifecycle-protocol skill if any of its rules is not immediately recalled; the installed protocol version is authoritative over your spawn-time copy.\n")
     return ("RECOVERY ADMISSION v3.2.2\n" f"fingerprint: {fp}\nincidentIds: {','.join(ids)}\n"
             "Acquire the bounded controller lease and apply only ledger-authorized complex recovery.\n")
 

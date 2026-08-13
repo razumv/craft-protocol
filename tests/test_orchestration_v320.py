@@ -93,6 +93,18 @@ class OrchestrationV320Test(unittest.TestCase):
         p=self.exec_tool("coordinator-registry.py","inspect","--project","demo")
         self.assertNotIn("coordinator-worker-terminal-status",p.stdout)
 
+    def test_06d_unarchived_predecessor_is_flagged(self):
+        self.manifest("c1"); self.manifest("c2"); self.claim()
+        self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c2","--reason","rotation")
+        self.exec_tool("coordinator-registry.py","accept-transfer","--project","demo","--session","c2","--expected-generation","1")
+        p=self.exec_tool("coordinator-registry.py","inspect","--project","demo",ok=False)
+        self.assertIn("predecessor-not-archived:c1",p.stdout)
+        # Archiving the predecessor clears the debt.
+        m=self.manifest("c1"); m["isArchived"]=True
+        (self.sessions/"c1/session.jsonl").write_text(json.dumps(m)+"\n")
+        p=self.exec_tool("coordinator-registry.py","inspect","--project","demo")
+        self.assertNotIn("predecessor-not-archived",p.stdout)
+
     def test_06c_complexity_threshold_is_flagged(self):
         # Rotation thresholds are machine-flagged before context deaths, not after.
         m=self.manifest("c1", messages=501, tokens=250_000); self.claim()

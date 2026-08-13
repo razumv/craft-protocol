@@ -265,6 +265,13 @@ def inspect_one(project: str) -> dict[str, Any]:
     if duplicates: issues.append("cross-project-owner:" + ",".join(duplicates))
     if value.get("state") != "hold" and value.get("leaseExpiresAt") is not None and now > int(value["leaseExpiresAt"]): issues.append("coordinator-lease-stale")
     if value.get("fallbackExpiresAt") is not None and now > int(value["fallbackExpiresAt"]): issues.append("fallback-ttl-expired")
+    predecessor = str(value.get("predecessorSessionId") or "")
+    if predecessor and value.get("state") in {"authoritative", "rotating"}:
+        pred_manifest = common.read_manifest(predecessor)
+        # A completed handoff ends with the successor archiving the predecessor;
+        # a lingering live predecessor is untracked housekeeping debt.
+        if pred_manifest and not pred_manifest.get("isArchived"):
+            issues.append(f"predecessor-not-archived:{predecessor}")
     if manifest:
         # A coordinator parked in a worker-terminal session status is deaf to queued
         # admission wakes until a direct owner message; that is role drift, not rest.
