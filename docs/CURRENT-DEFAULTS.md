@@ -1,4 +1,4 @@
-# Protocol v3.4.13 defaults
+# Protocol v3.4.14 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -108,6 +108,8 @@ Recovery CAS busy:              exit 75 retry; does not spend the single correct
 Outstanding envelope:          one per target generation; meaningful incident changes coalesce in place
 Stuck processing deadline:     1800 seconds by default; one guarded recovery attempt, then blocked
 Idle deadline liveness (3.4.1): completed turn after deliveredAt → consumedVia completed-turn-liveness, not blocked
+Unresolved re-wake (3.4.14): consumed wake re-issued up to 2x after 1800s quiet, then the lane escalates to the controller
+Idle-ready detection (3.4.14): ready/executing story with no lane/wait/commitment → idle-ready-work contradiction
 Rotation adoption (3.4.3):     lease parent rebinds to registry successor via activeChildren; labels stay historical
 Evidence adoption (3.4.7):     inbox adopt re-addresses predecessor events, immutable bindings survive; waits rebind on reconcile
 Block supersede (3.4.3):       durable block of a superseded target identity yields to the new generation's cycle
