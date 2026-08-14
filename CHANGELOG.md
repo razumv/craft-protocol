@@ -4,6 +4,13 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.11] — 2026-08-14
+
+### Inert, correctly-identified gate cards
+
+- fix v3.4.10 card creation: a gate card is now created through one `sessions:create` call carrying its owner-facing name, `owner-gate`/`project::<slug>` labels, flag and `todo` status — the previous two-step create-then-rename left every card titled "New chat" and unlabeled;
+- a gate card is explicitly inert: its connection/model come from `CRAFT_BOARD_CONNECTION`/`CRAFT_BOARD_MODEL` instead of the workspace default (an accidental reply must never spend an expensive provider turn), the card has no working directory, and any turn the owner's choice message starts is cancelled immediately — the choice is data, not a prompt.
+
 ## [3.4.10] — 2026-08-14
 
 ### Owner-gate board bridge
@@ -232,7 +239,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.10...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.11...HEAD
+[3.4.11]: https://github.com/razumv/craft-protocol/compare/v3.4.10...v3.4.11
 [3.4.10]: https://github.com/razumv/craft-protocol/compare/v3.4.9...v3.4.10
 [3.4.9]: https://github.com/razumv/craft-protocol/compare/v3.4.8...v3.4.9
 [3.4.8]: https://github.com/razumv/craft-protocol/compare/v3.4.7...v3.4.8
