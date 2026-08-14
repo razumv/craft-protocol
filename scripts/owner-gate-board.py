@@ -31,6 +31,12 @@ BOARD = RUNTIME / "owner-gate-board.json"
 LOCK = RUNTIME / "owner-gate-board.lock"
 OWNER_GATE = HERE / "owner-gate.py"
 CLI = os.environ.get("CRAFT_RPC_CLI", "")
+WORKSPACE_ID = os.environ.get("CRAFT_WORKSPACE_ID", "")
+# A gate card is an inert projection. It is created on an explicitly configured
+# cheap connection/model so an accidental reply never spends an expensive
+# provider turn, and any turn the owner's choice starts is cancelled at once.
+CARD_MODEL = os.environ.get("CRAFT_BOARD_MODEL", "")
+CARD_CONNECTION = os.environ.get("CRAFT_BOARD_CONNECTION", "")
 SCHEMA = 1
 
 
@@ -141,13 +147,23 @@ def cmd_sync(args: argparse.Namespace) -> int:
                 continue
             actions.append({"action": "create-card", "gate": key})
             if args.apply:
-                created = cli("--json", "session", "create", "--name",
-                              f"🚦 {gate.get('project')} · {gate.get('gateId')}")
+                if not WORKSPACE_ID:
+                    fail("CRAFT_WORKSPACE_ID is required to create gate cards")
+                options: dict[str, Any] = {
+                    "name": f"🚦 {gate.get('project')} · {gate.get('gateId')}",
+                    "labels": ["owner-gate", f"project::{gate.get('project')}"],
+                    "isFlagged": True, "sessionStatus": "todo", "workingDirectory": "none",
+                }
+                # Never inherit an expensive workspace default for an inert card.
+                if CARD_MODEL:
+                    options["model"] = CARD_MODEL
+                if CARD_CONNECTION:
+                    options["llmConnection"] = CARD_CONNECTION
+                created = cli("invoke", "sessions:create", json.dumps(WORKSPACE_ID), json.dumps(options))
                 session_id = str(created.get("id") or "")
                 if not session_id:
                     fail(f"card creation returned no session id for {key}")
                 cli("invoke", "sessions:setNotes", json.dumps(session_id), json.dumps(card_notes(gate)))
-                cli("invoke", "sessions:command", json.dumps(session_id), json.dumps({"type": "flag"}))
                 cards[key] = {"sessionId": session_id, "createdAt": now, "lastSeenTs": now}
 
         # Owner-typed choices resolve their gates.
@@ -160,6 +176,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
                 continue
             ts, text = messages[-1]
             card["lastSeenTs"] = ts
+            if args.apply:
+                # The owner's choice is data, not a prompt: stop any turn it started.
+                cli("invoke", "sessions:cancel", json.dumps(card["sessionId"]))
             choice = match_choice(text, gate)
             if choice is None:
                 actions.append({"action": "unrecognized-choice", "gate": key, "message": text[:80]})

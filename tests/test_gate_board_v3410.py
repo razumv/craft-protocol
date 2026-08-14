@@ -21,7 +21,7 @@ log = Path(__file__).with_name("cli-log.jsonl")
 args = sys.argv[1:]
 with log.open("a") as fh:
     fh.write(json.dumps(args) + "\n")
-if args[:3] == ["--json", "session", "create"]:
+if args[:2] == ["invoke", "sessions:create"]:
     counter = Path(__file__).with_name("card-counter")
     n = int(counter.read_text()) + 1 if counter.exists() else 1
     counter.write_text(str(n))
@@ -40,7 +40,10 @@ class GateBoardTest(unittest.TestCase):
         self.fake_cli.write_text(FAKE_CLI); self.fake_cli.chmod(0o755)
         self.env = {**os.environ, "CRAFT_RUNTIME": str(self.runtime),
                     "CRAFT_SESSIONS": str(self.sessions), "CRAFT_WORKSPACE": str(self.root),
-                    "CRAFT_RPC_CLI": str(self.fake_cli)}
+                    "CRAFT_RPC_CLI": str(self.fake_cli),
+                    "CRAFT_WORKSPACE_ID": "ws-test",
+                    "CRAFT_BOARD_MODEL": "pi/gpt-5.4-mini",
+                    "CRAFT_BOARD_CONNECTION": "chatgpt-plus"}
 
     def tearDown(self): self.tmp.cleanup()
 
@@ -80,13 +83,24 @@ class GateBoardTest(unittest.TestCase):
         self.assertEqual([a["action"] for a in out["actions"]], ["create-card"])
         card = self.board()["cards"]["demo::ship-decision"]
         self.assertEqual(card["sessionId"], "card-1")
-        # Notes and flag are set on the created card.
+        # The card is created in one call with its owner-facing name, labels,
+        # flag, status and an explicitly cheap non-default model.
+        create = [c for c in self.cli_calls() if c[:2] == ["invoke", "sessions:create"]][0]
+        options = json.loads(create[3])
+        self.assertTrue(options["name"].startswith("\U0001F6A6 demo"))
+        self.assertIn("owner-gate", options["labels"])
+        self.assertIn("project::demo", options["labels"])
+        self.assertTrue(options["isFlagged"])
+        self.assertEqual(options["model"], "pi/gpt-5.4-mini")
+        self.assertEqual(options["llmConnection"], "chatgpt-plus")
         kinds = [c[1] for c in self.cli_calls() if c[0] == "invoke"]
         self.assertIn("sessions:setNotes", kinds)
         # The owner types the exact choice into the card.
         self.owner_types("card-1", "SHIP")
         _, out = self.run_tool(BOARD, "sync", "--apply")
         self.assertIn("resolve", [a["action"] for a in out["actions"]])
+        # Any turn the owner's message started is cancelled: the card is inert.
+        self.assertIn("sessions:cancel", [c[1] for c in self.cli_calls() if c[0] == "invoke"])
         _, gates = self.run_tool(GATE, "list", "--project", "demo")
         gate = gates["gates"][0]
         self.assertEqual(gate["state"], "resolved")
@@ -94,7 +108,8 @@ class GateBoardTest(unittest.TestCase):
         self.assertEqual(gate["authority"], "direct-owner")
         self.assertIn("card-1", gate["authorityEvidence"])
         # Card completed and archived; mapping dropped.
-        archived = [c for c in self.cli_calls() if c[0] == "invoke" and '"archive"' in c[3]]
+        archived = [c for c in self.cli_calls()
+                    if c[0] == "invoke" and len(c) > 3 and '"archive"' in c[3]]
         self.assertTrue(archived)
         self.assertEqual(self.board()["cards"], {})
 
