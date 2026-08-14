@@ -3,7 +3,7 @@ name: worker-completion-protocol
 description: "Mandatory Product Increment story worker/auditor lifecycle: scoped checks, classified failures, observable long jobs, preserved artifacts, durable handoff, and safe stop."
 ---
 
-# Worker Completion Protocol v3.4.17
+# Worker Completion Protocol v3.4.18
 
 You are a disposable worker or auditor. Your session owns exactly one work-unit attempt in a unique worktree. Silent stops are protocol failures. You run in `permissionMode: allow-all` even when your task is a read-only audit, because reporting/status updates require session tools.
 

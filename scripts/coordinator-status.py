@@ -297,6 +297,16 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any]) -> list[str]
     if (idle_ready and not synth["activeWorkers"] and not synth["observedWaitCount"]
             and not synth["workObserverCommitmentCount"]):
         issues.append("idle-ready-work:" + ",".join(idle_ready[:8]))
+    # GitHub is the task source of truth, so a stage the owner can see in Craft but
+    # not in the issue/Project board is an unreported stage. Discovery is exempt:
+    # nothing material has happened yet.
+    stage = str(increment.get("stage") or "")
+    if increment and stage not in {"", "discovery"}:
+        sync = declared.get("githubSync") or {}
+        if not sync:
+            issues.append(f"github-sync-missing:{stage}")
+        elif sync.get("syncedStage") != stage:
+            issues.append(f"github-sync-stale:{sync.get('syncedStage')}!={stage}")
     # Repeatedly re-scheduling a self-review while nothing executes is the
     # bookkeeping-instead-of-delivery signature (observed: rotation-handoff
     # review r2 → r3 → r4, each timing out, with a ready story unassigned).
@@ -632,6 +642,35 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
             "completionEvidence": completion}
 
 
+ISSUE_REF = re.compile(r"^[A-Za-z0-9._/-]{1,120}#\d{1,9}$")
+
+
+def normalize_github_sync(value: Any, now: int) -> dict[str, Any] | None:
+    """The declared proof that GitHub carries this stage's state.
+
+    The protocol has no network or credentials, so it cannot read GitHub. What it
+    can do is require the coordinator to name exactly what it synced and for which
+    stage, then check that claim against its own declared progress — the same
+    declaration-plus-consistency contract used for every other evidence field."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        fail("githubSync must be an object or null")
+    issue = req_text(value, "issue")
+    if not ISSUE_REF.fullmatch(issue):
+        fail("githubSync.issue must look like owner/repo#123")
+    comment_ref = req_text(value, "commentRef")
+    synced_stage = req_text(value, "syncedStage")
+    if synced_stage not in INCREMENT_STAGES:
+        fail(f"githubSync.syncedStage must be one of {sorted(INCREMENT_STAGES)}")
+    project_field = optional_text(value, "projectField")
+    synced_at = value.get("syncedAt")
+    if not isinstance(synced_at, int) or isinstance(synced_at, bool) or synced_at <= 0 or synced_at > now + 60_000:
+        fail("githubSync.syncedAt must be a past millisecond timestamp")
+    return {"issue": issue, "commentRef": comment_ref, "projectField": project_field,
+            "syncedStage": synced_stage, "syncedAt": synced_at}
+
+
 def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
     if not isinstance(payload, dict):
         fail("declared status payload must be a JSON object")
@@ -645,6 +684,7 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
     if confidence is not None and confidence not in CONFIDENCE_LEVELS:
         fail(f"confidence must be one of {sorted(CONFIDENCE_LEVELS)} or null")
     product_increment = normalize_increment(payload.get("productIncrement"))
+    github_sync = normalize_github_sync(payload.get("githubSync"), now)
     current_focus = payload.get("currentFocus")
     if current_focus is not None and not isinstance(current_focus, str):
         fail("currentFocus must be text or null")
@@ -706,7 +746,7 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
         "objective": objective, "demonstrableNow": demonstrable_now,
         "remainingOutcome": remaining_outcome, "etaRange": eta_range,
         "confidence": confidence, "realBlocker": real_blocker,
-        "productIncrement": product_increment,
+        "productIncrement": product_increment, "githubSync": github_sync,
         "phase": phase, "currentFocus": current_focus,
         "completedOutcomes": normalized_completed, "nextActions": norm_actions,
         "childRefs": normalized_refs["childRefs"], "waitRefs": normalized_refs["waitRefs"],
