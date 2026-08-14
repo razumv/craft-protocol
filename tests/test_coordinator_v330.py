@@ -871,6 +871,36 @@ class StatusTests(Base):
             cp, _ = self.publish(payload, ok=False)
             self.assertIn(needle, cp.stderr)
 
+    def test_a_pipe_joined_choice_list_still_produces_answerable_choices(self):
+        # v3.4.29: coordinators write choice lists both ways. A pipe-joined list used
+        # to become one unselectable choice, so the owner could not answer their own
+        # gate — seen twice on 2026-08-14, each time forcing the decision to be
+        # recorded as free text. A gate exists to be answered.
+        self.base_project()
+        self.cli(GATE, "create", "--project", "demo", "--gate", "spend-decision",
+                 "--question", "Top up the API allocation?",
+                 "--choices", "restore-without-spend|authorize-top-up|keep-blocked",
+                 "--owner-only-category", "money-entitlements", "--scope", "work-unit")
+        _, listed = self.cli(GATE, "list", "--project", "demo")
+        gate = [g for g in listed["gates"] if g["gateId"] == "spend-decision"][0]
+        self.assertEqual(gate["choices"],
+                         ["restore-without-spend", "authorize-top-up", "keep-blocked"])
+        # Every one of them is now selectable.
+        self.cli(GATE, "resolve", "--project", "demo", "--gate", "spend-decision",
+                 "--choice", "keep-blocked", "--authority", "direct-owner",
+                 "--evidence", "owner chose to hold")
+        _, after = self.cli(GATE, "list", "--project", "demo")
+        resolved = [g for g in after["gates"] if g["gateId"] == "spend-decision"][0]
+        self.assertEqual(resolved["state"], "resolved")
+        self.assertEqual(resolved["choice"], "keep-blocked")
+        # Duplicates across separators collapse instead of multiplying.
+        self.cli(GATE, "create", "--project", "demo", "--gate", "mixed",
+                 "--question", "Ship?", "--choices", "SHIP,HOLD|SHIP",
+                 "--owner-only-category", "human-product-judgment-action", "--scope", "work-unit")
+        _, mixed = self.cli(GATE, "list", "--project", "demo")
+        row = [g for g in mixed["gates"] if g["gateId"] == "mixed"][0]
+        self.assertEqual(row["choices"], ["SHIP", "HOLD"])
+
     def test_a_lane_without_its_required_sources_is_flagged(self):
         # v3.4.27: sources attach to a session, so a research worker spawned without
         # them cannot reach Similarweb or BuiltWith whatever its contract says — it
