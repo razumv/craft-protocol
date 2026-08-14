@@ -54,6 +54,9 @@ MAX_ACTIONS = 3
 MAX_INCREMENT_STORIES = 8
 TEXT_LIMIT = 800
 LIST_LIMIT = 32
+# A freshly published `complete` is a finished increment, not idleness. Only a
+# completion left standing without a plan or a gate is the silent-stop signature.
+COMPLETE_IDLE_GRACE_MS = int(os.environ.get("CRAFT_STATUS_COMPLETE_IDLE_SECONDS", "1800")) * 1000
 CONFIDENCE_LEVELS = {"low", "medium", "high"}
 INCREMENT_STAGES = {"discovery", "building", "integrating", "accepting", "deploying", "demonstrating", "complete", "blocked"}
 RISK_TIERS = {"low", "medium", "high"}
@@ -271,7 +274,8 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
     }
 
 
-def contradictions(declared: dict[str, Any], synth: dict[str, Any]) -> list[str]:
+def contradictions(declared: dict[str, Any], synth: dict[str, Any],
+                   *, complete_age_ms: int = 0) -> list[str]:
     issues: list[str] = []
     phase = declared.get("phase")
     if phase == "waiting" and synth["observedWaitCount"] == 0 and synth["activeCommitmentCount"] == 0:
@@ -324,9 +328,28 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any]) -> list[str]
     # owner gate is an unescalated dead end, not a truthful blocked state.
     failed_stories = sorted({str(story.get("id")) for story in increment.get("stories") or []
                              if isinstance(story, dict) and story.get("state") == "failed"})
-    if (failed_stories and not declared.get("nextActions") and not synth["openGateCount"]
+    extension_counts: dict[str, int] = {}
+    for extension in declared.get("correctionBudgetExtensions") or []:
+        story_id = str(extension.get("storyId"))
+        extension_counts[story_id] = extension_counts.get(story_id, 0) + 1
+    # One self-granted extension is the coordinator's own authority; a second is
+    # the owner's decision again, so reuse is a contradiction rather than a budget.
+    reused = sorted(sid for sid, count in extension_counts.items() if count > 1)
+    if reused:
+        issues.append("correction-budget-extension-reused:" + ",".join(reused[:4]))
+    # A story retrying under its single self-granted extension is escalated in the
+    # sanctioned way; without one, a failed story needs a plan, a lane or a gate.
+    unescalated = [sid for sid in failed_stories if extension_counts.get(sid, 0) != 1]
+    if (unescalated and not declared.get("nextActions") and not synth["openGateCount"]
             and not synth["activeWorkers"]):
-        issues.append("exhausted-correction-without-escalation:" + ",".join(failed_stories[:4]))
+        issues.append("exhausted-correction-without-escalation:" + ",".join(unescalated[:4]))
+    # Finishing an increment is not finishing the project. A complete phase with no
+    # planned next action and no open gate asking what to take next is silent idle:
+    # the board shows a healthy project that has quietly stopped delivering.
+    if (phase == "complete" and complete_age_ms >= COMPLETE_IDLE_GRACE_MS
+            and not declared.get("nextActions")
+            and not synth["openGateCount"] and not synth["activeWorkers"]):
+        issues.append("complete-without-next-increment")
     # Repeatedly re-scheduling a self-review while nothing executes is the
     # bookkeeping-instead-of-delivery signature (observed: rotation-handoff
     # review r2 → r3 → r4, each timing out, with a ready story unassigned).
@@ -360,9 +383,9 @@ def executable_actions(declared: dict[str, Any], synth: dict[str, Any]) -> bool:
 
 
 def classify(declared: dict[str, Any] | None, synth: dict[str, Any], now: int, *,
-             status_generation: int | None) -> dict[str, Any]:
+             status_generation: int | None, complete_age_ms: int = 0) -> dict[str, Any]:
     reg_generation = synth.get("generation")
-    contra = contradictions(declared, synth) if declared else []
+    contra = contradictions(declared, synth, complete_age_ms=complete_age_ms) if declared else []
     issues: list[str] = []
     missing = declared is None
     generation_mismatch = (not missing and (status_generation is None
@@ -440,7 +463,9 @@ def health_observations(now: int) -> list[dict[str, Any]]:
             status, project, coordinator, generation)
         synth = synthesize(project, now)
         status_generation = exact_generation(status.get("generation")) if status else None
-        verdict = classify(declared, synth, now, status_generation=status_generation)
+        complete_age = max(0, now - exact_int((status or {}).get("publishedAt"), now))
+        verdict = classify(declared, synth, now, status_generation=status_generation,
+                           complete_age_ms=complete_age)
         base = {"project": project, "sessionId": coordinator, "generation": generation}
         if ((status_path.exists() and status is None) or stored_malformed):
             out.append({**base, "kind": "coordinator-status-contradiction",
@@ -691,6 +716,34 @@ def normalize_github_sync(value: Any, now: int) -> dict[str, Any] | None:
             "syncedStage": synced_stage, "syncedAt": synced_at}
 
 
+def normalize_budget_extensions(value: Any, now: int) -> list[dict[str, Any]]:
+    """Self-authorized correction-budget extensions.
+
+    A failed acceptance whose cause is deterministic and whose correction fits a
+    single named scope does not need the owner's judgment — it needs one more
+    bounded attempt. The coordinator may grant that itself, exactly once per
+    story, and must name the proven cause and the scope it will touch. A second
+    extension for the same story is the owner's decision again."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > LIST_LIMIT:
+        fail("correctionBudgetExtensions must be a bounded list")
+    out: list[dict[str, Any]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            fail("each correction budget extension must be an object")
+        story_id = req_text(entry, "storyId")
+        root_cause_ref = req_text(entry, "rootCauseRef")
+        correction_scope = req_text(entry, "correctionScope")
+        granted_at = entry.get("grantedAt")
+        if (not isinstance(granted_at, int) or isinstance(granted_at, bool)
+                or granted_at <= 0 or granted_at > now + 60_000):
+            fail("correctionBudgetExtensions[].grantedAt must be a past millisecond timestamp")
+        out.append({"storyId": story_id, "rootCauseRef": root_cause_ref,
+                    "correctionScope": correction_scope, "grantedAt": granted_at})
+    return out
+
+
 def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
     if not isinstance(payload, dict):
         fail("declared status payload must be a JSON object")
@@ -705,6 +758,7 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
         fail(f"confidence must be one of {sorted(CONFIDENCE_LEVELS)} or null")
     product_increment = normalize_increment(payload.get("productIncrement"))
     github_sync = normalize_github_sync(payload.get("githubSync"), now)
+    budget_extensions = normalize_budget_extensions(payload.get("correctionBudgetExtensions"), now)
     current_focus = payload.get("currentFocus")
     if current_focus is not None and not isinstance(current_focus, str):
         fail("currentFocus must be text or null")
@@ -767,6 +821,7 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
         "remainingOutcome": remaining_outcome, "etaRange": eta_range,
         "confidence": confidence, "realBlocker": real_blocker,
         "productIncrement": product_increment, "githubSync": github_sync,
+        "correctionBudgetExtensions": budget_extensions,
         "phase": phase, "currentFocus": current_focus,
         "completedOutcomes": normalized_completed, "nextActions": norm_actions,
         "childRefs": normalized_refs["childRefs"], "waitRefs": normalized_refs["waitRefs"],
@@ -878,7 +933,9 @@ def build_report(project: str, now: int) -> dict[str, Any]:
         status, project, synth.get("coordinatorSessionId"), synth.get("generation"))
     malformed = malformed or stored_malformed
     status_generation = exact_generation(status.get("generation")) if status else None
-    verdict = classify(declared, synth, now, status_generation=status_generation)
+    complete_age = max(0, now - exact_int((status or {}).get("publishedAt"), now))
+    verdict = classify(declared, synth, now, status_generation=status_generation,
+                       complete_age_ms=complete_age)
     issues = list(verdict["issues"])
     if malformed:
         issues.append("stored-status-malformed")

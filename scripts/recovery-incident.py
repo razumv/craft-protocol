@@ -23,6 +23,7 @@ DISABLED = RUNTIME / "self-healing.disabled"
 SCHEMA = 1
 TRANSFER_STUCK_SECONDS = int(os.environ.get("CRAFT_TRANSFER_STUCK_SECONDS", "1800"))
 PREDECESSOR_ARCHIVE_GRACE_SECONDS = int(os.environ.get("CRAFT_PREDECESSOR_ARCHIVE_GRACE_SECONDS", "900"))
+ORPHANED_LANE_SECONDS = int(os.environ.get("CRAFT_ORPHANED_LANE_SECONDS", "86400"))
 CLAIM_TTL_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CLAIM_TTL_SECONDS", "900"))
 MAX_ATTEMPTS = int(os.environ.get("CRAFT_RECOVERY_MAX_ATTEMPTS", "2"))
 COORDINATOR_MAX_ATTEMPTS = int(os.environ.get("CRAFT_COORDINATOR_RECOVERY_MAX_ATTEMPTS", "3"))
@@ -30,12 +31,13 @@ MAX_CONTROLLER_RUNTIME_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CONTROLLER_M
 CLEAR_CONFIRM_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CLEAR_CONFIRM_SECONDS", "300"))
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 ACTION_MATRIX = {
-    "coordinator-not-live": ["owner-escalation"],
+    "coordinator-not-live": ["verify-session-absent", "respawn-from-handoff-snapshot", "owner-escalation"],
     "coordinator-lease-stale": ["wake-coordinator", "renew-request", "bridge-rotation-after-two-failures"],
     "coordinator-session-error": ["wake-coordinator", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
     "coordinator-pi-sigterm": ["wake-coordinator", "renew-request", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
     "coordinator-worker-terminal-status": ["wake-coordinator", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
     "predecessor-unarchived": ["wake-coordinator", "verify-preservation", "archive-reap-if-proven"],
+    "orphaned-dead-lane": ["verify-worktree-clean", "archive-reap-if-clean", "owner-escalation-if-dirty"],
     "fallback-ttl-expired": ["codex-repatriation"],
     "transfer-stuck": ["inspect-transfer", "wake-coordinator", "owner-escalation"],
     "worker-suspect": ["inspect-progress", "wake-coordinator"],
@@ -245,6 +247,20 @@ def collect_observations():
             severity = "high" if state in {"stalled", "error"} or (state == "handoff-ready" and active_child) else "medium"
             out.append(observation(kind, severity, project, sid, evidence,
                                    coordinatorSessionId=lease.get("parentSessionId"), workUnit=lease.get("workUnit")))
+        # A dead lane whose dispatching generation is gone can never become
+        # preservation-proven: no one is left to prove it. Without a disposition
+        # path these accumulate forever, each holding a worktree — observed live
+        # as 23 lanes, the oldest 91 hours old, with archivableBacklog at zero.
+        raw_created = lease.get("createdAt") if isinstance(lease.get("createdAt"), int) else lease.get("lastHeartbeatAt")
+        created = raw_created if isinstance(raw_created, int) and not isinstance(raw_created, bool) else 0
+        if (state in {"stalled", "error"} and parent_session and parent_session not in owners
+                and not ambiguous_parent and created and now-created > ORPHANED_LANE_SECONDS*1000):
+            stable = {"parentSessionId": parent_session, "workUnit": lease.get("workUnit"),
+                      "worktree": lease.get("worktree")}
+            out.append(observation("orphaned-dead-lane", "medium", project, sid,
+                {**stable, "state": state, "preservationState": lease.get("preservationState"),
+                 "ageMs": now-created}, fingerprint_evidence=stable,
+                coordinatorSessionId=parent_session, workUnit=lease.get("workUnit")))
         if ambiguous_parent:
             out.append(observation("project-mapping-conflict", "critical", None, sid,
                 {"ambiguousParentProjects": ambiguous_parent, "childLabelProject": explicit_project,

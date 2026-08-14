@@ -868,6 +868,51 @@ class StatusTests(Base):
             cp, _ = self.publish(payload, ok=False)
             self.assertIn(needle, cp.stderr)
 
+    def test_one_self_granted_extension_escalates_the_second_returns_to_owner(self):
+        # A proven deterministic cause with a single-scope fix does not need the
+        # owner's judgment; a second attempt at the same story does.
+        self.base_project()
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync()
+        payload["nextActions"] = []
+        payload["childRefs"] = []
+        payload["productIncrement"]["stories"] = [
+            {"id": "migration", "title": "Bounded migration", "state": "failed",
+             "dependsOn": [], "riskContribution": "medium"}]
+        payload["correctionBudgetExtensions"] = [
+            {"storyId": "migration", "rootCauseRef": "audit-event-1f49986",
+             "correctionScope": "alembic/versions/0010_wallet.py", "grantedAt": self.now-1000}]
+        self.publish(payload)
+        _, granted = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in granted["issues"]
+                          if i.startswith("exhausted-correction-without-escalation")])
+        payload["correctionBudgetExtensions"].append(
+            {"storyId": "migration", "rootCauseRef": "audit-event-2ab77f0",
+             "correctionScope": "alembic/versions/0010_wallet.py", "grantedAt": self.now-500})
+        self.publish(payload)
+        _, reused = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("correction-budget-extension-reused:migration", reused["issues"])
+
+    def test_complete_increment_without_next_or_gate_is_silent_idle(self):
+        # Observed live: a project closed its increment, published `complete`, and
+        # simply stopped — indistinguishable from health on the board.
+        self.base_project()
+        self.publish(self.completion_payload())
+        # A freshly published completion is a finished increment, not idleness.
+        _, fresh = self.cli(STATUS, "show", "--project", "demo")
+        self.assertNotIn("complete-without-next-increment", fresh["issues"])
+        # Left standing with no plan and no gate, it is a project that stopped.
+        self.env = {**self.env, "CRAFT_STATUS_COMPLETE_IDLE_SECONDS": "0"}
+        _, idle = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("complete-without-next-increment", idle["issues"])
+        # Asking the owner what to take next is the sanctioned way to pause.
+        self.cli(GATE, "create", "--project", "demo", "--gate", "next-increment-selection",
+                 "--question", "Which increment should the project take next?",
+                 "--choices", "BILLING,MOBILE", "--owner-only-category",
+                 "human-product-judgment-action", "--scope", "project")
+        _, asked = self.cli(STATUS, "show", "--project", "demo")
+        self.assertNotIn("complete-without-next-increment", asked["issues"])
+
     def test_dead_lane_this_generation_dispatched_must_be_replaced(self):
         # A lane the coordinator itself dispatched and that died is neglect, not
         # housekeeping debt: holding it silently is how a project looks busy.
