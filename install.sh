@@ -1,6 +1,6 @@
 #!/bin/zsh
 # SPDX-License-Identifier: Apache-2.0
-# Safe installer for Craft Agents orchestration protocol v3.4.27.
+# Safe installer for Craft Agents orchestration protocol v3.4.28.
 # Dry-run by default. Use --apply only after reviewing README.md.
 set -eu
 
@@ -23,7 +23,7 @@ SKILLS="$WORKSPACE/skills"
 RUNTIME="$CRAFT/runtime"
 LOGS="$CRAFT/logs"
 STAMP=$(date '+%Y%m%d-%H%M%S')
-BACKUP="$CRAFT/backups/orchestration-v3.4.27-$STAMP"
+BACKUP="$CRAFT/backups/orchestration-v3.4.28-$STAMP"
 PYTHON="${CRAFT_PYTHON:-/opt/homebrew/bin/python3}"
 [[ -x "$PYTHON" ]] || PYTHON=$(command -v python3)
 PLIST_NAME="com.craft-protocol.worker-watchdog.plist"
@@ -76,7 +76,13 @@ if [[ ! -e "$RUNTIME/self-healing.disabled" ]]; then
 fi
 if (( APPLY )); then
   mkdir -p "$RUNTIME"
-  : > "$RUNTIME/self-healing.disabled"
+  # The switch records who armed it. An owner pause and a switch stranded by an
+  # install that never reached its re-arm step are indistinguishable otherwise, and
+  # the difference decides whether silence is rest or an outage: on 2026-08-14 an
+  # interrupted install left this file behind and the recovery lane stayed dead for
+  # 75 minutes while every check reported a deliberate pause.
+  print -r -- "armed-by=install.sh armed-at=$(date -u +%Y-%m-%dT%H:%M:%SZ) rearm-expected=1" \
+    > "$RUNTIME/self-healing.disabled"
   chmod 600 "$RUNTIME/self-healing.disabled"
   echo "RESTORED KILL SWITCH $RUNTIME/self-healing.disabled before payload mutation"
 fi

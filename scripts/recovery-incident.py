@@ -25,6 +25,7 @@ TRANSFER_STUCK_SECONDS = int(os.environ.get("CRAFT_TRANSFER_STUCK_SECONDS", "180
 PREDECESSOR_ARCHIVE_GRACE_SECONDS = int(os.environ.get("CRAFT_PREDECESSOR_ARCHIVE_GRACE_SECONDS", "900"))
 ORPHANED_LANE_SECONDS = int(os.environ.get("CRAFT_ORPHANED_LANE_SECONDS", "86400"))
 KILL_SWITCH_STALE_SECONDS = int(os.environ.get("CRAFT_KILL_SWITCH_STALE_SECONDS", "1800"))
+KILL_SWITCH_STRANDED_SECONDS = int(os.environ.get("CRAFT_KILL_SWITCH_STRANDED_SECONDS", "600"))
 UNREGISTERED_CHILD_SECONDS = int(os.environ.get("CRAFT_UNREGISTERED_CHILD_SECONDS", "600"))
 # Draining the ledger is ordered by what stops product work, not by arrival.
 # Observed live: 23 cwd-collision and 10 orphaned-lane records sat in one queue
@@ -451,7 +452,11 @@ def controller_silence(rows: list[dict[str, Any]]) -> dict[str, Any]:
     blocking = [r for r in rows if drain_rank(r) <= 3]
     last = controller_last_turn_at()
     age = now_ms() - last if last else None
-    silent = bool(blocking and not DISABLED.exists()
+    # A deliberate kill switch is rest. A switch stranded by an install is not: the
+    # lane is dead and nobody decided that, so silence stays silence.
+    switch = kill_switch_state(rows)
+    paused_on_purpose = bool(switch["present"] and not switch.get("stranded"))
+    silent = bool(blocking and not paused_on_purpose
                   and (age is None or age > CONTROLLER_SILENT_SECONDS * 1000))
     return {"lastTurnAt": last or None, "ageMs": age,
             "deliveryBlockingCount": len(blocking), "silent": silent}
@@ -521,6 +526,24 @@ def drain(args: argparse.Namespace) -> dict[str, Any]:
                      for r in selected]}
 
 
+def kill_switch_marker() -> dict[str, Any]:
+    """Who armed the switch, when the file says so.
+
+    An owner pause is rest; a switch an install armed and never removed is an
+    outage wearing rest's clothes. The installer stamps `armed-by` and
+    `rearm-expected`, so the two stop being the same observation."""
+    try:
+        text = DISABLED.read_text(encoding="utf-8", errors="ignore")[:512]
+    except OSError:
+        return {}
+    fields: dict[str, Any] = {}
+    for token in text.split():
+        if "=" in token:
+            key, _, value = token.partition("=")
+            fields[key] = value
+    return fields
+
+
 def kill_switch_state(observed: list[dict[str, Any]]) -> dict[str, Any]:
     """A forgotten kill switch looks exactly like a healthy fleet.
 
@@ -536,8 +559,15 @@ def kill_switch_state(observed: list[dict[str, Any]]) -> dict[str, Any]:
     except OSError:
         age = None
     stale = bool(age is not None and age > KILL_SWITCH_STALE_SECONDS * 1000 and observed)
+    marker = kill_switch_marker()
+    # A switch the installer armed was meant to be removed by that same install.
+    # Finding one still present is a stranded install, not an owner's decision to
+    # rest, and it must never be reported as intentional quiet.
+    stranded = bool(marker.get("rearm-expected") == "1"
+                    and age is not None and age > KILL_SWITCH_STRANDED_SECONDS * 1000)
     return {"present": True, "ageMs": age, "observedConditions": len(observed),
-            "staleWithOpenConditions": stale}
+            "staleWithOpenConditions": stale, "armedBy": marker.get("armed-by") or "owner",
+            "stranded": stranded}
 
 
 def detect(apply=False):

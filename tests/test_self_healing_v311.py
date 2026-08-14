@@ -112,6 +112,44 @@ class SelfHealingV311Test(unittest.TestCase):
         bookkeeping = [w for w in drained["work"] if w["kind"].startswith("coordinator-status")]
         self.assertTrue(all(w["rank"] >= 2 for w in bookkeeping))
 
+    def test_a_stranded_kill_switch_is_not_an_owner_pause(self):
+        # v3.4.28: an install arms the switch before mutating the payload and removes
+        # it after its tests pass. On 2026-08-14 an interrupted install left the file
+        # behind: the recovery lane stayed dead for 75 minutes while every check
+        # reported a deliberate pause, because rest and outage looked identical.
+        self.base()
+        self.lease("worker1", state="handoff-ready")
+        self.cli("detect", "--apply")
+        switch = self.runtime / "self-healing.disabled"
+        switch.parent.mkdir(parents=True, exist_ok=True)
+        harness = self.runtime / "controller-harnesses" / "ctrl.json"
+        self.put(harness, {"schemaVersion": 1, "sessionId": "ctrl",
+                           "sessionRole": "recovery-controller",
+                           "registeredAt": self.now - 7_200_000})
+
+        # An owner's own pause: no marker, so silence is rest and stays unreported.
+        switch.write_text("")
+        os.utime(switch, (time.time() - 7200, time.time() - 7200))
+        _, paused = self.cli("drain")
+        self.assertEqual(paused["killSwitch"]["armedBy"], "owner")
+        self.assertFalse(paused["killSwitch"]["stranded"])
+        self.assertFalse(paused["controller"]["silent"])
+
+        # The installer's own marker turns the same file into a stranded install.
+        switch.write_text("armed-by=install.sh armed-at=2026-08-14T21:11:45Z rearm-expected=1")
+        os.utime(switch, (time.time() - 7200, time.time() - 7200))
+        _, stranded = self.cli("drain")
+        self.assertEqual(stranded["killSwitch"]["armedBy"], "install.sh")
+        self.assertTrue(stranded["killSwitch"]["stranded"])
+        self.assertTrue(stranded["controller"]["silent"])
+
+        # A marker minutes old is an install still running, not a stranded one.
+        switch.write_text("armed-by=install.sh armed-at=2026-08-14T21:11:45Z rearm-expected=1")
+        os.utime(switch, None)
+        _, running = self.cli("drain")
+        self.assertFalse(running["killSwitch"]["stranded"])
+        self.assertFalse(running["controller"]["silent"])
+
     def test_host_saturation_is_not_reported_as_a_lost_channel(self):
         # v3.4.27: eight parallel builds from unrelated work drove the load to 59 on
         # an 8-core host and every RPC timed out — while the channel was fine.
