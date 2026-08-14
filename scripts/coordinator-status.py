@@ -274,6 +274,16 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any]) -> list[str]
     for ref in declared.get("waitRefs") or []:
         if ref not in observed_wait_ids:
             issues.append(f"wait-ref-not-observed:{ref}")
+    # An owner gate holds its own scope only. A declared dependency-ready or
+    # executing story with no lane, no wait and no commitment means the project
+    # stopped work it is allowed to do — the observed failure mode where a whole
+    # increment halts behind one gate while `ready` stories sit unassigned.
+    increment = declared.get("productIncrement") or {}
+    idle_ready = sorted({str(story.get("id")) for story in increment.get("stories") or []
+                         if isinstance(story, dict) and story.get("state") in {"ready", "executing"}})
+    if (idle_ready and not synth["activeWorkers"] and not synth["observedWaitCount"]
+            and not synth["activeCommitmentCount"]):
+        issues.append("idle-ready-work:" + ",".join(idle_ready[:8]))
     return issues
 
 

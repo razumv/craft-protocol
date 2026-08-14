@@ -4,6 +4,14 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.14] — 2026-08-14
+
+### Unresolved-condition re-wake, dead-lane escalation, and idle-ready detection
+
+- a consumed wake no longer closes an unchanged condition forever: while the condition persists the same cycle is re-issued up to `CRAFT_ADMISSION_MAX_REWAKES` (2) times after a `CRAFT_ADMISSION_REWAKE_QUIET_SECONDS` (1800 s) quiet period. Two coordinators sat dead for four hours overnight because they consumed one wake, died, and the incident set — being unchanged — never produced another;
+- a direct lane that is durably blocked for the *current* target identity, or has spent its re-wakes, now escalates its incidents to the recovery-controller lane, which owns the wake/rotation stages that can replace a dead coordinator; a block belonging to a superseded generation still takes the v3.4.3 supersede path instead;
+- `coordinator-status` flags `idle-ready-work:<story-ids>` when a declared `ready`/`executing` story has no live lane, observed wait or active commitment. An owner gate holds its own scope, so a whole increment parked behind one gate while ready stories sit unassigned is a contradiction, not health; the coordinator skill states the duty explicitly.
+
 ## [3.4.13] — 2026-08-14
 
 ### Restart-resilient controller admission
@@ -252,7 +260,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.13...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.14...HEAD
+[3.4.14]: https://github.com/razumv/craft-protocol/compare/v3.4.13...v3.4.14
 [3.4.13]: https://github.com/razumv/craft-protocol/compare/v3.4.12...v3.4.13
 [3.4.12]: https://github.com/razumv/craft-protocol/compare/v3.4.11...v3.4.12
 [3.4.11]: https://github.com/razumv/craft-protocol/compare/v3.4.10...v3.4.11

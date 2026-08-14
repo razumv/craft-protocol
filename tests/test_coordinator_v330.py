@@ -724,6 +724,35 @@ class StatusTests(Base):
         self.assertEqual(show["classification"], "stale")
         self.assertIn("no-observed-activity", show["issues"])
 
+    def test_idle_ready_work_behind_a_gate_is_a_contradiction(self):
+        # An owner gate holds its own scope only. A whole increment parked behind
+        # one gate while a dependency-ready story has no lane is the observed
+        # "nobody is working" failure and must not read as healthy.
+        self.base_project()
+        self.cli(GATE, "create", "--project", "demo", "--gate", "physical-check",
+                 "--question", "Owner must verify the device?", "--choices", "DONE,HOLD",
+                 "--owner-only-category", "human-product-judgment-action", "--scope", "work-unit")
+        payload = self.increment_payload()
+        payload.update({"phase": "blocked", "gateRefs": ["physical-check"], "nextActions": [],
+                        "childRefs": []})
+        payload["productIncrement"]["stories"] = [
+            {"id": "blocked-by-gate", "title": "Physical acceptance", "state": "blocked",
+             "dependsOn": [], "riskContribution": "medium"},
+            {"id": "independent", "title": "Independent normalization", "state": "ready",
+             "dependsOn": [], "riskContribution": "low"}]
+        self.publish(payload)
+        # No lease, wait or commitment observed → the ready story is unassigned.
+        self.put(self.runtime / "worker-leases" / "worker1.json",
+                 {"schemaVersion": 1, "sessionId": "worker1", "parentSessionId": "coord1",
+                  "role": "worker", "workUnit": "wu-1", "attempt": "1", "state": "handoff-ready"})
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertEqual(show["classification"], "contradictory")
+        self.assertIn("idle-ready-work:independent", show["issues"])
+        # A live lane clears it: the project is demonstrably working the ready lane.
+        self.lease(state="running")
+        _, working = self.cli(STATUS, "show", "--project", "demo")
+        self.assertNotIn("idle-ready-work:independent", working["issues"])
+
     def test_blocked_publish_with_open_gate_reference_is_allowed(self):
         self.base_project()
         self.cli(GATE, "create", "--project", "demo", "--gate", "ship-decision",

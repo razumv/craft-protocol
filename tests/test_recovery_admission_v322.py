@@ -317,6 +317,57 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
                 self.assertEqual(cp.returncode, 2)
                 self.assertIn("not uniquely live/proven", self.controller_state()["reason"])
 
+    def test_unresolved_condition_is_rewoken_boundedly_then_escalates(self):
+        # A coordinator that consumed its wake and then died was never woken
+        # again: the incident set never changes while the condition persists.
+        self.registry(); self.incident(kind="coordinator-lease-stale", evidence={"generation": 7})
+        self.mutate_fake(consume=True)
+        self.apply()
+        self.assertEqual(self.direct_state()["phase"], "consumed")
+        deliveries = len(self.records("deliver"))
+        # Still inside the quiet window: no re-wake, no duplicate delivery.
+        soon = dict(self.env); soon["CRAFT_TEST_NOW_MS"] = str(NOW + 600_000)
+        self.apply(env=soon)
+        self.assertEqual(len(self.records("deliver")), deliveries)
+        self.assertEqual(int(self.direct_state().get("rewakeCount") or 0), 0)
+        # After the quiet period the same condition is re-woken, twice at most.
+        for expected in (1, 2):
+            later = dict(self.env); later["CRAFT_TEST_NOW_MS"] = str(NOW + expected * 3_600_000)
+            self.apply(env=later)
+            self.assertEqual(self.direct_state()["rewakeCount"], expected)
+        exhausted = dict(self.env); exhausted["CRAFT_TEST_NOW_MS"] = str(NOW + 4 * 3_600_000)
+        self.apply(env=exhausted)
+        self.assertEqual(self.direct_state()["rewakeCount"], 2)
+        # Exhausted direct lane escalates the same incidents to the controller.
+        code = ("import importlib.util,json\n"
+                f"s=importlib.util.spec_from_file_location('adm',{str(TOOL)!r})\n"
+                "m=importlib.util.module_from_spec(s); s.loader.exec_module(m)\n"
+                "assert m.direct_lane_exhausted('alpha') is True\n"
+                "kinds=[b['targetType'] for b in m.admission_batches('controller')]\n"
+                "assert kinds==['recovery-controller'], kinds\nprint('ok')\n")
+        cp = subprocess.run([sys.executable, "-c", code], env=exhausted, text=True, capture_output=True)
+        self.assertIn("ok", cp.stdout, cp.stdout + cp.stderr)
+
+    def test_blocked_direct_lane_escalates_to_controller(self):
+        # A durably blocked project tick means the coordinator is unreachable by
+        # queue delivery; routine kinds must then reach the controller, which owns
+        # the wake/rotation stages that can replace a dead coordinator.
+        self.registry(); self.incident(kind="coordinator-lease-stale", evidence={"generation": 7})
+        self.apply()
+        later = dict(self.env); later["CRAFT_TEST_NOW_MS"] = str(NOW + 61_000)
+        self.apply(ok=False, env=later)
+        self.assertEqual(self.direct_state()["phase"], "blocked")
+        code = ("import importlib.util\n"
+                f"s=importlib.util.spec_from_file_location('adm',{str(TOOL)!r})\n"
+                "m=importlib.util.module_from_spec(s); s.loader.exec_module(m)\n"
+                "assert m.direct_lane_exhausted('alpha') is True\n"
+                "batches=m.admission_batches('controller')\n"
+                "assert [b['targetType'] for b in batches]==['recovery-controller'], batches\n"
+                "assert any(r['kind']=='coordinator-lease-stale' for r in batches[0]['rows'])\n"
+                "print('ok')\n")
+        cp = subprocess.run([sys.executable, "-c", code], env=later, text=True, capture_output=True)
+        self.assertIn("ok", cp.stdout, cp.stdout + cp.stderr)
+
     def test_complex_recovery_remains_controller_bound(self):
         self.incident(kind="coordinator-session-error")
         self.apply(); state=self.controller_state()

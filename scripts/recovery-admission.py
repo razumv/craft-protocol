@@ -36,7 +36,7 @@ STATE = Path(os.environ.get("CRAFT_ADMISSION_STATE", RUNTIME / "self-healing/adm
 TICK_STATES = Path(os.environ.get("CRAFT_COORDINATOR_TICK_STATES", RUNTIME / "self-healing/coordinator-ticks")).expanduser()
 LOCK = Path(os.environ.get("CRAFT_ADMISSION_LOCK", RUNTIME / "self-healing/admission.lock")).expanduser()
 DISABLED = Path(os.environ.get("CRAFT_SELF_HEALING_DISABLED", RUNTIME / "self-healing.disabled")).expanduser()
-PROTOCOL_VERSION = "v3.4.13"
+PROTOCOL_VERSION = "v3.4.14"
 AUTOMATION_ID = os.environ.get("CRAFT_RECOVERY_NOTIFIER_AUTOMATION_ID", "a322-admission")
 LEGACY_AUTOMATION_IDS = {"a321-notifier", "a31101", "a31102"}
 CONTROLLER_ACTION_ID = "a322-controller-recovery"
@@ -49,6 +49,10 @@ if RPC_TIMEOUT_SECONDS < 20 or RPC_TIMEOUT_SECONDS > 120:
     raise ValueError("CRAFT_ADMISSION_RPC_TIMEOUT_SECONDS must be between 20 and 120")
 RECOVERY_MIN_AGE_SECONDS = int(os.environ.get("CRAFT_ADMISSION_RECOVERY_MIN_AGE_SECONDS", "1800"))
 RECOVERY_MIN_AGE_MS = RECOVERY_MIN_AGE_SECONDS * 1000
+# A consumed wake whose condition persists is re-issued a bounded number of times
+# after a quiet period; then the incidents fall through to the controller lane.
+MAX_REWAKES = int(os.environ.get("CRAFT_ADMISSION_MAX_REWAKES", "2"))
+REWAKE_QUIET_MS = int(os.environ.get("CRAFT_ADMISSION_REWAKE_QUIET_SECONDS", "1800")) * 1000
 NOW_MS = lambda: int(os.environ.get("CRAFT_TEST_NOW_MS", "0")) or int(time.time() * 1000)
 
 CAPABILITY_VERSION = 2
@@ -357,6 +361,24 @@ def scheduled_tick_rows(now: int) -> list[dict[str, Any]]:
     return rows
 
 
+def direct_lane_exhausted(project: str, target: dict[str, Any] | None = None) -> bool:
+    """True when this project's direct tick lane cannot reach *this* coordinator:
+    the durable state for the same target identity is blocked, or its bounded
+    re-wakes are spent. A state belonging to a superseded generation is not
+    exhaustion — that case is superseded with a fresh cycle instead."""
+    digest = hashlib.sha256(str(project).encode()).hexdigest()[:20]
+    state = read_json(TICK_STATES / f"{digest}.json")
+    if not state:
+        return False
+    if target and (state.get("targetSessionId") != target.get("targetSessionId")
+                   or str(state.get("targetGeneration")) != str(target.get("targetGeneration"))):
+        return False
+    if state.get("phase") == "blocked":
+        return True
+    return (state.get("phase") == "consumed"
+            and int(state.get("rewakeCount") or 0) >= MAX_REWAKES)
+
+
 def admission_batches(controller_session: str) -> list[dict[str, Any]]:
     validate_fencing_inputs()
     direct: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -365,6 +387,13 @@ def admission_batches(controller_session: str) -> list[dict[str, Any]]:
     # joins the same envelope only when capacity remains.
     for row in [*actionable_incidents(), *scheduled_tick_rows(NOW_MS())]:
         target = direct_target(row)
+        if target and direct_lane_exhausted(target["project"], target):
+            # The direct lane for this project is durably blocked or has spent its
+            # bounded re-wakes: the coordinator is provably unreachable by queue
+            # delivery. Routine kinds normally never reach the controller, so a
+            # dead coordinator had no escalation path at all and stayed dead. Hand
+            # these incidents to the controller lane, which owns wake/rotation.
+            target = None
         if target:
             key = (target["project"], target["targetSessionId"], target["coordinatorGeneration"])
             direct.setdefault(key, {**target, "rows": []})["rows"].append(row)
@@ -865,8 +894,22 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
             return 2, blocked
         state = None
     if state and state.get("phase") == "consumed" and state.get("fingerprint") == incident_fingerprint(batch["rows"]):
-        return 0, state
-    if state is None or state.get("phase") == "consumed":
+        # A consumed wake used to close an unchanged condition forever. A target
+        # that consumed its wake and then died (or simply failed to fix anything)
+        # was never woken again, because the incident set never changes while the
+        # condition persists — two coordinators sat dead for four hours this way.
+        # Re-wake the same condition a bounded number of times, and only after a
+        # quiet period with no completed turn since consumption.
+        rewakes = int(state.get("rewakeCount") or 0)
+        consumed_at = int(state.get("consumedAt") or state.get("deliveredAt") or now)
+        quiet = now - consumed_at >= REWAKE_QUIET_MS
+        if rewakes >= MAX_REWAKES or not quiet:
+            return 0, state
+        state = {**prepared_cycle(now, workspace, batch), "rewakeCount": rewakes + 1,
+                 "rewakeOf": state.get("messageId"), "rewakeReason": "condition-unresolved-after-consumed-wake"}
+        if apply:
+            atomic_json(path, state)
+    elif state is None or state.get("phase") == "consumed":
         state = prepared_cycle(now, workspace, batch)
     elif state.get("phase") == "prepared":
         # No message ID exists yet, so a crash-replayed prepare may safely fold
