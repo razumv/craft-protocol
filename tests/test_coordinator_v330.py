@@ -753,6 +753,67 @@ class StatusTests(Base):
         _, working = self.cli(STATUS, "show", "--project", "demo")
         self.assertNotIn("idle-ready-work:independent", working["issues"])
 
+    def commitment(self, cid, binding, state, ref=None, generation=2):
+        row = {"schemaVersion": 1, "project": "demo", "commitmentId": cid, "generation": generation,
+               "bindingKind": binding, "ref": ref, "state": state,
+               "coordinatorSessionId": "coord1", "subject": "s"}
+        self.put(self.runtime / "coordinator-commitments" / "demo" / f"{cid}.json", row)
+
+    def idle_ready_payload(self):
+        payload = self.increment_payload()
+        payload.update({"phase": "blocked", "gateRefs": ["physical-check"], "nextActions": [],
+                        "childRefs": []})
+        payload["productIncrement"]["stories"] = [
+            {"id": "blocked-by-gate", "title": "Physical acceptance", "state": "blocked",
+             "dependsOn": [], "riskContribution": "medium"},
+            {"id": "independent", "title": "Independent normalization", "state": "ready",
+             "dependsOn": [], "riskContribution": "low"}]
+        return payload
+
+    def test_promise_commitments_do_not_mask_idle_ready_work(self):
+        # A scheduled-review or owner-gate commitment is a promise to look later,
+        # not execution: it must not hide an unassigned ready story (observed live
+        # on two projects).
+        self.base_project()
+        self.cli(GATE, "create", "--project", "demo", "--gate", "physical-check",
+                 "--question", "Owner must verify?", "--choices", "DONE,HOLD",
+                 "--owner-only-category", "human-product-judgment-action", "--scope", "work-unit")
+        self.publish(self.idle_ready_payload())
+        self.put(self.runtime / "worker-leases" / "worker1.json",
+                 {"schemaVersion": 1, "sessionId": "worker1", "parentSessionId": "coord1",
+                  "role": "worker", "workUnit": "wu-1", "attempt": "1", "state": "handoff-ready"})
+        for binding, ref in (("scheduled-review", None), ("owner-gate", "physical-check")):
+            with self.subTest(binding=binding):
+                self.commitment("promise", binding, "observing", ref=ref)
+                _, show = self.cli(STATUS, "show", "--project", "demo")
+                self.assertIn("idle-ready-work:independent", show["issues"])
+        # A real work observer clears it.
+        self.commitment("promise", "worker-lease", "observing", ref="worker1")
+        _, working = self.cli(STATUS, "show", "--project", "demo")
+        self.assertNotIn("idle-ready-work:independent", working["issues"])
+
+    def test_repeated_timed_out_self_reviews_are_flagged_as_churn(self):
+        # Re-scheduling a self-review while nothing executes is the
+        # bookkeeping-instead-of-delivery signature.
+        self.base_project()
+        self.cli(GATE, "create", "--project", "demo", "--gate", "physical-check",
+                 "--question", "Owner must verify?", "--choices", "DONE,HOLD",
+                 "--owner-only-category", "human-product-judgment-action", "--scope", "work-unit")
+        self.publish(self.idle_ready_payload())
+        self.put(self.runtime / "worker-leases" / "worker1.json",
+                 {"schemaVersion": 1, "sessionId": "worker1", "parentSessionId": "coord1",
+                  "role": "worker", "workUnit": "wu-1", "attempt": "1", "state": "handoff-ready"})
+        self.commitment("review-r2", "scheduled-review", "resolved-timeout")
+        _, one = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in one["issues"] if i.startswith("scheduled-review-churn")])
+        self.commitment("review-r3", "scheduled-review", "resolved-timeout")
+        _, two = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("scheduled-review-churn:2", two["issues"])
+        # An executing lane means the project is delivering, not just reviewing.
+        self.lease(state="running")
+        _, working = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in working["issues"] if i.startswith("scheduled-review-churn")])
+
     def test_blocked_publish_with_open_gate_reference_is_allowed(self):
         self.base_project()
         self.cli(GATE, "create", "--project", "demo", "--gate", "ship-decision",

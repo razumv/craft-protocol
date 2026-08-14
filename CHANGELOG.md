@@ -4,6 +4,13 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.15] — 2026-08-14
+
+### Promise commitments no longer mask idle work
+
+- only `worker-lease` and `external-wait` commitments count as evidence that work is executing. A `scheduled-review` or `owner-gate` commitment is a promise to look later, and counting it let projects hide unassigned `ready` stories from the v3.4.14 `idle-ready-work` detector — exactly how two live projects reported healthy while dispatching nothing;
+- flag `scheduled-review-churn:<n>` when at least `CRAFT_STATUS_SELF_REVIEW_CHURN_LIMIT` (2) scheduled reviews have timed out while no lane, wait or work-observer commitment exists. Observed live: a coordinator re-registered `rotation-handoff-review` r2 → r3 → r4, each timing out, instead of performing the rotation, with a `ready` audit story unassigned the whole time.
+
 ## [3.4.14] — 2026-08-14
 
 ### Unresolved-condition re-wake, dead-lane escalation, and idle-ready detection
@@ -260,7 +267,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.14...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.15...HEAD
+[3.4.15]: https://github.com/razumv/craft-protocol/compare/v3.4.14...v3.4.15
 [3.4.14]: https://github.com/razumv/craft-protocol/compare/v3.4.13...v3.4.14
 [3.4.13]: https://github.com/razumv/craft-protocol/compare/v3.4.12...v3.4.13
 [3.4.12]: https://github.com/razumv/craft-protocol/compare/v3.4.11...v3.4.12
