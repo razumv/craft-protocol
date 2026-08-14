@@ -23,6 +23,26 @@ OWNER_ONLY_CATEGORIES = (
     "high-blast-radius-public-release",
     "conflicting-direct-owner-priorities",
 )
+# A category names the *domain*; this names the concrete thing the owner alone may
+# cause. Coordinators kept escalating by domain — "money" for writing a test in a
+# wallet project, "product judgment" for removing an extended attribute from their
+# own scratch file — and the protocol only ever checked that some category was
+# named. An effect is far harder to claim falsely than a domain, and the owner can
+# see at a glance what they are actually being asked to permit.
+EXTERNAL_EFFECTS = (
+    "publish-release",
+    "merge-protected-branch",
+    "deploy",
+    "spend-money-or-entitlement",
+    "use-credential",
+    "irreversible-data-change",
+    "physical-or-remote-access",
+    "legal-or-rights-decision",
+    "product-direction-decision",
+)
+# Named to be refused: whatever a coordinator may do on its own authority.
+SELF_AUTHORIZED_EFFECTS = ("none", "local-repair", "test-only", "observation",
+                           "investigation", "documentation")
 
 
 def clean(raw: str) -> str:
@@ -57,6 +77,16 @@ def cmd_create(args: argparse.Namespace) -> int:
     category = getattr(args, "owner_only_category", None)
     if category not in OWNER_ONLY_CATEGORIES:
         raise SystemExit("owner-only category required; reversible technical transitions and bounded corrections must continue autonomously")
+    effect = getattr(args, "external_effect", None)
+    if effect in SELF_AUTHORIZED_EFFECTS:
+        raise SystemExit(
+            f"'{effect}' is not an external effect: do it on your own authority. "
+            "A gate spends the owner's attention on something only they may cause")
+    if effect not in EXTERNAL_EFFECTS:
+        raise SystemExit(
+            f"--external-effect must name exactly what the owner alone may cause: {list(EXTERNAL_EFFECTS)}. "
+            "If none of these fits, you do not need a gate — proceed autonomously "
+            "and keep the work reversible")
     path = gate_path(args.project, args.gate)
     with common.file_lock(LOCK):
         existing = common.read_json(path)
@@ -64,6 +94,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             print(json.dumps({"ok": True, "idempotent": True, "gate": existing}, indent=2)); return 0
         value = {"schemaVersion": SCHEMA, "project": clean(args.project).lower(), "gateId": clean(args.gate),
                  "workUnit": args.work_unit, "question": args.question, "choices": choices,
+                 "externalEffect": effect,
                  "ownerOnlyCategory": category, "blockingScope": args.scope, "safeDefault": args.safe_default,
                  "state": "open", "createdAt": common.now_ms(), "resolvedAt": None,
                  "choice": None, "authority": None, "evidence": args.evidence}
@@ -87,7 +118,9 @@ def cmd_hold(args: argparse.Namespace) -> int:
         gate_id = f"project-hold-{common.now_ms()}"
     ns = argparse.Namespace(project=args.project, gate=gate_id, work_unit=None,
         question=f"Project HOLD: {args.reason}", choices="RESUME", scope="project",
-        safe_default="HOLD", evidence=args.evidence, owner_only_category="explicit-hold")
+        safe_default="HOLD", evidence=args.evidence, owner_only_category="explicit-hold",
+        # A hold is the owner directing the project; the effect is their decision itself.
+        external_effect="product-direction-decision")
     return cmd_create(ns)
 
 
@@ -144,7 +177,7 @@ def cmd_inbox(args: argparse.Namespace) -> int:
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__); sub = p.add_subparsers(dest="command", required=True)
-    c = sub.add_parser("create"); c.add_argument("--project", required=True); c.add_argument("--gate", required=True); c.add_argument("--work-unit"); c.add_argument("--question", required=True); c.add_argument("--choices", required=True); c.add_argument("--owner-only-category", required=True, choices=OWNER_ONLY_CATEGORIES); c.add_argument("--scope", default="work-unit", choices=["project", "work-unit", "spawn", "implement", "merge", "close"]); c.add_argument("--safe-default", default="BLOCK"); c.add_argument("--evidence"); c.set_defaults(func=cmd_create)
+    c = sub.add_parser("create"); c.add_argument("--project", required=True); c.add_argument("--gate", required=True); c.add_argument("--work-unit"); c.add_argument("--question", required=True); c.add_argument("--choices", required=True); c.add_argument("--owner-only-category", required=True, choices=OWNER_ONLY_CATEGORIES); c.add_argument("--external-effect", required=True); c.add_argument("--scope", default="work-unit", choices=["project", "work-unit", "spawn", "implement", "merge", "close"]); c.add_argument("--safe-default", default="BLOCK"); c.add_argument("--evidence"); c.set_defaults(func=cmd_create)
     h = sub.add_parser("hold"); h.add_argument("--project", required=True); h.add_argument("--reason", required=True); h.add_argument("--evidence"); h.set_defaults(func=cmd_hold)
     r = sub.add_parser("resolve"); r.add_argument("--project", required=True); r.add_argument("--gate", required=True); r.add_argument("--choice", required=True); r.add_argument("--authority", required=True); r.add_argument("--evidence", required=True); r.set_defaults(func=cmd_resolve)
     k = sub.add_parser("check"); k.add_argument("--project", required=True); k.add_argument("--work-unit"); k.add_argument("--action", required=True, choices=["spawn", "implement", "merge", "close"]); k.set_defaults(func=cmd_check)

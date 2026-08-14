@@ -738,7 +738,7 @@ class StatusTests(Base):
         self.base_project()
         self.cli(GATE, "create", "--project", "demo", "--gate", "physical-check",
                  "--question", "Owner must verify the device?", "--choices", "DONE,HOLD",
-                 "--owner-only-category", "human-product-judgment-action", "--scope", "work-unit")
+                 "--owner-only-category", "human-product-judgment-action", "--external-effect", "product-direction-decision", "--scope", "work-unit")
         payload = self.increment_payload()
         payload.update({"phase": "blocked", "gateRefs": ["physical-check"], "nextActions": [],
                         "childRefs": []})
@@ -784,7 +784,7 @@ class StatusTests(Base):
         self.base_project()
         self.cli(GATE, "create", "--project", "demo", "--gate", "physical-check",
                  "--question", "Owner must verify?", "--choices", "DONE,HOLD",
-                 "--owner-only-category", "human-product-judgment-action", "--scope", "work-unit")
+                 "--owner-only-category", "human-product-judgment-action", "--external-effect", "product-direction-decision", "--scope", "work-unit")
         self.publish(self.idle_ready_payload())
         self.put(self.runtime / "worker-leases" / "worker1.json",
                  {"schemaVersion": 1, "sessionId": "worker1", "parentSessionId": "coord1",
@@ -805,7 +805,7 @@ class StatusTests(Base):
         self.base_project()
         self.cli(GATE, "create", "--project", "demo", "--gate", "physical-check",
                  "--question", "Owner must verify?", "--choices", "DONE,HOLD",
-                 "--owner-only-category", "human-product-judgment-action", "--scope", "work-unit")
+                 "--owner-only-category", "human-product-judgment-action", "--external-effect", "product-direction-decision", "--scope", "work-unit")
         self.publish(self.idle_ready_payload())
         self.put(self.runtime / "worker-leases" / "worker1.json",
                  {"schemaVersion": 1, "sessionId": "worker1", "parentSessionId": "coord1",
@@ -871,6 +871,34 @@ class StatusTests(Base):
             cp, _ = self.publish(payload, ok=False)
             self.assertIn(needle, cp.stderr)
 
+    def test_a_gate_must_name_the_effect_only_the_owner_may_cause(self):
+        # v3.4.31: coordinators escalated by *domain* — "money" for writing a test in
+        # a wallet project, "product judgment" for removing an extended attribute
+        # from their own scratch file — and the protocol only checked that some
+        # category was named. Three such gates were open at once on 2026-08-15.
+        self.base_project()
+        # An effect-free action is refused with its remedy: do it yourself.
+        cp, _ = self.cli(GATE, "create", "--project", "demo", "--gate", "xattr-repair",
+                         "--question", "Remove one stray xattr from a local trace file?",
+                         "--choices", "AUTHORIZE,HOLD", "--owner-only-category",
+                         "human-product-judgment-action", "--external-effect", "local-repair",
+                         "--scope", "implement", ok=False)
+        self.assertIn("not an external effect", cp.stderr)
+        # So is an unnamed one, and the message says a gate may not be needed at all.
+        cp, _ = self.cli(GATE, "create", "--project", "demo", "--gate", "vague",
+                         "--question", "Proceed?", "--choices", "YES,NO",
+                         "--owner-only-category", "money-entitlements",
+                         "--external-effect", "because-money", "--scope", "work-unit", ok=False)
+        self.assertIn("you do not need a gate", cp.stderr)
+        # A real external effect is accepted and recorded on the gate.
+        self.cli(GATE, "create", "--project", "demo", "--gate", "release-decision",
+                 "--question", "Publish the release?", "--choices", "PUBLISH,HOLD",
+                 "--owner-only-category", "high-blast-radius-public-release",
+                 "--external-effect", "publish-release", "--scope", "work-unit")
+        _, listed = self.cli(GATE, "list", "--project", "demo")
+        gate = [g for g in listed["gates"] if g["gateId"] == "release-decision"][0]
+        self.assertEqual(gate["externalEffect"], "publish-release")
+
     def test_a_pipe_joined_choice_list_still_produces_answerable_choices(self):
         # v3.4.29: coordinators write choice lists both ways. A pipe-joined list used
         # to become one unselectable choice, so the owner could not answer their own
@@ -880,7 +908,7 @@ class StatusTests(Base):
         self.cli(GATE, "create", "--project", "demo", "--gate", "spend-decision",
                  "--question", "Top up the API allocation?",
                  "--choices", "restore-without-spend|authorize-top-up|keep-blocked",
-                 "--owner-only-category", "money-entitlements", "--scope", "work-unit")
+                 "--owner-only-category", "money-entitlements", "--external-effect", "spend-money-or-entitlement", "--scope", "work-unit")
         _, listed = self.cli(GATE, "list", "--project", "demo")
         gate = [g for g in listed["gates"] if g["gateId"] == "spend-decision"][0]
         self.assertEqual(gate["choices"],
@@ -896,7 +924,7 @@ class StatusTests(Base):
         # Duplicates across separators collapse instead of multiplying.
         self.cli(GATE, "create", "--project", "demo", "--gate", "mixed",
                  "--question", "Ship?", "--choices", "SHIP,HOLD|SHIP",
-                 "--owner-only-category", "human-product-judgment-action", "--scope", "work-unit")
+                 "--owner-only-category", "human-product-judgment-action", "--external-effect", "product-direction-decision", "--scope", "work-unit")
         _, mixed = self.cli(GATE, "list", "--project", "demo")
         row = [g for g in mixed["gates"] if g["gateId"] == "mixed"][0]
         self.assertEqual(row["choices"], ["SHIP", "HOLD"])
@@ -957,7 +985,7 @@ class StatusTests(Base):
         # An open gate the story names explicitly is a real, checkable blocker.
         self.cli(GATE, "create", "--project", "demo", "--gate", "next-decision",
                  "--question", "Which way for next?", "--choices", "A,B",
-                 "--owner-only-category", "human-product-judgment-action", "--scope", "work-unit")
+                 "--owner-only-category", "human-product-judgment-action", "--external-effect", "product-direction-decision", "--scope", "work-unit")
         payload["productIncrement"]["stories"][1]["blockedByRef"] = "next-decision"
         self.publish(payload)
         _, bound = self.cli(STATUS, "show", "--project", "demo")
@@ -1135,7 +1163,7 @@ class StatusTests(Base):
         receipt_dir.rename(receipt_dir.parent / "demo-off")
         self.cli(GATE, "create", "--project", "demo", "--gate", "merge-wu-9",
                  "--question", "Merge it?", "--choices", "MERGE,HOLD",
-                 "--owner-only-category", "high-blast-radius-public-release", "--scope", "merge")
+                 "--owner-only-category", "high-blast-radius-public-release", "--external-effect", "publish-release", "--scope", "merge")
         self.cli(GATE, "resolve", "--project", "demo", "--gate", "merge-wu-9",
                  "--choice", "MERGE", "--authority", "direct-owner", "--evidence", "owner said so")
         payload["productIncrement"]["stories"][0]["mergeAuthorityRef"] = "merge-wu-9"
@@ -1186,9 +1214,20 @@ class StatusTests(Base):
         _, granted = self.cli(STATUS, "show", "--project", "demo")
         self.assertFalse([i for i in granted["issues"]
                           if i.startswith("exhausted-correction-without-escalation")])
+        # v3.4.31: a further attempt that names a *new* proven cause is progress and
+        # stays the coordinator's own call — what returns to the owner is repetition
+        # without new information.
         payload["correctionBudgetExtensions"].append(
             {"storyId": "migration", "rootCauseRef": "audit-event-2ab77f0",
              "correctionScope": "alembic/versions/0010_wallet.py", "grantedAt": self.now-500})
+        self.publish(payload)
+        _, progressed = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in progressed["issues"]
+                          if i.startswith("correction-budget-extension-reused")])
+        # The same cause twice is thrash, and that is the owner's decision again.
+        payload["correctionBudgetExtensions"].append(
+            {"storyId": "migration", "rootCauseRef": "audit-event-2ab77f0",
+             "correctionScope": "alembic/versions/0010_wallet.py", "grantedAt": self.now-200})
         self.publish(payload)
         _, reused = self.cli(STATUS, "show", "--project", "demo")
         self.assertIn("correction-budget-extension-reused:migration", reused["issues"])
@@ -1209,7 +1248,8 @@ class StatusTests(Base):
         self.cli(GATE, "create", "--project", "demo", "--gate", "next-increment-selection",
                  "--question", "Which increment should the project take next?",
                  "--choices", "BILLING,MOBILE", "--owner-only-category",
-                 "human-product-judgment-action", "--scope", "project")
+                 "human-product-judgment-action", "--external-effect", "product-direction-decision",
+                 "--scope", "project")
         _, asked = self.cli(STATUS, "show", "--project", "demo")
         self.assertNotIn("complete-without-next-increment", asked["issues"])
 
@@ -1257,7 +1297,7 @@ class StatusTests(Base):
         # An owner gate is the sanctioned escalation and clears it.
         self.cli(GATE, "create", "--project", "demo", "--gate", "correction-exhausted",
                  "--question", "Authorise an exceptional third attempt?", "--choices", "AUTHORIZE,HOLD",
-                 "--owner-only-category", "human-product-judgment-action", "--scope", "work-unit")
+                 "--owner-only-category", "human-product-judgment-action", "--external-effect", "product-direction-decision", "--scope", "work-unit")
         _, escalated = self.cli(STATUS, "show", "--project", "demo")
         self.assertFalse([i for i in escalated["issues"]
                           if i.startswith("exhausted-correction-without-escalation")])
@@ -1266,7 +1306,7 @@ class StatusTests(Base):
         self.base_project()
         self.cli(GATE, "create", "--project", "demo", "--gate", "ship-decision",
                  "--question", "Ship the paid tier to production now?", "--choices", "SHIP,WAIT",
-                 "--owner-only-category", "human-product-judgment-action",
+                 "--owner-only-category", "human-product-judgment-action", "--external-effect", "product-direction-decision",
                  "--scope", "work-unit", "--work-unit", "wu-1")
         _, pub = self.publish({"objective": "x", "phase": "blocked", "currentFocus": "owner decision",
                                "gateRefs": ["ship-decision"], "nextActions": []})

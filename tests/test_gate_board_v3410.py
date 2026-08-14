@@ -63,7 +63,8 @@ class GateBoardTest(unittest.TestCase):
                   category="human-product-judgment-action"):
         self.run_tool(GATE, "create", "--project", "demo", "--gate", gate,
                       "--question", "Ship it?", "--choices", choices,
-                      "--owner-only-category", category, "--scope", "work-unit")
+                      "--owner-only-category", category,
+                      "--external-effect", "product-direction-decision", "--scope", "work-unit")
 
     def owner_types(self, session_id, text, ts=None):
         folder = self.sessions / session_id; folder.mkdir(exist_ok=True)
