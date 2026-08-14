@@ -4,6 +4,14 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.18] — 2026-08-14
+
+### GitHub synchronisation becomes machine-observable
+
+- product status accepts a validated `githubSync` declaration (`issue` as `owner/repo#N`, `commentRef`, optional `projectField`, `syncedStage`, past `syncedAt`) — bounded, secret-scanned and fail-closed on shape;
+- any material increment stage (anything past `discovery`) without a sync, or with a sync naming an older stage, is the contradiction `github-sync-missing:<stage>` / `github-sync-stale:<synced>!=<stage>`. Updating the issue and Project board was previously only prose advice, so work could progress in Craft while GitHub — the declared source of truth — stayed silent;
+- the coordinator skill and kickoff prompt state the duty: every material transition writes a short comment on the exact issue, updates its Project status field, and declares that sync. The protocol has no network or credentials, so it verifies the declaration against the coordinator's own progress rather than pretending to read GitHub.
+
 ## [3.4.17] — 2026-08-14
 
 ### Gate cards carry their title into the UI
@@ -279,7 +287,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.17...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.18...HEAD
+[3.4.18]: https://github.com/razumv/craft-protocol/compare/v3.4.17...v3.4.18
 [3.4.17]: https://github.com/razumv/craft-protocol/compare/v3.4.16...v3.4.17
 [3.4.16]: https://github.com/razumv/craft-protocol/compare/v3.4.15...v3.4.16
 [3.4.15]: https://github.com/razumv/craft-protocol/compare/v3.4.14...v3.4.15

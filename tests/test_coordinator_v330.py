@@ -560,6 +560,10 @@ class StatusTests(Base):
                         "nextActions": [], "childRefs": [], "completedOutcomes": [
                             {"summary": "Product Increment delivered", "evidenceRef": refs[0]}]})
         payload.pop("nextReviewInSeconds", None)
+        payload["githubSync"] = {
+            "issue": "razumv/demo#42",
+            "commentRef": "https://github.com/razumv/demo/issues/42#issuecomment-9",
+            "projectField": "Status=Done", "syncedStage": "complete", "syncedAt": self.now - 1000}
         payload["productIncrement"].update({
             "stage": "complete",
             "stories": [
@@ -813,6 +817,56 @@ class StatusTests(Base):
         self.lease(state="running")
         _, working = self.cli(STATUS, "show", "--project", "demo")
         self.assertFalse([i for i in working["issues"] if i.startswith("scheduled-review-churn")])
+
+    def github_sync(self, stage="building", issue="razumv/demo#42", **over):
+        row = {"issue": issue, "commentRef": f"https://github.com/{issue.replace('#', '/issues/')}#issuecomment-1",
+               "projectField": "Status=In progress", "syncedStage": stage, "syncedAt": self.now - 1000}
+        row.update(over)
+        return row
+
+    def test_material_stage_without_github_sync_is_a_contradiction(self):
+        # GitHub is the task source of truth: a stage visible in Craft but absent
+        # from the issue/Project board is an unreported stage.
+        self.base_project()
+        self.publish(self.increment_payload())            # stage=building, no githubSync
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("github-sync-missing:building", show["issues"])
+        # A sync naming an older stage is stale, not proof.
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync(stage="discovery")
+        self.publish(payload)
+        _, stale = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("github-sync-stale:discovery!=building", stale["issues"])
+        # A sync for the current stage clears it and survives the round trip.
+        payload["githubSync"] = self.github_sync(stage="building")
+        _, ok = self.publish(payload)
+        self.assertEqual(ok["record"]["declared"]["githubSync"]["issue"], "razumv/demo#42")
+        _, clean = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in clean["issues"] if i.startswith("github-sync")])
+
+    def test_discovery_stage_needs_no_github_sync(self):
+        self.base_project()
+        payload = self.increment_payload()
+        payload["productIncrement"]["stage"] = "discovery"
+        self.publish(payload)
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in show["issues"] if i.startswith("github-sync")])
+
+    def test_github_sync_shape_fails_closed(self):
+        self.base_project()
+        for bad, needle in (
+            ({"issue": "not-an-issue", "commentRef": "x", "syncedStage": "building", "syncedAt": self.now},
+             "owner/repo#123"),
+            (self.github_sync(syncedStage="mysterious"), "syncedStage"),
+            (self.github_sync(syncedAt=self.now + 3_600_000), "syncedAt"),
+            ({"issue": "razumv/demo#42", "commentRef": "authorization: Bearer sk-1",
+              "syncedStage": "building", "syncedAt": self.now}, "credential"),
+            ("not-an-object", "must be an object"),
+        ):
+            payload = self.increment_payload()
+            payload["githubSync"] = bad
+            cp, _ = self.publish(payload, ok=False)
+            self.assertIn(needle, cp.stderr)
 
     def test_blocked_publish_with_open_gate_reference_is_allowed(self):
         self.base_project()
