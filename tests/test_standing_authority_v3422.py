@@ -149,7 +149,7 @@ class StandingAuthorityTest(unittest.TestCase):
         subprocess.run([sys.executable, str(GATE), "create", "--project", "demo",
                         "--gate", "wu-1-question", "--work-unit", "wu-1",
                         "--question", "Ship this one?", "--choices", "YES,NO",
-                        "--owner-only-category", "human-product-judgment-action",
+                        "--owner-only-category", "human-product-judgment-action", "--external-effect", "product-direction-decision",
                         "--scope", "work-unit"], env=self.env, check=True, capture_output=True)
         _, blocked = self.check(ok=False)
         self.assertIn("gate-blocks:wu-1-question", blocked["refusals"])

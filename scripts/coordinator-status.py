@@ -470,17 +470,27 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
     failed_stories = sorted({str(story.get("id")) for story in increment.get("stories") or []
                              if isinstance(story, dict) and story.get("state") == "failed"})
     extension_counts: dict[str, int] = {}
+    extension_causes: dict[str, list[str]] = {}
     for extension in declared.get("correctionBudgetExtensions") or []:
         story_id = str(extension.get("storyId"))
         extension_counts[story_id] = extension_counts.get(story_id, 0) + 1
+        extension_causes.setdefault(story_id, []).append(str(extension.get("rootCauseRef") or ""))
     # One self-granted extension is the coordinator's own authority; a second is
     # the owner's decision again, so reuse is a contradiction rather than a budget.
-    reused = sorted(sid for sid, count in extension_counts.items() if count > 1)
+    # What makes repeated correction dangerous is repetition without new information,
+    # not the count. An attempt that names a *new* proven cause is progress and stays
+    # the coordinator's own call; the same cause twice is thrash and returns to the
+    # owner. Live: a fourth test-only correction, each attempt naming a different
+    # proven omission, was escalated purely because the count had run out.
+    reused = sorted(sid for sid, causes in extension_causes.items()
+                    if len(causes) != len(set(causes)))
     if reused:
         issues.append("correction-budget-extension-reused:" + ",".join(reused[:4]))
     # A story retrying under its single self-granted extension is escalated in the
     # sanctioned way; without one, a failed story needs a plan, a lane or a gate.
-    unescalated = [sid for sid in failed_stories if extension_counts.get(sid, 0) != 1]
+    unescalated = [sid for sid in failed_stories
+                   if not extension_counts.get(sid)
+                   or len(set(extension_causes.get(sid, []))) != extension_counts.get(sid)]
     if (unescalated and not declared.get("nextActions") and not synth["openGateCount"]
             and not synth["activeWorkers"]):
         issues.append("exhausted-correction-without-escalation:" + ",".join(unescalated[:4]))

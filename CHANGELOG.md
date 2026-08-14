@@ -4,6 +4,17 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.31] — 2026-08-15
+
+### A gate names the effect, not the domain
+
+- `owner-gate.py create` requires `--external-effect` from a closed list of things only the owner may cause (`publish-release`, `merge-protected-branch`, `deploy`, `spend-money-or-entitlement`, `use-credential`, `irreversible-data-change`, `physical-or-remote-access`, `legal-or-rights-decision`, `product-direction-decision`) and refuses the self-authorized ones (`none`, `local-repair`, `test-only`, `observation`, `investigation`, `documentation`) with the remedy in the message: do it on your own authority. An unrecognised value is refused with *"if none of these fits, you do not need a gate"*. The effect is stored on the gate, so the owner sees what they are actually permitting;
+- observed live: three gates open simultaneously, none of which needed the owner — removing a stray `com.apple.provenance` xattr from an empty scratch file (declared `human-product-judgment-action`), adding two missing mounted-screen test cases in a wallet project (declared `money-entitlements`, with the evidence itself recording no merge, deploy, mutation or wager), and restarting a passive 25-minute observation window. Each named a category; none had an effect.
+
+### Correction attempts are bounded by information, not by a counter
+
+- a further self-granted extension is allowed whenever it names a `rootCauseRef` no previous attempt named; `correction-budget-extension-reused` now fires on a repeated cause rather than on the second attempt. What the owner needs protecting from is thrash, not progress — the fourth test-only correction above was escalated purely because a counter had run out, while each attempt had named a different proven omission.
+
 ## [3.4.30] — 2026-08-14
 
 ### Authorizing a merge no longer requires proof that only the merge can produce
@@ -423,7 +434,8 @@ Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's 
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.30...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.31...HEAD
+[3.4.31]: https://github.com/razumv/craft-protocol/compare/v3.4.30...v3.4.31
 [3.4.30]: https://github.com/razumv/craft-protocol/compare/v3.4.29...v3.4.30
 [3.4.29]: https://github.com/razumv/craft-protocol/compare/v3.4.28...v3.4.29
 [3.4.28]: https://github.com/razumv/craft-protocol/compare/v3.4.27...v3.4.28
