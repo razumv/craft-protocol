@@ -958,6 +958,45 @@ class StatusTests(Base):
         # reported once a real clone is named.
         self.assertTrue([i for i in show["issues"] if i.startswith("delivery-repo-unreadable")])
 
+    def test_merge_into_a_declared_protected_branch_must_name_its_authority(self):
+        # v3.4.22: authority is named, never inferred. Measured on live state, owner
+        # gates bind to coarser work units than stories, so inferring authorisation
+        # from a nearby gate would have flagged three healthy merges.
+        self.base_project()
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync()
+        payload["delivery"] = {"repoPath": str(self.runtime.parent), "targetBranch": "dev",
+                               "protectedBranches": ["dev"]}
+        payload["productIncrement"]["stories"] = [
+            {"id": "shipped", "title": "Shipped", "state": "accepted", "dependsOn": [],
+             "riskContribution": "low", "acceptanceRef": "cert-9", "workUnit": "wu-9",
+             "mergeSha": "b" * 40}]
+        cert_dir = self.runtime / "completion-certificates" / "demo"
+        cert_dir.mkdir(parents=True, exist_ok=True)
+        (cert_dir / "cert-9.json").write_text(json.dumps({"project": "demo", "workUnit": "wu-9"}))
+        self.publish(payload)
+        _, unnamed = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("merge-without-named-authority:shipped", unnamed["issues"])
+        # A standing-merge receipt for that work unit is admissible authority.
+        receipt_dir = self.runtime / "standing-merges" / "demo"
+        receipt_dir.mkdir(parents=True, exist_ok=True)
+        (receipt_dir / "wu-9-bbbbbbbbbbbb.json").write_text(json.dumps(
+            {"project": "demo", "workUnit": "wu-9", "branch": "dev"}))
+        self.publish(payload)
+        _, standing = self.cli(STATUS, "show", "--project", "demo")
+        self.assertNotIn("merge-without-named-authority:shipped", standing["issues"])
+        # So is a gate the owner actually answered, named explicitly by the story.
+        receipt_dir.rename(receipt_dir.parent / "demo-off")
+        self.cli(GATE, "create", "--project", "demo", "--gate", "merge-wu-9",
+                 "--question", "Merge it?", "--choices", "MERGE,HOLD",
+                 "--owner-only-category", "high-blast-radius-public-release", "--scope", "merge")
+        self.cli(GATE, "resolve", "--project", "demo", "--gate", "merge-wu-9",
+                 "--choice", "MERGE", "--authority", "direct-owner", "--evidence", "owner said so")
+        payload["productIncrement"]["stories"][0]["mergeAuthorityRef"] = "merge-wu-9"
+        self.publish(payload)
+        _, gated = self.cli(STATUS, "show", "--project", "demo")
+        self.assertNotIn("merge-without-named-authority:shipped", gated["issues"])
+
     def test_own_pull_requests_must_be_finished_not_parked(self):
         # Observed live: a green, conflict-free PR sat unmerged for three days while
         # the project published `deploying`.
