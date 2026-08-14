@@ -1,4 +1,4 @@
-# Craft Agents Multi-Agent Orchestration Protocol v3.4.26 — Complete Standalone Guide
+# Craft Agents Multi-Agent Orchestration Protocol v3.4.27 — Complete Standalone Guide
 
 [![Protocol tests](https://github.com/razumv/craft-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/razumv/craft-protocol/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
