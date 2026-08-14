@@ -274,6 +274,49 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         self.apply(); state=self.direct_state()
         self.assertEqual(state["incidentIds"],["handoff","wait"]); self.assertEqual(len(self.records("deliver")),1)
 
+    def harness_report(self, payload, exit_code=0):
+        self.harness.write_text(f"#!/bin/sh\necho '{json.dumps(payload)}'\nexit {exit_code}\n")
+        self.harness.chmod(0o755)
+
+    def test_restarted_controller_without_live_harness_still_receives_delivery(self):
+        # A runtime restart kills every harness. Demanding a proven-active receipt
+        # before delivery would self-deadlock: the controller registers inside the
+        # turn that only a delivery can start.
+        for state, rows in (
+            ("unregistered", []),
+            ("alreadyExited", [{"sessionId": "controller", "sessionRole": "recovery-controller",
+                                "state": "alreadyExited"}]),
+        ):
+            with self.subTest(state=state):
+                self.setUp()
+                self.harness_report({"healthy": False, "rows": rows,
+                                     "violations": ["stale exited controller harness receipt requires cleanup"]},
+                                    exit_code=2)
+                self.incident(kind="coordinator-session-error")
+                self.apply()
+                self.assertEqual(self.controller_state()["phase"], "pending-consumption")
+
+    def test_ambiguous_or_competing_controller_harness_still_fails_closed(self):
+        for label, rows in (
+            ("another live controller", [
+                {"sessionId": "controller", "sessionRole": "recovery-controller", "state": "alreadyExited"},
+                {"sessionId": "other", "sessionRole": "recovery-controller", "state": "active"}]),
+            ("identity mismatch", [
+                {"sessionId": "controller", "sessionRole": "recovery-controller", "state": "identityMismatch"}]),
+            ("lookup unknown", [
+                {"sessionId": "controller", "sessionRole": "recovery-controller", "state": "lookupUnknown"}]),
+            ("duplicate receipts", [
+                {"sessionId": "controller", "sessionRole": "recovery-controller", "state": "active"},
+                {"sessionId": "controller", "sessionRole": "recovery-controller", "state": "active"}]),
+        ):
+            with self.subTest(case=label):
+                self.setUp()
+                self.harness_report({"healthy": False, "rows": rows, "violations": ["x"]}, exit_code=2)
+                self.incident(kind="coordinator-session-error")
+                cp, _ = self.apply(ok=False)
+                self.assertEqual(cp.returncode, 2)
+                self.assertIn("not uniquely live/proven", self.controller_state()["reason"])
+
     def test_complex_recovery_remains_controller_bound(self):
         self.incident(kind="coordinator-session-error")
         self.apply(); state=self.controller_state()

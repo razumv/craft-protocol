@@ -36,7 +36,7 @@ STATE = Path(os.environ.get("CRAFT_ADMISSION_STATE", RUNTIME / "self-healing/adm
 TICK_STATES = Path(os.environ.get("CRAFT_COORDINATOR_TICK_STATES", RUNTIME / "self-healing/coordinator-ticks")).expanduser()
 LOCK = Path(os.environ.get("CRAFT_ADMISSION_LOCK", RUNTIME / "self-healing/admission.lock")).expanduser()
 DISABLED = Path(os.environ.get("CRAFT_SELF_HEALING_DISABLED", RUNTIME / "self-healing.disabled")).expanduser()
-PROTOCOL_VERSION = "v3.4.12"
+PROTOCOL_VERSION = "v3.4.13"
 AUTOMATION_ID = os.environ.get("CRAFT_RECOVERY_NOTIFIER_AUTOMATION_ID", "a322-admission")
 LEGACY_AUTOMATION_IDS = {"a321-notifier", "a31101", "a31102"}
 CONTROLLER_ACTION_ID = "a322-controller-recovery"
@@ -165,11 +165,25 @@ def require_persistent_controller(session_id: str) -> dict[str, Any]:
     try:
         cp = subprocess.run([str(CONTROLLER_HARNESS), "report"], text=True, capture_output=True, timeout=10)
         report = json.loads(cp.stdout)
-        matches = [item for item in report.get("rows", []) if item.get("sessionId") == session_id]
+        rows = report.get("rows", [])
+        matches = [item for item in rows if item.get("sessionId") == session_id]
     except Exception as exc:
         raise AdmissionError("controller harness proof unavailable") from exc
-    if (cp.returncode or not report.get("healthy") or len(matches) != 1 or
-            matches[0].get("state") != "active" or matches[0].get("sessionRole") != "recovery-controller"):
+    # The singleton invariant is "no other live controller", not "this controller
+    # already registered". A runtime restart kills every harness, so demanding a
+    # proven-active receipt before delivery self-deadlocks the controller lane:
+    # registration happens inside the turn that only a delivery can start. An
+    # absent registration and a receipt whose PID is objectively gone both prove
+    # there is no competing controller, so delivery is safe; the controller
+    # re-registers at startup and the deterministic controller lease still fences
+    # concurrent turns. Ambiguous identity remains a hard refusal.
+    others_active = [item for item in rows if item.get("sessionId") != session_id
+                     and item.get("state") == "active"
+                     and item.get("sessionRole") == "recovery-controller"]
+    state = matches[0].get("state") if matches else "unregistered"
+    if (len(matches) > 1 or others_active
+            or (matches and matches[0].get("sessionRole") != "recovery-controller")
+            or state not in {"active", "alreadyExited", "unregistered"}):
         raise AdmissionError("persistent controller harness is not uniquely live/proven")
     return row
 

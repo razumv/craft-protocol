@@ -4,6 +4,13 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.13] — 2026-08-14
+
+### Restart-resilient controller admission
+
+- delivery to the persistent recovery controller no longer requires an already-proven active harness receipt. A runtime restart kills every harness, and registration happens inside the turn that only a delivery can start, so the old rule self-deadlocked the controller lane until an owner sent a manual message (observed live during the 2026-08-14 runtime upgrade);
+- the invariant enforced is the real one — *no other live controller*: an absent registration or a receipt whose PID is objectively gone both prove there is no competing controller, while duplicate receipts, a competing active controller, identity mismatch and unknown process lookups remain hard refusals. The deterministic controller lease continues to fence concurrent turns.
+
 ## [3.4.12] — 2026-08-14
 
 ### Gate cards finish their own identity
@@ -245,7 +252,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.12...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.13...HEAD
+[3.4.13]: https://github.com/razumv/craft-protocol/compare/v3.4.12...v3.4.13
 [3.4.12]: https://github.com/razumv/craft-protocol/compare/v3.4.11...v3.4.12
 [3.4.11]: https://github.com/razumv/craft-protocol/compare/v3.4.10...v3.4.11
 [3.4.10]: https://github.com/razumv/craft-protocol/compare/v3.4.9...v3.4.10
