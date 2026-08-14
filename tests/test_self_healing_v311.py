@@ -37,6 +37,54 @@ class SelfHealingV311Test(unittest.TestCase):
         return cp, json.loads(cp.stdout) if cp.returncode==0 and cp.stdout else None
     def base(self): self.manifest("coord",cwd="/tmp/project"); self.registry()
 
+    def test_child_of_a_live_coordinator_without_a_lease_is_detected(self):
+        # v3.4.21: an executor with no lease is invisible to every machine check at
+        # once. Observed live: six such children across three projects, one running
+        # the owner-authorized correction attempt.
+        self.base()
+        self.manifest("ghost", cwd="/tmp/ghost", parentSessionId="coord",
+                      createdAt=self.now-1_800_000, name="Revision ID Correction")
+        _, d = self.cli("detect")
+        rows = [x for x in d["observations"] if x["kind"] == "unregistered-child-lane"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["project"], "alpha")
+        self.assertEqual(rows[0]["evidence"]["parentSessionId"], "coord")
+        # Registering the lease is exactly what closes it.
+        self.lease("ghost", parentSessionId="coord")
+        _, d = self.cli("detect")
+        self.assertNotIn("unregistered-child-lane", [x["kind"] for x in d["observations"]])
+
+    def test_a_just_spawned_child_is_within_its_registration_window(self):
+        self.base()
+        self.manifest("fresh", cwd="/tmp/fresh", parentSessionId="coord", createdAt=self.now-30_000)
+        _, d = self.cli("detect")
+        self.assertNotIn("unregistered-child-lane", [x["kind"] for x in d["observations"]])
+        # An archived child owes nothing: it is finished, not unobserved.
+        self.manifest("gone", cwd="/tmp/gone", parentSessionId="coord",
+                      createdAt=self.now-1_800_000, archived=True)
+        _, d = self.cli("detect")
+        self.assertNotIn("unregistered-child-lane", [x["kind"] for x in d["observations"]])
+
+    def test_forgotten_kill_switch_stops_being_silent(self):
+        # Observed live: two upgrades left self-healing disabled for three hours
+        # while eleven conditions accumulated, and the fleet looked healthy.
+        self.base()
+        self.lease("worker", state="stalled")
+        _, armed = self.cli("detect")
+        self.assertFalse(armed["killSwitch"]["present"])
+        switch = self.runtime / "self-healing.disabled"
+        switch.parent.mkdir(parents=True, exist_ok=True)
+        switch.write_text("")
+        os.utime(switch, (time.time() - 7200, time.time() - 7200))
+        _, disabled = self.cli("detect")
+        self.assertTrue(disabled["killSwitch"]["present"])
+        self.assertTrue(disabled["killSwitch"]["staleWithOpenConditions"])
+        self.assertGreater(disabled["killSwitch"]["observedConditions"], 0)
+        # A switch someone just set is a deliberate pause, not a forgotten one.
+        os.utime(switch, None)
+        _, fresh = self.cli("detect")
+        self.assertFalse(fresh["killSwitch"]["staleWithOpenConditions"])
+
     def test_orphaned_dead_lane_gets_a_disposition_path(self):
         # v3.4.20: a dead lane whose dispatching coordinator is gone can never be
         # preservation-proven, so it sat outside archivableBacklog forever while

@@ -24,6 +24,8 @@ SCHEMA = 1
 TRANSFER_STUCK_SECONDS = int(os.environ.get("CRAFT_TRANSFER_STUCK_SECONDS", "1800"))
 PREDECESSOR_ARCHIVE_GRACE_SECONDS = int(os.environ.get("CRAFT_PREDECESSOR_ARCHIVE_GRACE_SECONDS", "900"))
 ORPHANED_LANE_SECONDS = int(os.environ.get("CRAFT_ORPHANED_LANE_SECONDS", "86400"))
+KILL_SWITCH_STALE_SECONDS = int(os.environ.get("CRAFT_KILL_SWITCH_STALE_SECONDS", "1800"))
+UNREGISTERED_CHILD_SECONDS = int(os.environ.get("CRAFT_UNREGISTERED_CHILD_SECONDS", "600"))
 CLAIM_TTL_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CLAIM_TTL_SECONDS", "900"))
 MAX_ATTEMPTS = int(os.environ.get("CRAFT_RECOVERY_MAX_ATTEMPTS", "2"))
 COORDINATOR_MAX_ATTEMPTS = int(os.environ.get("CRAFT_COORDINATOR_RECOVERY_MAX_ATTEMPTS", "3"))
@@ -38,6 +40,7 @@ ACTION_MATRIX = {
     "coordinator-worker-terminal-status": ["wake-coordinator", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
     "predecessor-unarchived": ["wake-coordinator", "verify-preservation", "archive-reap-if-proven"],
     "orphaned-dead-lane": ["verify-worktree-clean", "archive-reap-if-clean", "owner-escalation-if-dirty"],
+    "unregistered-child-lane": ["wake-coordinator", "require-lease-registration", "release-slot-if-abandoned"],
     "fallback-ttl-expired": ["codex-repatriation"],
     "transfer-stuck": ["inspect-transfer", "wake-coordinator", "owner-escalation"],
     "worker-suspect": ["inspect-progress", "wake-coordinator"],
@@ -176,6 +179,24 @@ def observation(kind, severity, project, session_id, evidence, *, fingerprint_ev
 
 def collect_observations():
     now = now_ms(); records, owners, roots, ambiguous = project_context(); manifests = common.all_manifests(); out = []
+    leased = {p.stem for p in (RUNTIME / "worker-leases").glob("*.json")}
+    for sid, row in sorted(manifests.items()):
+        parent = str(row.get("parentSessionId") or "")
+        project = owners.get(parent)
+        if not project or sid in leased or row.get("isArchived") or sid in records:
+            continue
+        created = row.get("createdAt") if isinstance(row.get("createdAt"), int) else None
+        if created is None or now - created <= UNREGISTERED_CHILD_SECONDS * 1000:
+            continue
+        # An executor with no lease is invisible to every machine check at once:
+        # idle-ready detection, dead-lane detection, watchdog liveness, worktree
+        # uniqueness, preservation proof and archivable backlog all miss it.
+        # Observed live: six such children across three projects, one of them
+        # running the owner-authorized correction attempt.
+        stable = {"parentSessionId": parent, "sessionName": row.get("name")}
+        out.append(observation("unregistered-child-lane", "high", project, sid,
+            {**stable, "sessionStatus": row.get("sessionStatus"), "ageMs": now - created},
+            fingerprint_evidence=stable, coordinatorSessionId=parent))
     for sid, projects in sorted(ambiguous.items()):
         out.append(observation("ambiguous-coordinator-owner", "critical", None, sid,
             {"projects": projects, "errorClass": "cross-project-owner"}))
@@ -336,10 +357,30 @@ def collect_observations():
             coordinatorGeneration=row["generation"]))
     return out
 
+def kill_switch_state(observed: list[dict[str, Any]]) -> dict[str, Any]:
+    """A forgotten kill switch looks exactly like a healthy fleet.
+
+    While it is present nothing may be claimed or acted on, so the disabled state
+    cannot become an incident that heals itself. What it can do is stop being
+    silent: every detect/report carries the switch's age and whether conditions
+    are piling up behind it. Observed live on 2026-08-14 — two upgrades left
+    self-healing off for three hours while eleven conditions accumulated."""
+    if not DISABLED.exists():
+        return {"present": False, "ageMs": None, "staleWithOpenConditions": False}
+    try:
+        age = max(0, now_ms() - int(DISABLED.stat().st_mtime * 1000))
+    except OSError:
+        age = None
+    stale = bool(age is not None and age > KILL_SWITCH_STALE_SECONDS * 1000 and observed)
+    return {"present": True, "ageMs": age, "observedConditions": len(observed),
+            "staleWithOpenConditions": stale}
+
+
 def detect(apply=False):
     observed = collect_observations(); existing = read_incidents(); now = now_ms(); seen = set(); changed = []
     if not apply:
-        return {"schemaVersion": SCHEMA, "apply": False, "disabled": DISABLED.exists(), "observations": observed}
+        return {"schemaVersion": SCHEMA, "apply": False, "disabled": DISABLED.exists(),
+                "killSwitch": kill_switch_state(observed), "observations": observed}
     with common.file_lock(LOCK):
         existing = read_incidents()
         for obs in observed:
@@ -396,6 +437,7 @@ def detect(apply=False):
             common.atomic_json(incident_path(iid), row); changed.append(iid)
     rows = read_incidents()
     return {"schemaVersion": SCHEMA, "apply": True, "disabled": DISABLED.exists(),
+            "killSwitch": kill_switch_state(observed),
             "observed": len(observed), "changed": sorted(set(changed)), "summary": summarize(rows.values())}
 
 def summarize(rows):
@@ -576,7 +618,11 @@ def main():
     args=parser().parse_args()
     if args.cmd == "detect": result=detect(args.apply)
     elif args.cmd == "list": result=list_rows(args)
-    elif args.cmd == "report": result={"disabled": DISABLED.exists(), "controller": common.read_json(CONTROLLER), "summary": summarize(read_incidents().values())}
+    elif args.cmd == "report":
+        rows = read_incidents()
+        open_rows = [r for r in rows.values() if r.get("state") == "open"]
+        result={"disabled": DISABLED.exists(), "killSwitch": kill_switch_state(open_rows),
+                "controller": common.read_json(CONTROLLER), "summary": summarize(rows.values())}
     elif args.cmd == "claim": result=claim(args)
     elif args.cmd == "heartbeat": result=heartbeat(args)
     elif args.cmd == "resolve": result=resolve(args)

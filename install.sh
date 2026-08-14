@@ -1,6 +1,6 @@
 #!/bin/zsh
 # SPDX-License-Identifier: Apache-2.0
-# Safe installer for Craft Agents orchestration protocol v3.4.20.
+# Safe installer for Craft Agents orchestration protocol v3.4.21.
 # Dry-run by default. Use --apply only after reviewing README.md.
 set -eu
 
@@ -23,7 +23,7 @@ SKILLS="$WORKSPACE/skills"
 RUNTIME="$CRAFT/runtime"
 LOGS="$CRAFT/logs"
 STAMP=$(date '+%Y%m%d-%H%M%S')
-BACKUP="$CRAFT/backups/orchestration-v3.4.20-$STAMP"
+BACKUP="$CRAFT/backups/orchestration-v3.4.21-$STAMP"
 PYTHON="${CRAFT_PYTHON:-/opt/homebrew/bin/python3}"
 [[ -x "$PYTHON" ]] || PYTHON=$(command -v python3)
 PLIST_NAME="com.craft-protocol.worker-watchdog.plist"
@@ -65,9 +65,15 @@ install_file() {
   fi
 }
 
-# FIRST safety mutation: restore the absolute kill switch before any v3.4.0
-# script, skill, config, or launchd payload can be copied. Any later failure
-# therefore leaves admission disabled.
+# FIRST safety mutation: restore the absolute kill switch before any script,
+# skill, config, or launchd payload can be copied. Any later failure therefore
+# leaves admission disabled. The pre-install state is remembered so a fleet that
+# was healing itself before the upgrade is re-armed after it, instead of being
+# left silently disabled — an upgrade is not a decision to stop self-healing.
+SELF_HEALING_WAS_ARMED=0
+if [[ ! -e "$RUNTIME/self-healing.disabled" ]]; then
+  SELF_HEALING_WAS_ARMED=1
+fi
 if (( APPLY )); then
   mkdir -p "$RUNTIME"
   : > "$RUNTIME/self-healing.disabled"
@@ -128,6 +134,16 @@ if (( APPLY )); then
     test_recovery_admission_v322.py test_external_wait_v321.py test_coordinator_v330.py)
   echo "Running watchdog dry-run..."
   "$PYTHON" "$SCRIPTS/worker-watchdog.py"
+  # Re-arm only what was already armed, and only after the payload installed and
+  # its own tests passed. A forgotten kill switch looks exactly like a healthy
+  # fleet: observed live on 2026-08-14, two upgrades left self-healing off for
+  # three hours while incidents accumulated unacted.
+  if (( SELF_HEALING_WAS_ARMED )); then
+    rm -f "$RUNTIME/self-healing.disabled"
+    echo "RE-ARMED SELF-HEALING: kill switch removed because it was absent before this install"
+  else
+    echo "KILL SWITCH KEPT: self-healing was already disabled before this install"
+  fi
   echo "Install complete. Review output before enabling launchd."
 else
   echo "No files changed. Re-run with --apply after review."

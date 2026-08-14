@@ -23,6 +23,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 from typing import Any
 
 HERE = Path(__file__).resolve().parent
@@ -62,6 +63,19 @@ INCREMENT_STAGES = {"discovery", "building", "integrating", "accepting", "deploy
 RISK_TIERS = {"low", "medium", "high"}
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
 STORY_STATES = {"planned", "ready", "executing", "integrated", "accepted", "blocked", "failed", "deferred"}
+COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+# Delivery is verified against the clone's own remote-tracking branch, so a claim
+# is machine truth rather than a declaration the protocol has to take on faith.
+DELIVERY_GRACE_MS = int(os.environ.get("CRAFT_STATUS_DELIVERY_GRACE_SECONDS", "3600")) * 1000
+GIT_TIMEOUT_SECONDS = int(os.environ.get("CRAFT_STATUS_GIT_TIMEOUT_SECONDS", "20"))
+# Past these stages an accepted story is claimed to be on its way to customers,
+# so its merge commit must exist and verify.
+DELIVERED_STAGES = {"deploying", "demonstrating", "complete"}
+PR_STATES = {"draft", "conflicting", "checks-failing", "review-required", "green-clean"}
+# A pull request the coordinator itself opened is a delivery obligation: green and
+# clean means merge it, conflicting means rebase it, failing means fix or close it.
+PR_ACTION_GRACE_MS = int(os.environ.get("CRAFT_STATUS_PR_ACTION_GRACE_SECONDS", "3600")) * 1000
+PR_CHECK_STALE_MS = int(os.environ.get("CRAFT_STATUS_PR_CHECK_STALE_SECONDS", "21600")) * 1000
 STALE_REVIEW_GRACE_SECONDS = int(os.environ.get("CRAFT_STATUS_REVIEW_GRACE_SECONDS", "900"))
 
 
@@ -192,6 +206,20 @@ def verification_evidence_keys(project: str, generation: int | None) -> list[str
     return keys
 
 
+def certificate_ids(project: str) -> list[str]:
+    """Completion certificates are the other admissible proof of acceptance.
+
+    They are keyed by work unit rather than by story, so a story binds to one by
+    naming either the certificate file's stem or the work unit it certifies."""
+    out: list[str] = []
+    for path in sorted((RUNTIME / "completion-certificates" / project).glob("*.json")):
+        out.append(path.stem)
+        row = object_or_none(common.read_json(path))
+        if row and row.get("workUnit"):
+            out.append(str(row["workUnit"]))
+    return out
+
+
 def latest_evidence(coordinator: str, project: str, generation: int | None) -> dict[str, Any] | None:
     best: dict[str, Any] | None = None
     for path in sorted((INBOX / project).glob("*.json")):
@@ -268,6 +296,7 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
         "inbox": inbox_pressure(project, generation, now),
         "latestEvidence": latest_evidence(coordinator, project, generation) if coordinator else None,
         "_verificationEvidenceKeys": verification_evidence_keys(project, generation),
+        "_certificateIds": certificate_ids(project),
         "_activeWorkerIds": [str(l.get("sessionId")) for l in active_workers],
         "_terminalWorkerIds": [str(l.get("sessionId")) for l in terminal_workers],
         "_observedWaitIds": [str(w.get("waitId")) for w in observed_waits],
@@ -275,7 +304,7 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
 
 
 def contradictions(declared: dict[str, Any], synth: dict[str, Any],
-                   *, complete_age_ms: int = 0) -> list[str]:
+                   *, complete_age_ms: int = 0, now: int = 0) -> list[str]:
     issues: list[str] = []
     phase = declared.get("phase")
     if phase == "waiting" and synth["observedWaitCount"] == 0 and synth["activeCommitmentCount"] == 0:
@@ -346,6 +375,43 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
     # Finishing an increment is not finishing the project. A complete phase with no
     # planned next action and no open gate asking what to take next is silent idle:
     # the board shows a healthy project that has quietly stopped delivering.
+    stories = increment.get("stories") or []
+    # `accepted` must name the evidence that accepted it. Live measurement before
+    # this rule: fifteen accepted stories across six projects, not one of them
+    # bound to a certificate or an acceptance event.
+    admissible = set(synth.get("_verificationEvidenceKeys") or []) | set(synth.get("_certificateIds") or [])
+    unproven: list[str] = []
+    unobserved: list[str] = []
+    for story in stories:
+        if not isinstance(story, dict) or story.get("state") != "accepted":
+            continue
+        ref = story.get("acceptanceRef")
+        if not ref:
+            unproven.append(str(story.get("id")))
+        elif ref not in admissible and str(story.get("workUnit") or "") not in admissible:
+            # A named-but-unobserved ref is worse than none: it reads as proof.
+            unobserved.append(f"{story.get('id')}")
+    if unproven:
+        issues.append("story-accepted-without-evidence:" + ",".join(sorted(unproven)[:4]))
+    if unobserved:
+        issues.append("story-acceptance-ref-not-observed:" + ",".join(sorted(unobserved)[:4]))
+    issues.extend(verify_delivery(declared.get("delivery"),
+                                  [s for s in stories if isinstance(s, dict)], stage))
+    # A pull request the coordinator opened is where work reaches customers, so
+    # leaving it open is not neutral. Observed live: a green, conflict-free PR sat
+    # unmerged for three days while the project reported itself deploying.
+    actionable: list[str] = []
+    stale_checks: list[str] = []
+    for pull in ((declared.get("delivery") or {}).get("openPullRequests") or []):
+        age = max(0, now - int(pull.get("checkedAt") or 0)) if now else 0
+        if pull.get("state") in {"green-clean", "conflicting", "checks-failing"} and age > PR_ACTION_GRACE_MS:
+            actionable.append(f"{pull.get('ref')}:{pull.get('state')}")
+        elif age > PR_CHECK_STALE_MS:
+            stale_checks.append(str(pull.get("ref")))
+    if actionable:
+        issues.append("pull-request-unfinished:" + ",".join(sorted(actionable)[:4]))
+    if stale_checks:
+        issues.append("pull-request-check-stale:" + ",".join(sorted(stale_checks)[:4]))
     if (phase == "complete" and complete_age_ms >= COMPLETE_IDLE_GRACE_MS
             and not declared.get("nextActions")
             and not synth["openGateCount"] and not synth["activeWorkers"]):
@@ -385,7 +451,7 @@ def executable_actions(declared: dict[str, Any], synth: dict[str, Any]) -> bool:
 def classify(declared: dict[str, Any] | None, synth: dict[str, Any], now: int, *,
              status_generation: int | None, complete_age_ms: int = 0) -> dict[str, Any]:
     reg_generation = synth.get("generation")
-    contra = contradictions(declared, synth, complete_age_ms=complete_age_ms) if declared else []
+    contra = contradictions(declared, synth, complete_age_ms=complete_age_ms, now=now) if declared else []
     issues: list[str] = []
     missing = declared is None
     generation_mismatch = (not missing and (status_generation is None
@@ -625,8 +691,19 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
             fail("productIncrement story dependsOn must be a bounded text list")
         if len(set(dependencies)) != len(dependencies):
             fail(f"duplicate dependency in productIncrement story: {story_id}")
+        # `accepted` is the one word the owner trusts on the board — the counter and
+        # the Done column are built from it — and until v3.4.21 it was the only claim
+        # with no evidence requirement. The binding is optional in shape and required
+        # by consistency: an accepted story without it is a contradiction.
+        acceptance_ref = optional_text(story, "acceptanceRef")
+        work_unit = optional_text(story, "workUnit")
+        merge_sha = optional_text(story, "mergeSha")
+        if merge_sha is not None and not COMMIT_SHA.fullmatch(merge_sha):
+            fail("productIncrement story mergeSha must be a full 40-character commit sha")
         normalized.append({"id": story_id, "title": title, "state": state,
-                           "dependsOn": dependencies, "riskContribution": risk})
+                           "dependsOn": dependencies, "riskContribution": risk,
+                           "acceptanceRef": acceptance_ref, "workUnit": work_unit,
+                           "mergeSha": merge_sha})
     graph = {story["id"]: story["dependsOn"] for story in normalized}
     for story_id, dependencies in graph.items():
         for dep in dependencies:
@@ -744,6 +821,85 @@ def normalize_budget_extensions(value: Any, now: int) -> list[dict[str, Any]]:
     return out
 
 
+def normalize_delivery(value: Any) -> dict[str, Any] | None:
+    """Where this project's work must land for it to count as delivered.
+
+    Unlike GitHub, the local clone is reachable, so `delivery` is the one evidence
+    field the protocol verifies directly instead of trusting: a declared merge
+    commit either is an ancestor of the clone's remote-tracking default branch or
+    it is not."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        fail("delivery must be an object or null")
+    repo_path = req_text(value, "repoPath")
+    target_branch = optional_text(value, "targetBranch")
+    open_prs = value.get("openPullRequests") or []
+    if not isinstance(open_prs, list) or len(open_prs) > LIST_LIMIT:
+        fail("delivery.openPullRequests must be a bounded list")
+    normalized_prs = []
+    for entry in open_prs:
+        if not isinstance(entry, dict):
+            fail("each delivery.openPullRequests entry must be an object")
+        ref = req_text(entry, "ref")
+        state = entry.get("state")
+        if state not in PR_STATES:
+            fail(f"delivery.openPullRequests[].state must be one of {sorted(PR_STATES)}")
+        checked_at = entry.get("checkedAt")
+        if not isinstance(checked_at, int) or isinstance(checked_at, bool) or checked_at <= 0:
+            fail("delivery.openPullRequests[].checkedAt must be a millisecond timestamp")
+        normalized_prs.append({"ref": ref, "state": state, "checkedAt": checked_at})
+    return {"repoPath": repo_path, "targetBranch": target_branch, "openPullRequests": normalized_prs}
+
+
+def git(repo: Path, *args: str) -> tuple[int, str]:
+    try:
+        proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
+                              text=True, timeout=GIT_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError):
+        return 127, ""
+    return proc.returncode, proc.stdout.strip()
+
+
+def verify_delivery(delivery: dict[str, Any] | None, stories: list[dict[str, Any]],
+                    stage: str) -> list[str]:
+    """Machine truth about delivery, from the clone rather than the declaration."""
+    if not delivery:
+        return []
+    issues: list[str] = []
+    repo = Path(delivery["repoPath"]).expanduser()
+    if not (repo / ".git").exists():
+        return [f"delivery-repo-unreadable:{delivery['repoPath']}"]
+    branch = delivery.get("targetBranch")
+    if not branch:
+        # Never assume `main`: the fleet's own repositories disagree, and guessing
+        # would flag a healthy project whose default branch is `master`.
+        code, ref = git(repo, "symbolic-ref", "refs/remotes/origin/HEAD")
+        branch = ref.rsplit("/", 1)[-1] if code == 0 and ref else "main"
+    target = f"origin/{branch}"
+    if git(repo, "rev-parse", "--verify", target)[0] != 0:
+        return [f"delivery-branch-unreadable:{target}"]
+    unverified: list[str] = []
+    for story in stories:
+        sha = story.get("mergeSha")
+        if not sha:
+            continue
+        # Only the merge commit is checked. Under a squash merge the candidate
+        # commit legitimately never becomes an ancestor, so requiring it would
+        # flag healthy projects — measured against live certificates before this
+        # rule was written.
+        if git(repo, "merge-base", "--is-ancestor", sha, target)[0] != 0:
+            unverified.append(f"{story['id']}@{sha[:12]}")
+    if unverified:
+        issues.append("merge-claim-unverified:" + ",".join(sorted(unverified)[:4]))
+    if stage in DELIVERED_STAGES:
+        missing = sorted(story["id"] for story in stories
+                         if story.get("state") == "accepted" and not story.get("mergeSha"))
+        if missing:
+            issues.append("unmerged-delivery:" + ",".join(missing[:4]))
+    return issues
+
+
 def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
     if not isinstance(payload, dict):
         fail("declared status payload must be a JSON object")
@@ -759,6 +915,7 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
     product_increment = normalize_increment(payload.get("productIncrement"))
     github_sync = normalize_github_sync(payload.get("githubSync"), now)
     budget_extensions = normalize_budget_extensions(payload.get("correctionBudgetExtensions"), now)
+    delivery = normalize_delivery(payload.get("delivery"))
     current_focus = payload.get("currentFocus")
     if current_focus is not None and not isinstance(current_focus, str):
         fail("currentFocus must be text or null")
@@ -821,7 +978,7 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
         "remainingOutcome": remaining_outcome, "etaRange": eta_range,
         "confidence": confidence, "realBlocker": real_blocker,
         "productIncrement": product_increment, "githubSync": github_sync,
-        "correctionBudgetExtensions": budget_extensions,
+        "correctionBudgetExtensions": budget_extensions, "delivery": delivery,
         "phase": phase, "currentFocus": current_focus,
         "completedOutcomes": normalized_completed, "nextActions": norm_actions,
         "childRefs": normalized_refs["childRefs"], "waitRefs": normalized_refs["waitRefs"],

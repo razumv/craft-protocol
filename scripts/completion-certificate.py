@@ -60,6 +60,7 @@ def cmd_scan(_: argparse.Namespace) -> int:
 
 def cmd_create(args: argparse.Namespace) -> int:
     value = {"schemaVersion": SCHEMA, "project": args.project, "workUnit": args.work_unit,
+             "storyId": args.story_id,
         "attempt": args.attempt, "candidateSha": args.candidate_sha, "auditedSha": args.audited_sha,
         "auditorSessionId": args.auditor, "auditVerdict": args.verdict,
         "requiredCiRunIds": args.ci_run, "requiredCiAllSuccess": args.ci_success,
@@ -78,7 +79,7 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__); sub = p.add_subparsers(dest="command", required=True)
     v = sub.add_parser("validate"); v.add_argument("--file", required=True); v.set_defaults(func=cmd_validate)
     s = sub.add_parser("scan"); s.set_defaults(func=cmd_scan)
-    c = sub.add_parser("create"); c.add_argument("--project", required=True); c.add_argument("--work-unit", required=True); c.add_argument("--attempt"); c.add_argument("--candidate-sha", required=True); c.add_argument("--audited-sha", required=True); c.add_argument("--auditor", required=True); c.add_argument("--verdict", default="PASS"); c.add_argument("--ci-run", action="append", default=[]); c.add_argument("--ci-success", action="store_true"); c.add_argument("--merge-sha", required=True); c.add_argument("--head-unchanged", action="store_true"); c.add_argument("--readback-run", action="append", default=[]); c.add_argument("--readback-success", action="store_true"); c.add_argument("--unresolved-gate", action="append", default=[]); c.add_argument("--standing-authority"); c.add_argument("--require-closure-evidence", action="store_true"); c.add_argument("--closure-evidence"); c.set_defaults(func=cmd_create)
+    c = sub.add_parser("create"); c.add_argument("--project", required=True); c.add_argument("--work-unit", required=True); c.add_argument("--story-id"); c.add_argument("--attempt"); c.add_argument("--candidate-sha", required=True); c.add_argument("--audited-sha", required=True); c.add_argument("--auditor", required=True); c.add_argument("--verdict", default="PASS"); c.add_argument("--ci-run", action="append", default=[]); c.add_argument("--ci-success", action="store_true"); c.add_argument("--merge-sha", required=True); c.add_argument("--head-unchanged", action="store_true"); c.add_argument("--readback-run", action="append", default=[]); c.add_argument("--readback-success", action="store_true"); c.add_argument("--unresolved-gate", action="append", default=[]); c.add_argument("--standing-authority"); c.add_argument("--require-closure-evidence", action="store_true"); c.add_argument("--closure-evidence"); c.set_defaults(func=cmd_create)
     return p
 
 if __name__ == "__main__":

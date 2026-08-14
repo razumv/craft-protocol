@@ -1,4 +1,4 @@
-# Protocol v3.4.20 defaults
+# Protocol v3.4.21 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -117,12 +117,19 @@ GitHub sync (3.4.18):          material stage without githubSync, or naming an o
 Own dead lane (3.4.19):        lane dispatched this generation in stalled/error with no active worker → dead-lane-unreplaced
 Exhausted correction (3.4.19): failed story with no plan, lane or open gate → exhausted-correction-without-escalation
 Predecessor archive (3.4.19):  live predecessor 900s after an accepted handoff → predecessor-unarchived incident + wake
-Correction extension (3.4.20): one self-granted bounded extension per story; the second → correction-budget-extension-reused
-Gate scope (3.4.20):           gates only for external effects; investigation/root-cause/audit is self-authorized
-Complete idle (3.4.20):        complete standing 1800s with no next action or gate → complete-without-next-increment (CRAFT_STATUS_COMPLETE_IDLE_SECONDS)
-Vanished coordinator (3.4.20): verify-session-absent then respawn-from-handoff-snapshot before owner escalation
-Orphaned lane (3.4.20):        dead lane >86400s whose dispatcher owns no project → orphaned-dead-lane (CRAFT_ORPHANED_LANE_SECONDS)
-Increment cards (3.4.20):      one subtask per story; status follows story state; --reset-cards rebuilds cards + subtasks
+Correction extension (3.4.21): one self-granted bounded extension per story; the second → correction-budget-extension-reused
+Gate scope (3.4.21):           gates only for external effects; investigation/root-cause/audit is self-authorized
+Complete idle (3.4.21):        complete standing 1800s with no next action or gate → complete-without-next-increment (CRAFT_STATUS_COMPLETE_IDLE_SECONDS)
+Vanished coordinator (3.4.21): verify-session-absent then respawn-from-handoff-snapshot before owner escalation
+Orphaned lane (3.4.21):        dead lane >86400s whose dispatcher owns no project → orphaned-dead-lane (CRAFT_ORPHANED_LANE_SECONDS)
+Increment cards (3.4.21):      one subtask per story; status follows story state; --reset-cards rebuilds cards + subtasks
+Kill switch re-arm (3.4.21):   install.sh restores the pre-install self-healing state after tests pass
+Kill switch visibility (3.4.21): detect/report expose killSwitch.staleWithOpenConditions past 1800s (CRAFT_KILL_SWITCH_STALE_SECONDS)
+Story acceptance (3.4.21):     accepted story needs observed acceptanceRef + workUnit → story-accepted-without-evidence / -ref-not-observed
+Delivery verification (3.4.21): story mergeSha must be ancestor of origin/<origin/HEAD branch>; merge commit only, never candidate
+Delivered stages (3.4.21):     deploying/demonstrating/complete require a merge commit per accepted story → unmerged-delivery
+Pull request duty (3.4.21):    actionable PR parked >3600s → pull-request-unfinished; check older than 21600s → pull-request-check-stale
+Lease registration (3.4.21):   lease-less child of a live coordinator >600s → unregistered-child-lane (CRAFT_UNREGISTERED_CHILD_SECONDS)
 Rotation adoption (3.4.3):     lease parent rebinds to registry successor via activeChildren; labels stay historical
 Evidence adoption (3.4.7):     inbox adopt re-addresses predecessor events, immutable bindings survive; waits rebind on reconcile
 Block supersede (3.4.3):       durable block of a superseded target identity yields to the new generation's cycle
@@ -169,7 +176,7 @@ Ack evidence:                  same token/generation + published status revision
 Status storage:                ~/.craft-agent/runtime/coordinator-status/<project>.json
 Status customer fields:        demonstrableNow, remainingOutcome, etaRange, confidence, realBlocker
 Status Product Increment:      ID, stage, risk tier, real-workflow criterion, non-goals, 1..8 acyclic stories
-GitHub sync (3.4.20):          githubSync {issue, commentRef, projectField, syncedStage, syncedAt}; material stage without it → github-sync-missing/stale
+GitHub sync (3.4.21):          githubSync {issue, commentRef, projectField, syncedStage, syncedAt}; material stage without it → github-sync-missing/stale
 Status next actions:           up to 3 ordered; each needs trigger + required evidence + success/failure branch
 Status classifications:        verified, executing, waiting-observed, blocked, stale, contradictory
 Commitment storage:            ~/.craft-agent/runtime/coordinator-commitments/<project>/<id>.json
