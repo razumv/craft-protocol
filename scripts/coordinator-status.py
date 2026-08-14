@@ -44,6 +44,10 @@ PHASES = {"initializing", "executing", "waiting", "blocked", "review", "complete
 TERMINAL_PHASES = {"complete", "hold", "blocked"}
 ACTIVE_LEASE_STATES = {"starting", "running", "suspect", "active"}
 ACTIVE_COMMITMENT_STATES = {"registered", "observing", "overdue", "ready"}
+# Only these bindings observe work actually executing; scheduled-review and
+# owner-gate commitments are promises to look later.
+WORK_OBSERVER_BINDINGS = {"worker-lease", "external-wait"}
+SELF_REVIEW_CHURN_LIMIT = int(os.environ.get("CRAFT_STATUS_SELF_REVIEW_CHURN_LIMIT", "2"))
 CLASSIFICATIONS = {"verified", "executing", "waiting-observed", "blocked", "stale", "contradictory"}
 CRED_MARKERS = ("authorization:", "bearer ", "token=", "api_key=", "apikey=", "secret=", "password=", "-----begin")
 MAX_ACTIONS = 3
@@ -219,6 +223,9 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
     observed_waits = [w for w in waits if w.get("state") in {"observing", "terminal"}]
     open_gates = [g for g in gates if g.get("state") == "open"]
     active_commitments = [c for c in commitments if c.get("state") in ACTIVE_COMMITMENT_STATES]
+    work_observers = [c for c in active_commitments if c.get("bindingKind") in WORK_OBSERVER_BINDINGS]
+    timed_out_self_reviews = [c for c in commitments if c.get("bindingKind") == "scheduled-review"
+                              and c.get("state") == "resolved-timeout"]
     return {
         "coordinatorSessionId": coordinator or None,
         "generation": generation,
@@ -245,6 +252,8 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
                          "bindingKind": c.get("bindingKind"), "deadlineAt": c.get("deadlineAt")} for c in commitments[:LIST_LIMIT]],
         "commitmentCount": len(commitments), "commitmentsTruncated": len(commitments) > LIST_LIMIT,
         "activeCommitmentCount": len(active_commitments),
+        "workObserverCommitmentCount": len(work_observers),
+        "timedOutSelfReviewCount": len(timed_out_self_reviews),
         "inbox": inbox_pressure(project, generation, now),
         "latestEvidence": latest_evidence(coordinator, project, generation) if coordinator else None,
         "_verificationEvidenceKeys": verification_evidence_keys(project, generation),
@@ -281,9 +290,20 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any]) -> list[str]
     increment = declared.get("productIncrement") or {}
     idle_ready = sorted({str(story.get("id")) for story in increment.get("stories") or []
                          if isinstance(story, dict) and story.get("state") in {"ready", "executing"}})
+    # Only a lane or an external observer proves work is in flight. A
+    # `scheduled-review` or `owner-gate` commitment is a promise to look later,
+    # not execution, and counting it here let a project mask unassigned ready
+    # stories indefinitely.
     if (idle_ready and not synth["activeWorkers"] and not synth["observedWaitCount"]
-            and not synth["activeCommitmentCount"]):
+            and not synth["workObserverCommitmentCount"]):
         issues.append("idle-ready-work:" + ",".join(idle_ready[:8]))
+    # Repeatedly re-scheduling a self-review while nothing executes is the
+    # bookkeeping-instead-of-delivery signature (observed: rotation-handoff
+    # review r2 → r3 → r4, each timing out, with a ready story unassigned).
+    if (synth["timedOutSelfReviewCount"] >= SELF_REVIEW_CHURN_LIMIT
+            and not synth["activeWorkers"] and not synth["observedWaitCount"]
+            and not synth["workObserverCommitmentCount"]):
+        issues.append(f"scheduled-review-churn:{synth['timedOutSelfReviewCount']}")
     return issues
 
 

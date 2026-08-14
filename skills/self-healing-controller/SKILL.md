@@ -1,6 +1,6 @@
 ---
 name: self-healing-controller
-description: Bounded evidence-first recovery controller for Craft Protocol v3.4.14 incidents with exact self-registered harness cleanup. Wakes coordinators, reconciles terminal children and coordinator inbox/status/commitment trust, and rotates only through preservation-proven project-bound bridges.
+description: Bounded evidence-first recovery controller for Craft Protocol v3.4.15 incidents with exact self-registered harness cleanup. Wakes coordinators, reconciles terminal children and coordinator inbox/status/commitment trust, and rotates only through preservation-proven project-bound bridges.
 ---
 
 # Self-Healing Controller — Protocol v3.4.10
