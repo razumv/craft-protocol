@@ -255,9 +255,13 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
 
     def test_installer_restores_kill_switch_before_payload_and_requires_verification(self):
         text=(ROOT/"install.sh").read_text()
-        sentinel=': > "$RUNTIME/self-healing.disabled"'
+        # v3.4.28: the switch is written with its provenance marker, not truncated,
+        # so an install that stops early is distinguishable from an owner's pause.
+        sentinel='> "$RUNTIME/self-healing.disabled"'
         self.assertEqual(text.count(sentinel),1)
         self.assertLess(text.index(sentinel),text.index("for name in $files; do"))
+        self.assertIn("rearm-expected=1",text)
+        self.assertIn("armed-by=install.sh",text)
         self.assertLess(text.index("verify-runtime"),text.index("Optional launchd activation"))
         self.assertIn(RUNTIME_COMMIT,text)
 

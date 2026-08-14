@@ -4,6 +4,16 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.28] — 2026-08-14
+
+### An install that stops early no longer looks like a deliberate pause
+
+- `install.sh` stamps the kill switch it arms with `armed-by=install.sh`, the timestamp, and `rearm-expected=1`. The switch is still armed *before* any payload mutation and removed only after the payload lands and its tests pass — but now the file says which of those two situations you are looking at;
+- `drain`/`report` expose `killSwitch.armedBy` and `killSwitch.stranded` (an installer-armed switch still present after `CRAFT_KILL_SWITCH_STRANDED_SECONDS` (600 s)). Controller silence is excused by a *deliberate* pause only: behind a stranded switch, silence is reported as silence;
+- the controller skill states it: a stranded switch is the cause of an outage to report, not a decision to respect.
+
+Observed live: the v3.4.27 install stopped before its re-arm step, left the switch behind, and the recovery lane stayed dead for 75 minutes with six finished workers uncollected — while every check faithfully reported an intentional pause, because rest and outage were the same observation.
+
 ## [3.4.27] — 2026-08-14
 
 ### An idle executor goes before the bookkeeping
@@ -398,7 +408,8 @@ Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's 
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.27...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.28...HEAD
+[3.4.28]: https://github.com/razumv/craft-protocol/compare/v3.4.27...v3.4.28
 [3.4.27]: https://github.com/razumv/craft-protocol/compare/v3.4.26...v3.4.27
 [3.4.26]: https://github.com/razumv/craft-protocol/compare/v3.4.25...v3.4.26
 [3.4.25]: https://github.com/razumv/craft-protocol/compare/v3.4.24...v3.4.25
