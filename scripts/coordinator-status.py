@@ -220,6 +220,30 @@ def certificate_ids(project: str) -> list[str]:
     return out
 
 
+def resolved_gate_ids(project: str) -> list[str]:
+    """Gate ids the owner has actually answered, admissible as named merge authority."""
+    out: list[str] = []
+    for path in sorted((RUNTIME / "owner-gates" / project).glob("*.json")):
+        row = object_or_none(common.read_json(path))
+        if row and row.get("state") == "resolved" and row.get("gateId"):
+            out.append(str(row["gateId"]))
+    return out
+
+
+def standing_merge_units(project: str) -> list[str]:
+    """Work units whose merge was performed under a recorded standing authority.
+
+    The receipt is written before the merge, so its absence next to a delivered
+    story means the merge happened without either an owner gate or the standing
+    authority the owner granted."""
+    out: list[str] = []
+    for path in sorted((RUNTIME / "standing-merges" / project).glob("*.json")):
+        row = object_or_none(common.read_json(path))
+        if row and row.get("workUnit"):
+            out.append(str(row["workUnit"]))
+    return out
+
+
 def latest_evidence(coordinator: str, project: str, generation: int | None) -> dict[str, Any] | None:
     best: dict[str, Any] | None = None
     for path in sorted((INBOX / project).glob("*.json")):
@@ -297,6 +321,8 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
         "latestEvidence": latest_evidence(coordinator, project, generation) if coordinator else None,
         "_verificationEvidenceKeys": verification_evidence_keys(project, generation),
         "_certificateIds": certificate_ids(project),
+        "_standingMergeUnits": standing_merge_units(project),
+        "_resolvedGateIds": resolved_gate_ids(project),
         "_activeWorkerIds": [str(l.get("sessionId")) for l in active_workers],
         "_terminalWorkerIds": [str(l.get("sessionId")) for l in terminal_workers],
         "_observedWaitIds": [str(w.get("waitId")) for w in observed_waits],
@@ -395,8 +421,24 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
         issues.append("story-accepted-without-evidence:" + ",".join(sorted(unproven)[:4]))
     if unobserved:
         issues.append("story-acceptance-ref-not-observed:" + ",".join(sorted(unobserved)[:4]))
-    issues.extend(verify_delivery(declared.get("delivery"),
-                                  [s for s in stories if isinstance(s, dict)], stage))
+    delivery = declared.get("delivery") or {}
+    issues.extend(verify_delivery(delivery, [s for s in stories if isinstance(s, dict)], stage))
+    # A merge into a branch the coordinator itself declares protected must name the
+    # owner authority that permitted it — a resolved gate id, or the standing-merge
+    # receipt written before the merge. Authority is never *inferred* from nearby
+    # gates: measured on live state, gates bind to coarser work units than stories,
+    # so inference would have flagged three healthy merges as unauthorized.
+    protected = delivery.get("protectedBranches") or []
+    target = delivery.get("targetBranch")
+    if protected and (target is None or target in protected):
+        admissible_authority = (set(synth.get("_standingMergeUnits") or [])
+                                | set(synth.get("_resolvedGateIds") or []))
+        unauthorized = sorted(str(story.get("id")) for story in stories
+                              if isinstance(story, dict) and story.get("mergeSha")
+                              and str(story.get("mergeAuthorityRef") or "") not in admissible_authority
+                              and str(story.get("workUnit") or "") not in admissible_authority)
+        if unauthorized:
+            issues.append("merge-without-named-authority:" + ",".join(unauthorized[:4]))
     # A pull request the coordinator opened is where work reaches customers, so
     # leaving it open is not neutral. Observed live: a green, conflict-free PR sat
     # unmerged for three days while the project reported itself deploying.
@@ -698,12 +740,13 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
         acceptance_ref = optional_text(story, "acceptanceRef")
         work_unit = optional_text(story, "workUnit")
         merge_sha = optional_text(story, "mergeSha")
+        merge_authority_ref = optional_text(story, "mergeAuthorityRef")
         if merge_sha is not None and not COMMIT_SHA.fullmatch(merge_sha):
             fail("productIncrement story mergeSha must be a full 40-character commit sha")
         normalized.append({"id": story_id, "title": title, "state": state,
                            "dependsOn": dependencies, "riskContribution": risk,
                            "acceptanceRef": acceptance_ref, "workUnit": work_unit,
-                           "mergeSha": merge_sha})
+                           "mergeSha": merge_sha, "mergeAuthorityRef": merge_authority_ref})
     graph = {story["id"]: story["dependsOn"] for story in normalized}
     for story_id, dependencies in graph.items():
         for dep in dependencies:
@@ -834,6 +877,12 @@ def normalize_delivery(value: Any) -> dict[str, Any] | None:
         fail("delivery must be an object or null")
     repo_path = req_text(value, "repoPath")
     target_branch = optional_text(value, "targetBranch")
+    raw_protected = value.get("protectedBranches") or []
+    if not isinstance(raw_protected, list) or len(raw_protected) > LIST_LIMIT:
+        fail("delivery.protectedBranches must be a bounded list")
+    protected = [b for b in raw_protected]
+    if any(not isinstance(b, str) or not b.strip() or len(b) > 200 for b in protected):
+        fail("delivery.protectedBranches entries must be bounded non-empty text")
     open_prs = value.get("openPullRequests") or []
     if not isinstance(open_prs, list) or len(open_prs) > LIST_LIMIT:
         fail("delivery.openPullRequests must be a bounded list")
@@ -849,7 +898,8 @@ def normalize_delivery(value: Any) -> dict[str, Any] | None:
         if not isinstance(checked_at, int) or isinstance(checked_at, bool) or checked_at <= 0:
             fail("delivery.openPullRequests[].checkedAt must be a millisecond timestamp")
         normalized_prs.append({"ref": ref, "state": state, "checkedAt": checked_at})
-    return {"repoPath": repo_path, "targetBranch": target_branch, "openPullRequests": normalized_prs}
+    return {"repoPath": repo_path, "targetBranch": target_branch,
+            "protectedBranches": protected, "openPullRequests": normalized_prs}
 
 
 def git(repo: Path, *args: str) -> tuple[int, str]:

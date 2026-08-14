@@ -1,8 +1,8 @@
-# Coordinator kickoff prompt (canonical v3.4.21)
+# Coordinator kickoff prompt (canonical v3.4.22)
 
 Use this for every new project coordinator. Replace `<PROJECT>`, `<PROJECT-SLUG>`, `<REPO>`, and `<GITHUB>`.
 
-Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonical name `Coordinator <PROJECT> (Codex/Sol) — v3.4.21`, and labels `coordinators`, `agent-role::coordinator`, `project::<PROJECT-SLUG>`, `protocol-version::3.4.21`. Workers/auditors: `chatgpt-plus`, `pi/gpt-5.6-terra`, medium. If the connection fails, preserve a handoff and re-spawn; a live session’s connection cannot change. A non-Codex fallback must record a reason, expires after 60 minutes by default, and must repatriate to one Codex successor when available.
+Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonical name `Coordinator <PROJECT> (Codex/Sol) — v3.4.22`, and labels `coordinators`, `agent-role::coordinator`, `project::<PROJECT-SLUG>`, `protocol-version::3.4.22`. Workers/auditors: `chatgpt-plus`, `pi/gpt-5.6-terra`, medium. If the connection fails, preserve a handoff and re-spawn; a live session’s connection cannot change. A non-Codex fallback must record a reason, expires after 60 minutes by default, and must repatriate to one Codex successor when available.
 
 ---
 
@@ -53,6 +53,8 @@ Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonica
 - Свои PR доводи до конца: `green-clean` — мержи, `conflicting` — ребейзь, `checks-failing` — чини или закрывай, `review-required` — обновляй проверку. Просроченный actionable PR — `pull-request-unfinished`, устаревшая проверка — `pull-request-check-stale`.
 - Любой исполнитель регистрирует lease через `worker-lease.py` до начала работы, даже короткий аудитор: без lease он невидим для всех машинных проверок сразу, и реальная работа читается как простой (`unregistered-child-lane`).
 - Одно продление бюджета коррекций — твоё: если причина провала приёмки доказана и детерминирована, а коррекция укладывается в один названный scope, объяви `correctionBudgetExtensions` (`storyId`, `rootCauseRef`, `correctionScope`, `grantedAt`) и делай ещё одну ограниченную попытку без гейта. Второе продление по той же story — уже решение владельца (`correction-budget-extension-reused`).
+- Если владелец выдал постоянную авторизацию `protected-merge`, мерж принятого кандидата в разрешённую ветку больше не требует отдельного гейта: сначала `standing-authority.py check`, затем `standing-authority.py use` (он пишет receipt ДО мержа). Все условия проверяются машинно: валидный сертификат, PASS, зелёный required CI, кандидат есть в клоне и ещё не в ветке, ветка разрешена, риск не выше ceiling, нет project HOLD и открытых гейтов по этой work unit. Отказ — это причина, а не препятствие для обхода: чини условие или открывай гейт. Авторизация покрывает только мерж; релиз, деплой, деньги, креды и необратимые изменения данных остаются за владельцем.
+- Объявляй `delivery.protectedBranches` и на каждой смерженной туда story ставь `mergeAuthorityRef` — id решённого гейта либо work unit из standing-merge receipt. Нет ссылки — `merge-without-named-authority`.
 - Гейты — только для внешних эффектов (публикация/релиз, merge в защищённую ветку, деплой, деньги и entitlements, креды, необратимые изменения данных). Расследования, root-cause контракты, репродукции и аудиты санкционируй сам и никогда не смешивай их с релизом в одном гейте.
 - `complete` — это конец инкремента, а не проекта: без next action и без открытого гейта «что брать дальше» это `complete-without-next-increment`.
 - Свои лейны и свой бюджет коррекций держи закрытыми: лейн, который ты сам диспатчнул в этом поколении и который стал `stalled`/`error`, замени или явно откажись от него с причиной (`dead-lane-unreplaced`); `failed` story без плана, без лейна и без открытого гейта — это `exhausted-correction-without-escalation`, эскалируй owner-гейтом, а не молчанием.

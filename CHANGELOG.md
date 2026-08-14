@@ -4,6 +4,18 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.22] — 2026-08-14
+
+### The gate that repeats becomes a standing authority
+
+- `standing-authority.py` lets the owner answer once: *while these conditions hold, merge it.* A grant is per project and per exact branch, by direct-owner authority only, with a reason, a risk ceiling and an expiry (default 7 days, max 30). `check` reports every refusal; `use` writes a durable receipt **before** the merge so the trail cannot be authored afterwards; `revoke` is immediate. Observed live: a project reached this exact gate on its third owner-authorized attempt with every condition already proven — acceptance PASS, required CI green, certificate valid;
+- every condition is verified from runtime truth and the local clone, never from a coordinator's claim: the certificate validates through the same `completion-certificate.py` rules, the candidate must exist in the clone and must **not** already be in the branch, the branch must be authorised and present as `origin/<branch>`, the work unit's risk must sit within the ceiling, and a project HOLD or any open gate on that work unit refuses. An earlier grant never outranks the owner pausing the project now;
+- the authority covers merging into a protected branch and nothing else. Publishing a release, deploying, spending money or entitlements, using credentials and irreversible data changes stay owner-only regardless of any grant.
+
+### Merges name the authority that permitted them
+
+- `delivery.protectedBranches` plus a story-level `mergeAuthorityRef` (a resolved gate id, or the work unit of a standing-merge receipt) makes `merge-without-named-authority` detectable. Authority is **named, never inferred**: measured on live state before writing the rule, owner gates bind to coarser work units than stories, so inferring authorisation from a nearby gate would have called three healthy merges unauthorised — and, worse, would have called an unauthorised merge authorised.
+
 ## [3.4.21] — 2026-08-14
 
 ### An upgrade no longer disables self-healing
@@ -326,7 +338,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.21...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.22...HEAD
+[3.4.22]: https://github.com/razumv/craft-protocol/compare/v3.4.21...v3.4.22
 [3.4.21]: https://github.com/razumv/craft-protocol/compare/v3.4.20...v3.4.21
 [3.4.20]: https://github.com/razumv/craft-protocol/compare/v3.4.19...v3.4.20
 [3.4.19]: https://github.com/razumv/craft-protocol/compare/v3.4.18...v3.4.19
