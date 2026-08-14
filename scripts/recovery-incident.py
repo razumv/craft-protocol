@@ -22,6 +22,7 @@ CONTROLLER = SELF_HEALING / "controller.json"
 DISABLED = RUNTIME / "self-healing.disabled"
 SCHEMA = 1
 TRANSFER_STUCK_SECONDS = int(os.environ.get("CRAFT_TRANSFER_STUCK_SECONDS", "1800"))
+PREDECESSOR_ARCHIVE_GRACE_SECONDS = int(os.environ.get("CRAFT_PREDECESSOR_ARCHIVE_GRACE_SECONDS", "900"))
 CLAIM_TTL_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CLAIM_TTL_SECONDS", "900"))
 MAX_ATTEMPTS = int(os.environ.get("CRAFT_RECOVERY_MAX_ATTEMPTS", "2"))
 COORDINATOR_MAX_ATTEMPTS = int(os.environ.get("CRAFT_COORDINATOR_RECOVERY_MAX_ATTEMPTS", "3"))
@@ -34,6 +35,7 @@ ACTION_MATRIX = {
     "coordinator-session-error": ["wake-coordinator", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
     "coordinator-pi-sigterm": ["wake-coordinator", "renew-request", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
     "coordinator-worker-terminal-status": ["wake-coordinator", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
+    "predecessor-unarchived": ["wake-coordinator", "verify-preservation", "archive-reap-if-proven"],
     "fallback-ttl-expired": ["codex-repatriation"],
     "transfer-stuck": ["inspect-transfer", "wake-coordinator", "owner-escalation"],
     "worker-suspect": ["inspect-progress", "wake-coordinator"],
@@ -203,6 +205,18 @@ def collect_observations():
             # direct wake is futile, so the controller owns the recovery stages.
             out.append(observation("coordinator-worker-terminal-status", "high", project, sid,
                 {"sessionStatus": session_status, "generation": record.get("generation")}))
+        predecessor = str(record.get("predecessorSessionId") or "")
+        accepted = int(record.get("transferAcceptedAt") or record.get("claimedAt") or 0)
+        if (predecessor and record.get("state") in {"authoritative", "rotating"}
+                and accepted and now-accepted > PREDECESSOR_ARCHIVE_GRACE_SECONDS*1000):
+            # The successor owes the predecessor an archive once the handoff settles.
+            # Registry validate has flagged this since v3.4.8, but nothing woke anyone:
+            # observed live three times as two coordinators on the same project.
+            pred_manifest = common.read_manifest(predecessor)
+            if pred_manifest and not pred_manifest.get("isArchived"):
+                out.append(observation("predecessor-unarchived", "medium", project, sid,
+                    {"predecessorSessionId": predecessor, "transferAcceptedAt": accepted,
+                     "generation": record.get("generation")}))
         terminal_error = terminal_session_error(manifest)
         if terminal_error:
             out.append(observation("coordinator-session-error", "high", project, sid,

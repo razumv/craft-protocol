@@ -224,6 +224,11 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
     open_gates = [g for g in gates if g.get("state") == "open"]
     active_commitments = [c for c in commitments if c.get("state") in ACTIVE_COMMITMENT_STATES]
     work_observers = [c for c in active_commitments if c.get("bindingKind") in WORK_OBSERVER_BINDINGS]
+    # A lane this generation dispatched and then abandoned. Lanes inherited from an
+    # earlier generation are housekeeping debt (archivableBacklog), not neglect.
+    generation_started = exact_int((reg or {}).get("transferAcceptedAt"), 0) or exact_int((reg or {}).get("claimedAt"), 0)
+    own_dead = [l for l in leases if l.get("state") in {"stalled", "error"}
+                and exact_int(l.get("createdAt"), 0) >= generation_started]
     timed_out_self_reviews = [c for c in commitments if c.get("bindingKind") == "scheduled-review"
                               and c.get("state") == "resolved-timeout"]
     return {
@@ -253,6 +258,9 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
         "commitmentCount": len(commitments), "commitmentsTruncated": len(commitments) > LIST_LIMIT,
         "activeCommitmentCount": len(active_commitments),
         "workObserverCommitmentCount": len(work_observers),
+        "ownDeadLanes": [{"sessionId": l.get("sessionId"), "workUnit": l.get("workUnit"),
+                          "state": l.get("state")} for l in own_dead[:LIST_LIMIT]],
+        "ownDeadLaneCount": len(own_dead),
         "timedOutSelfReviewCount": len(timed_out_self_reviews),
         "inbox": inbox_pressure(project, generation, now),
         "latestEvidence": latest_evidence(coordinator, project, generation) if coordinator else None,
@@ -307,6 +315,18 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any]) -> list[str]
             issues.append(f"github-sync-missing:{stage}")
         elif sync.get("syncedStage") != stage:
             issues.append(f"github-sync-stale:{sync.get('syncedStage')}!={stage}")
+    # A lane this coordinator dispatched and that died must be replaced or
+    # escalated; silently holding it is how a project looks busy while nothing runs.
+    if synth["ownDeadLaneCount"] and not synth["activeWorkers"]:
+        dead = ",".join(sorted(str(l.get("workUnit") or l.get("sessionId")) for l in synth["ownDeadLanes"])[:4])
+        issues.append(f"dead-lane-unreplaced:{dead}")
+    # The correction budget is bounded: a failed story with no plan, no lane and no
+    # owner gate is an unescalated dead end, not a truthful blocked state.
+    failed_stories = sorted({str(story.get("id")) for story in increment.get("stories") or []
+                             if isinstance(story, dict) and story.get("state") == "failed"})
+    if (failed_stories and not declared.get("nextActions") and not synth["openGateCount"]
+            and not synth["activeWorkers"]):
+        issues.append("exhausted-correction-without-escalation:" + ",".join(failed_stories[:4]))
     # Repeatedly re-scheduling a self-review while nothing executes is the
     # bookkeeping-instead-of-delivery signature (observed: rotation-handoff
     # review r2 → r3 → r4, each timing out, with a ready story unassigned).

@@ -1,4 +1,4 @@
-# Protocol v3.4.18 defaults
+# Protocol v3.4.19 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -159,7 +159,7 @@ Ack evidence:                  same token/generation + published status revision
 Status storage:                ~/.craft-agent/runtime/coordinator-status/<project>.json
 Status customer fields:        demonstrableNow, remainingOutcome, etaRange, confidence, realBlocker
 Status Product Increment:      ID, stage, risk tier, real-workflow criterion, non-goals, 1..8 acyclic stories
-GitHub sync (3.4.18):          githubSync {issue, commentRef, projectField, syncedStage, syncedAt}; material stage without it → github-sync-missing/stale
+GitHub sync (3.4.19):          githubSync {issue, commentRef, projectField, syncedStage, syncedAt}; material stage without it → github-sync-missing/stale
 Status next actions:           up to 3 ordered; each needs trigger + required evidence + success/failure branch
 Status classifications:        verified, executing, waiting-observed, blocked, stale, contradictory
 Commitment storage:            ~/.craft-agent/runtime/coordinator-commitments/<project>/<id>.json
