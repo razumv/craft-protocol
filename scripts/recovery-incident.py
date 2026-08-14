@@ -46,6 +46,9 @@ HOUSEKEEPING_KINDS = {"cwd-collision", "orphaned-dead-lane", "preservation-unkno
                       "owner-gate-blocked", "job-exit-unreported", "predecessor-unarchived"}
 HOUSEKEEPING_QUOTA = int(os.environ.get("CRAFT_DRAIN_HOUSEKEEPING_QUOTA", "1"))
 DRAIN_LIMIT = int(os.environ.get("CRAFT_DRAIN_LIMIT", "3"))
+CONTROLLER_SILENT_SECONDS = int(os.environ.get("CRAFT_CONTROLLER_SILENT_SECONDS", "1800"))
+PERSISTENT_CONTROLLER = SELF_HEALING / "persistent-controller.json"
+HARNESSES = RUNTIME / "controller-harnesses"
 CLAIM_TTL_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CLAIM_TTL_SECONDS", "900"))
 MAX_ATTEMPTS = int(os.environ.get("CRAFT_RECOVERY_MAX_ATTEMPTS", "2"))
 COORDINATOR_MAX_ATTEMPTS = int(os.environ.get("CRAFT_COORDINATOR_RECOVERY_MAX_ATTEMPTS", "3"))
@@ -61,6 +64,7 @@ ACTION_MATRIX = {
     "predecessor-unarchived": ["wake-coordinator", "verify-preservation", "archive-reap-if-proven"],
     "orphaned-dead-lane": ["verify-worktree-clean", "archive-reap-if-clean", "owner-escalation-if-dirty"],
     "unregistered-child-lane": ["wake-coordinator", "require-lease-registration", "release-slot-if-abandoned"],
+    "controller-silent": ["inspect-admission-lane", "clear-deferred-probe", "owner-escalation"],
     "fallback-ttl-expired": ["codex-repatriation"],
     "transfer-stuck": ["inspect-transfer", "wake-coordinator", "owner-escalation"],
     "worker-suspect": ["inspect-progress", "wake-coordinator"],
@@ -377,6 +381,40 @@ def collect_observations():
             coordinatorGeneration=row["generation"]))
     return out
 
+def controller_last_turn_at() -> int:
+    """When the recovery controller last started a turn.
+
+    Harness registration happens at the start of every controller turn, so the
+    newest registration is the freshest proof that the lane is alive."""
+    newest = 0
+    for path in HARNESSES.glob("*.json"):
+        row = common.read_json(path)
+        if not isinstance(row, dict) or row.get("sessionRole") != "recovery-controller":
+            continue
+        for key in ("registeredAt", "lastSeenAt"):
+            value = row.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                newest = max(newest, value)
+    return newest
+
+
+def controller_silence(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """A self-healing lane that has stopped is worse than one that never existed.
+
+    Nothing here can restart the controller — that is the admission lane's job —
+    but silence must stop being invisible. Observed live: the wake lane was hard
+    blocked by a single failed probe, the controller went 56 minutes without a
+    turn, and the ledger grew to 74 open conditions while every project looked
+    merely busy. A deliberate kill switch is rest, not silence."""
+    blocking = [r for r in rows if drain_rank(r) <= 2]
+    last = controller_last_turn_at()
+    age = now_ms() - last if last else None
+    silent = bool(blocking and not DISABLED.exists()
+                  and (age is None or age > CONTROLLER_SILENT_SECONDS * 1000))
+    return {"lastTurnAt": last or None, "ageMs": age,
+            "deliveryBlockingCount": len(blocking), "silent": silent}
+
+
 def drain_rank(row: dict[str, Any]) -> int:
     kind = str(row.get("kind") or "")
     if kind in SAFETY_KINDS:
@@ -419,11 +457,12 @@ def drain(args: argparse.Namespace) -> dict[str, Any]:
     claimed, turn after turn reporting that nothing was delivered."""
     rows = [r for r in read_incidents().values() if r.get("state") == "open"]
     ordered = drain_order(rows)
+    silence = controller_silence(rows)
     blocking = [r for r in rows if drain_rank(r) <= 2]
     limit = max(1, int(getattr(args, "limit", DRAIN_LIMIT) or DRAIN_LIMIT))
     selected = ordered[:limit]
     return {"schemaVersion": SCHEMA, "disabled": DISABLED.exists(),
-            "killSwitch": kill_switch_state(rows),
+            "killSwitch": kill_switch_state(rows), "controller": silence,
             "openCount": len(rows), "deliveryBlockingCount": len(blocking),
             "housekeepingCount": len(rows) - len(blocking),
             # A turn that ends with delivery still blocked must be followed by

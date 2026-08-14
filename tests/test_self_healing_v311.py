@@ -37,6 +37,35 @@ class SelfHealingV311Test(unittest.TestCase):
         return cp, json.loads(cp.stdout) if cp.returncode==0 and cp.stdout else None
     def base(self): self.manifest("coord",cwd="/tmp/project"); self.registry()
 
+    def test_controller_silence_is_reported_when_work_is_waiting(self):
+        # v3.4.25: a self-healing lane that stopped is worse than one that never
+        # existed. Live, the wake lane was hard-blocked by one failed probe, the
+        # controller went 56 minutes without a turn, and the ledger grew to 74 open
+        # conditions while every project looked merely busy.
+        self.base()
+        self.lease("worker1", state="handoff-ready")
+        self.cli("detect", "--apply")
+        harness = self.runtime / "controller-harnesses" / "ctrl.json"
+        self.put(harness, {"schemaVersion": 1, "sessionId": "ctrl",
+                           "sessionRole": "recovery-controller",
+                           "registeredAt": self.now - 7_200_000})
+        _, silent = self.cli("drain")
+        self.assertTrue(silent["controller"]["silent"])
+        self.assertGreater(silent["controller"]["deliveryBlockingCount"], 0)
+        # A controller that just took a turn is alive, not silent.
+        self.put(harness, {"schemaVersion": 1, "sessionId": "ctrl",
+                           "sessionRole": "recovery-controller", "registeredAt": self.now})
+        _, alive = self.cli("drain")
+        self.assertFalse(alive["controller"]["silent"])
+        # A deliberate kill switch is rest: silence is only alarming when the lane
+        # is supposed to be running.
+        self.put(harness, {"schemaVersion": 1, "sessionId": "ctrl",
+                           "sessionRole": "recovery-controller",
+                           "registeredAt": self.now - 7_200_000})
+        (self.runtime / "self-healing.disabled").write_text("")
+        _, paused = self.cli("drain")
+        self.assertFalse(paused["controller"]["silent"])
+
     def test_drain_puts_pipeline_blockers_before_housekeeping(self):
         # v3.4.24: the ledger is worked in the order that unblocks delivery. Live,
         # 23 cwd-collision and 10 orphaned-lane records shared one queue with four
