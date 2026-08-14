@@ -79,6 +79,12 @@ PR_CHECK_STALE_MS = int(os.environ.get("CRAFT_STATUS_PR_CHECK_STALE_SECONDS", "2
 # A worker that finished and pushed is idle until its result is taken. Measured
 # live: three finished workers waited 8-14 minutes while no lane ran at all.
 HANDOFF_GRACE_MS = int(os.environ.get("CRAFT_STATUS_HANDOFF_GRACE_SECONDS", "600")) * 1000
+# Who performs a planned action decides whether the plan can happen at all. A step
+# only the owner can take in a GUI is not a step an agent can execute, and until
+# v3.4.24 the two were indistinguishable: gta-kiev's plan led with "owner
+# authenticates inside Windows App" and passed every executability check.
+ACTION_EXECUTORS = {"worker", "auditor", "coordinator", "owner-gate", "external-observer"}
+AGENT_EXECUTORS = {"worker", "auditor", "coordinator"}
 STALE_REVIEW_GRACE_SECONDS = int(os.environ.get("CRAFT_STATUS_REVIEW_GRACE_SECONDS", "900"))
 
 
@@ -382,6 +388,31 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
         issues.append("idle-ready-work:" + ",".join(idle_ready[:8]))
     # Consumption is not optional and not "later": until the result is taken the
     # worker is idle and the next story never starts.
+    # A plan step must say who performs it, and a step that waits on the owner must
+    # point at a gate that is actually open — otherwise the project waits for a
+    # person who was never asked.
+    actions = declared.get("nextActions") or []
+    open_gate_ids = set(synth.get("_openGateIds") or [])
+    # Only when nothing is in flight does the plan carry the whole project, and only
+    # then does an unlabelled step hide whether anyone can perform it.
+    idle_now = not synth["activeWorkers"] and not synth["observedWaitCount"]
+    nameless = [str(i + 1) for i, action in enumerate(actions) if not action.get("executor")]
+    if nameless and idle_now:
+        issues.append("plan-action-without-executor:" + ",".join(nameless[:4]))
+    unasked = [str(i + 1) for i, action in enumerate(actions)
+               if action.get("executor") == "owner-gate"
+               and str(action.get("gateRef") or "") not in open_gate_ids]
+    if unasked:
+        issues.append("plan-awaits-owner-without-gate:" + ",".join(unasked[:4]))
+    # Waiting on the owner is not permission to stop. When nothing is dispatchable
+    # and a gate holds the rest, the coordinator still owes safe, reversible
+    # preparation of the ground the answer will land on.
+    dispatchable = [story for story in increment.get("stories") or []
+                    if isinstance(story, dict) and story.get("state") in {"ready", "executing"}]
+    agent_actions = [a for a in actions if a.get("executor") in AGENT_EXECUTORS]
+    if (synth["openGateCount"] and not dispatchable and not synth["activeWorkers"]
+            and not synth["observedWaitCount"] and not agent_actions):
+        issues.append("idle-without-preparation")
     overdue = sorted(set(synth.get("_overdueHandoffs") or []))
     if overdue:
         issues.append("handoff-unconsumed:" + ",".join(overdue[:4]))
@@ -1035,8 +1066,13 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
             fail("each next action must be an object")
         for key in ("description", "trigger", "requiredEvidence", "successBranch", "failureBranch"):
             req_text(action, key)
-        norm_actions.append({k: action[k] for k in
-                             ("description", "trigger", "requiredEvidence", "successBranch", "failureBranch")})
+        executor = action.get("executor")
+        if executor is not None and executor not in ACTION_EXECUTORS:
+            fail(f"nextActions[].executor must be one of {sorted(ACTION_EXECUTORS)}")
+        gate_ref = optional_text(action, "gateRef")
+        norm_actions.append({**{k: action[k] for k in
+                                ("description", "trigger", "requiredEvidence", "successBranch", "failureBranch")},
+                             "executor": executor, "gateRef": gate_ref})
     completed = payload.get("completedOutcomes") or []
     if not isinstance(completed, list) or len(completed) > LIST_LIMIT:
         fail("completedOutcomes must be a bounded list")

@@ -37,6 +37,36 @@ class SelfHealingV311Test(unittest.TestCase):
         return cp, json.loads(cp.stdout) if cp.returncode==0 and cp.stdout else None
     def base(self): self.manifest("coord",cwd="/tmp/project"); self.registry()
 
+    def test_drain_puts_pipeline_blockers_before_housekeeping(self):
+        # v3.4.24: the ledger is worked in the order that unblocks delivery. Live,
+        # 23 cwd-collision and 10 orphaned-lane records shared one queue with four
+        # idle finished workers and a lease stale for 67 minutes, and the noise won.
+        self.base()
+        self.lease("worker1", state="handoff-ready")
+        self.registry(leaseExpiresAt=self.now-60_000)
+        for n in range(6):
+            self.manifest(f"dup{n}", cwd="/tmp/shared")
+            self.lease(f"dup{n}", state="stalled", worktree="/tmp/shared",
+                       lastHeartbeatAt=self.now-7_200_000)
+        self.cli("detect", "--apply")
+        _, drained = self.cli("drain", "--limit", "3")
+        self.assertGreater(drained["openCount"], 3)
+        self.assertGreater(drained["housekeepingCount"], 0)
+        kinds = [w["kind"] for w in drained["work"]]
+        self.assertIn("coordinator-lease-stale", kinds)
+        self.assertIn("terminal-handoff-unconsumed", kinds)
+        # Housekeeping never takes more than its quota of a turn.
+        self.assertLessEqual(len([w for w in drained["work"] if w["rank"] == 3]), 1)
+        # An unfinished backlog demands another turn now, not after the next window.
+        self.assertTrue(drained["requestImmediateCycle"])
+
+    def test_drain_is_empty_and_calm_when_nothing_is_open(self):
+        self.base()
+        self.cli("detect", "--apply")
+        _, drained = self.cli("drain")
+        self.assertEqual(drained["work"], [])
+        self.assertFalse(drained["requestImmediateCycle"])
+
     def test_child_of_a_live_coordinator_without_a_lease_is_detected(self):
         # v3.4.21: an executor with no lease is invisible to every machine check at
         # once. Observed live: six such children across three projects, one running

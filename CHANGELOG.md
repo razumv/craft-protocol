@@ -4,6 +4,18 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.24] — 2026-08-14
+
+### The recovery lane stops waiting for permission to work
+
+- `recovery-incident.py drain` returns the open ledger in the order that unblocks delivery: safety, then pipeline blockers (an uncollected finished worker, a coordinator that cannot own or publish, an unobserved wait), then lane recovery, then housekeeping under `CRAFT_DRAIN_HOUSEKEEPING_QUOTA` (1) so it can never starve delivery. `requestImmediateCycle` says the turn ended with delivery still blocked;
+- the controller skill no longer scopes a turn to the admission envelope. The envelope explains *why the controller woke*; it never defined what the ledger needs. Measured live: 73 open conditions with **none** claimed, turn after turn reporting nothing delivered, while four finished workers sat idle and a coordinator lease stayed stale for 67 minutes — the delivered cycle had named 3 incidents and been consumed.
+
+### A plan says who performs it
+
+- every `nextActions` entry carries `executor` (`worker`, `auditor`, `coordinator`, `owner-gate`, `external-observer`), and an `owner-gate` action carries `gateRef` naming an open gate, or it is `plan-awaits-owner-without-gate`. While nothing is in flight, an action with no executor is `plan-action-without-executor`. This closes a day-long stall whose plan led with "the owner authenticates inside a GUI" — unexecutable by any worker, yet indistinguishable from work to every check the protocol had;
+- `idle-without-preparation` — a gate holds the increment, nothing is dispatchable, no lane runs, and not one action is executed by an agent. Waiting on the owner is not permission to stop: decompose the next increment, draft what either answer needs, warm clones, freeze the checks that run either way. Preparation must be reversible and must never take an external effect.
+
 ## [3.4.23] — 2026-08-14
 
 ### Idleness that hid in the seams
@@ -350,7 +362,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.23...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.24...HEAD
+[3.4.24]: https://github.com/razumv/craft-protocol/compare/v3.4.23...v3.4.24
 [3.4.23]: https://github.com/razumv/craft-protocol/compare/v3.4.22...v3.4.23
 [3.4.22]: https://github.com/razumv/craft-protocol/compare/v3.4.21...v3.4.22
 [3.4.21]: https://github.com/razumv/craft-protocol/compare/v3.4.20...v3.4.21

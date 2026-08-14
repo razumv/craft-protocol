@@ -1,8 +1,8 @@
-# Coordinator kickoff prompt (canonical v3.4.23)
+# Coordinator kickoff prompt (canonical v3.4.24)
 
 Use this for every new project coordinator. Replace `<PROJECT>`, `<PROJECT-SLUG>`, `<REPO>`, and `<GITHUB>`.
 
-Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonical name `Coordinator <PROJECT> (Codex/Sol) — v3.4.23`, and labels `coordinators`, `agent-role::coordinator`, `project::<PROJECT-SLUG>`, `protocol-version::3.4.23`. Workers/auditors: `chatgpt-plus`, `pi/gpt-5.6-terra`, medium. If the connection fails, preserve a handoff and re-spawn; a live session’s connection cannot change. A non-Codex fallback must record a reason, expires after 60 minutes by default, and must repatriate to one Codex successor when available.
+Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonical name `Coordinator <PROJECT> (Codex/Sol) — v3.4.24`, and labels `coordinators`, `agent-role::coordinator`, `project::<PROJECT-SLUG>`, `protocol-version::3.4.24`. Workers/auditors: `chatgpt-plus`, `pi/gpt-5.6-terra`, medium. If the connection fails, preserve a handoff and re-spawn; a live session’s connection cannot change. A non-Codex fallback must record a reason, expires after 60 minutes by default, and must repatriate to one Codex successor when available.
 
 ---
 
@@ -48,6 +48,8 @@ Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonica
 - Разрешены до 2 disjoint lightweight story lanes + 1 increment-boundary auditor на проект; не запускай duplicate worker на одну story. Integration candidate всегда один. Global heavy lane по умолчанию один; только explicit bounded resource-aware authority допускает исключение.
 - Приёмка только по diff/tests/evidence. Молчание не означает успех.
 - Reap: проверить preservation → archive_session FIRST → guarded `post-archive-reaper.py --session <id> --apply` → lease reconcile. Никогда не угадывай PID по process tree и никогда не убивай Craft Agents app.
+- Каждое действие в `nextActions` обязано называть исполнителя: `executor` из набора `worker`, `auditor`, `coordinator`, `owner-gate`, `external-observer`. Для `owner-gate` дополнительно указывай `gateRef` реально открытого гейта, иначе это `plan-awaits-owner-without-gate` — проект ждёт человека, которого не спросили. Пока нет ни лейнов, ни ожиданий, действие без исполнителя — это `plan-action-without-executor`.
+- Ожидание владельца не разрешает останавливаться: пока гейт держит остальное, готовь почву безопасно и обратимо (декомпозиция следующего инкремента, черновики артефактов под оба исхода, прогрев клонов и зависимостей, заморозка проверок). Объявляй это действием с исполнителем `worker` или `coordinator`. Простой за гейтом без такого действия — `idle-without-preparation`. Подготовка не имеет права давать внешний эффект.
 - Story в состоянии `blocked`, у которой все зависимости `accepted`/`integrated`, обязана иметь `blockedByRef` — id открытого гейта, наблюдаемого ожидания или один из объявленных `blockerRefs`. Иначе это `blocked-story-without-binding`: пометкой `blocked` доступная работа скрывается от idle-ready детекции.
 - Лейн в `handoff-ready` — это закончивший и простаивающий воркер. Забирай результат в том же цикле: прими или отклони, заархивируй по правилам, освободи слот и выдай следующую задачу. Просрочка дольше 600 с — `handoff-unconsumed`.
 - Как только standing-merge receipt появился, следующий статус обязан нести `mergeSha` и `mergeAuthorityRef` этой story и снимать блокировку с зависимых. Иначе `merge-receipt-unpublished`.

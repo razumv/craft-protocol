@@ -26,6 +26,26 @@ PREDECESSOR_ARCHIVE_GRACE_SECONDS = int(os.environ.get("CRAFT_PREDECESSOR_ARCHIV
 ORPHANED_LANE_SECONDS = int(os.environ.get("CRAFT_ORPHANED_LANE_SECONDS", "86400"))
 KILL_SWITCH_STALE_SECONDS = int(os.environ.get("CRAFT_KILL_SWITCH_STALE_SECONDS", "1800"))
 UNREGISTERED_CHILD_SECONDS = int(os.environ.get("CRAFT_UNREGISTERED_CHILD_SECONDS", "600"))
+# Draining the ledger is ordered by what stops product work, not by arrival.
+# Observed live: 23 cwd-collision and 10 orphaned-lane records sat in one queue
+# with four idle finished workers and a coordinator lease stale for 67 minutes,
+# and the housekeeping noise crowded out everything that mattered.
+SAFETY_KINDS = {"ambiguous-coordinator-owner", "project-mapping-conflict"}
+# Conditions that stop the pipeline right now: a finished worker nobody collects,
+# a coordinator that cannot own or publish, a wait nobody observes. Recovering an
+# old stalled lane matters too, but it does not unblock a queue the way these do.
+PIPELINE_KINDS = {"terminal-handoff-unconsumed", "coordinator-not-live", "coordinator-lease-stale",
+                  "coordinator-session-error", "coordinator-pi-sigterm", "transfer-stuck",
+                  "coordinator-worker-terminal-status", "coordinator-status-missing",
+                  "coordinator-status-stale", "coordinator-status-contradiction",
+                  "coordinator-plan-unexecutable", "coordinator-inbox-ready",
+                  "coordinator-commitment-overdue", "unregistered-child-lane", "heavy-lock-wait",
+                  "external-wait-terminal", "external-wait-unobserved", "external-wait-deadline"}
+LANE_RECOVERY_KINDS = {"worker-suspect", "worker-stalled", "worker-error"}
+HOUSEKEEPING_KINDS = {"cwd-collision", "orphaned-dead-lane", "preservation-unknown",
+                      "owner-gate-blocked", "job-exit-unreported", "predecessor-unarchived"}
+HOUSEKEEPING_QUOTA = int(os.environ.get("CRAFT_DRAIN_HOUSEKEEPING_QUOTA", "1"))
+DRAIN_LIMIT = int(os.environ.get("CRAFT_DRAIN_LIMIT", "3"))
 CLAIM_TTL_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CLAIM_TTL_SECONDS", "900"))
 MAX_ATTEMPTS = int(os.environ.get("CRAFT_RECOVERY_MAX_ATTEMPTS", "2"))
 COORDINATOR_MAX_ATTEMPTS = int(os.environ.get("CRAFT_COORDINATOR_RECOVERY_MAX_ATTEMPTS", "3"))
@@ -357,6 +377,66 @@ def collect_observations():
             coordinatorGeneration=row["generation"]))
     return out
 
+def drain_rank(row: dict[str, Any]) -> int:
+    kind = str(row.get("kind") or "")
+    if kind in SAFETY_KINDS:
+        return 0
+    if kind in PIPELINE_KINDS:
+        return 1
+    if kind in LANE_RECOVERY_KINDS:
+        return 2
+    return 3
+
+
+def drain_order(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The backlog in the order a controller must work it.
+
+    Safety first, then everything that stops delivery, then housekeeping under a
+    quota so it can never starve delivery. Within a rank: severity, then age, so
+    the oldest genuine blocker goes before a fresher one."""
+    now = now_ms()
+    def key(row):
+        return (drain_rank(row),
+                SEVERITY_ORDER.get(str(row.get("severity")), 9),
+                int(row.get("firstSeenAt") or row.get("createdAt") or now))
+    ordered = sorted(rows, key=key)
+    out: list[dict[str, Any]] = []
+    housekeeping = 0
+    for row in ordered:
+        if drain_rank(row) == 3:
+            if housekeeping >= HOUSEKEEPING_QUOTA:
+                continue
+            housekeeping += 1
+        out.append(row)
+    return out
+
+
+def drain(args: argparse.Namespace) -> dict[str, Any]:
+    """What this controller turn must work on, whether or not a wake envelope exists.
+
+    An admission envelope says *why* the controller woke; it never limited what the
+    ledger needs. Treating it as the work list left 73 open conditions with none
+    claimed, turn after turn reporting that nothing was delivered."""
+    rows = [r for r in read_incidents().values() if r.get("state") == "open"]
+    ordered = drain_order(rows)
+    blocking = [r for r in rows if drain_rank(r) <= 2]
+    limit = max(1, int(getattr(args, "limit", DRAIN_LIMIT) or DRAIN_LIMIT))
+    selected = ordered[:limit]
+    return {"schemaVersion": SCHEMA, "disabled": DISABLED.exists(),
+            "killSwitch": kill_switch_state(rows),
+            "openCount": len(rows), "deliveryBlockingCount": len(blocking),
+            "housekeepingCount": len(rows) - len(blocking),
+            # A turn that ends with delivery still blocked must be followed by
+            # another turn now, not after the next coalesce window.
+            "requestImmediateCycle": len(blocking) > len(selected),
+            "work": [{"incidentId": r.get("incidentId"), "kind": r.get("kind"),
+                      "project": r.get("project"), "sessionId": r.get("sessionId"),
+                      "severity": r.get("severity"), "rank": drain_rank(r),
+                      "firstSeenAt": r.get("firstSeenAt"),
+                      "completedRecoveryAttempts": r.get("completedRecoveryAttempts")}
+                     for r in selected]}
+
+
 def kill_switch_state(observed: list[dict[str, Any]]) -> dict[str, Any]:
     """A forgotten kill switch looks exactly like a healthy fleet.
 
@@ -602,6 +682,7 @@ def list_rows(args):
 def parser():
     p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="cmd", required=True)
     d=sub.add_parser("detect"); d.add_argument("--apply", action="store_true")
+    dr=sub.add_parser("drain"); dr.add_argument("--limit", type=int, default=DRAIN_LIMIT)
     l=sub.add_parser("list"); l.add_argument("--state"); l.add_argument("--project"); l.add_argument("--kind")
     sub.add_parser("report")
     c=sub.add_parser("claim"); c.add_argument("--incident", required=True); c.add_argument("--controller", required=True); c.add_argument("--ttl", type=int, default=CLAIM_TTL_SECONDS)
@@ -617,6 +698,7 @@ def parser():
 def main():
     args=parser().parse_args()
     if args.cmd == "detect": result=detect(args.apply)
+    elif args.cmd == "drain": result=drain(args)
     elif args.cmd == "list": result=list_rows(args)
     elif args.cmd == "report":
         rows = read_incidents()
