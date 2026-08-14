@@ -100,7 +100,7 @@ class InboxTests(Base):
         payload = {"objective": "Process coordinator inbox", "phase": "executing",
                    "currentFocus": "claimed digest", "childRefs": ["worker1"],
                    "nextReviewInSeconds": 3600,
-                   "nextActions": [{"description": "apply claimed evidence", "trigger": "now",
+                   "nextActions": [{"description": "apply claimed evidence", "executor": "worker", "trigger": "now",
                                     "requiredEvidence": "claimed inbox revision", "successBranch": "continue",
                                     "failureBranch": "release claim"}]}
         _, out = self.cli(STATUS, "publish", "--project", "demo", "--session", "coord1",
@@ -419,7 +419,7 @@ class StatusTests(Base):
     def executing_payload(self):
         return {"objective": "Ship API", "phase": "executing", "currentFocus": "wu-1",
                 "childRefs": ["worker1"], "nextReviewInSeconds": 3600,
-                "nextActions": [{"description": "review wu-1", "trigger": "worker1 terminal",
+                "nextActions": [{"description": "review wu-1", "executor": "coordinator", "trigger": "worker1 terminal",
                                  "requiredEvidence": "green ci", "successBranch": "merge",
                                  "failureBranch": "rework"}]}
 
@@ -709,7 +709,7 @@ class StatusTests(Base):
                  "--success-action", "resume", "--failure-action", "preserve", "--apply")
         self.publish({"objective": "x", "phase": "blocked", "currentFocus": "exact blocker",
                       "commitmentRefs": ["blocked-review"], "nextReviewInSeconds": 3600,
-                      "nextActions": [{"description": "review exact blocker", "trigger": "scheduled review deadline",
+                      "nextActions": [{"description": "review exact blocker", "executor": "coordinator", "trigger": "scheduled review deadline",
                                        "requiredEvidence": "immutable blocker evidence", "successBranch": "resume bounded work",
                                        "failureBranch": "preserve blocked state"}]})
         _, show = self.cli(STATUS, "show", "--project", "demo")
