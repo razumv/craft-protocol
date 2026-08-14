@@ -76,6 +76,9 @@ PR_STATES = {"draft", "conflicting", "checks-failing", "review-required", "green
 # clean means merge it, conflicting means rebase it, failing means fix or close it.
 PR_ACTION_GRACE_MS = int(os.environ.get("CRAFT_STATUS_PR_ACTION_GRACE_SECONDS", "3600")) * 1000
 PR_CHECK_STALE_MS = int(os.environ.get("CRAFT_STATUS_PR_CHECK_STALE_SECONDS", "21600")) * 1000
+# A worker that finished and pushed is idle until its result is taken. Measured
+# live: three finished workers waited 8-14 minutes while no lane ran at all.
+HANDOFF_GRACE_MS = int(os.environ.get("CRAFT_STATUS_HANDOFF_GRACE_SECONDS", "600")) * 1000
 STALE_REVIEW_GRACE_SECONDS = int(os.environ.get("CRAFT_STATUS_REVIEW_GRACE_SECONDS", "900"))
 
 
@@ -326,6 +329,10 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
         "_activeWorkerIds": [str(l.get("sessionId")) for l in active_workers],
         "_terminalWorkerIds": [str(l.get("sessionId")) for l in terminal_workers],
         "_observedWaitIds": [str(w.get("waitId")) for w in observed_waits],
+        "_openGateIds": [str(g.get("gateId")) for g in open_gates],
+        "_terminalLaneUnits": [str(l.get("workUnit")) for l in terminal_workers if l.get("workUnit")],
+        "_overdueHandoffs": [str(l.get("workUnit") or l.get("sessionId")) for l in terminal_workers
+                             if now - exact_int(l.get("lastHeartbeatAt"), now) > HANDOFF_GRACE_MS],
     }
 
 
@@ -361,9 +368,23 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
     # `scheduled-review` or `owner-gate` commitment is a promise to look later,
     # not execution, and counting it here let a project mask unassigned ready
     # stories indefinitely.
+    # A story whose lane already finished and is waiting to be taken is not idle —
+    # the duty there is consumption, which has its own deadline below. Counting it
+    # as idle made the healthy hand-off window look like neglect and devalued the
+    # signal that matters.
+    handed_off = set(synth.get("_terminalLaneUnits") or [])
+    story_units = {str(story.get("id")): str(story.get("workUnit") or story.get("id"))
+                   for story in increment.get("stories") or [] if isinstance(story, dict)}
+    idle_ready = [sid for sid in idle_ready
+                  if story_units.get(sid, sid) not in handed_off and sid not in handed_off]
     if (idle_ready and not synth["activeWorkers"] and not synth["observedWaitCount"]
             and not synth["workObserverCommitmentCount"]):
         issues.append("idle-ready-work:" + ",".join(idle_ready[:8]))
+    # Consumption is not optional and not "later": until the result is taken the
+    # worker is idle and the next story never starts.
+    overdue = sorted(set(synth.get("_overdueHandoffs") or []))
+    if overdue:
+        issues.append("handoff-unconsumed:" + ",".join(overdue[:4]))
     # GitHub is the task source of truth, so a stage the owner can see in Craft but
     # not in the issue/Project board is an unreported stage. Discovery is exempt:
     # nothing material has happened yet.
@@ -454,6 +475,33 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
         issues.append("pull-request-unfinished:" + ",".join(sorted(actionable)[:4]))
     if stale_checks:
         issues.append("pull-request-check-stale:" + ",".join(sorted(stale_checks)[:4]))
+    # A project-level `blocked` is already refused at publish time unless it names a
+    # gate, an observed wait or a bounded commitment, so there is no second check
+    # here. What was missing is per-story binding: a story held `blocked` while its dependencies are satisfied hides available
+    # work from idle-ready detection entirely. Binding is named, never inferred:
+    # measured on live state, four such stories were legitimately waiting on an
+    # open owner gate, so inference would have called healthy projects neglectful.
+    admissible_blockers = (set(synth.get("_openGateIds") or [])
+                           | set(synth.get("_observedWaitIds") or [])
+                           | {str(ref) for ref in declared.get("blockerRefs") or []})
+    story_states = {str(story.get("id")): str(story.get("state"))
+                    for story in stories if isinstance(story, dict)}
+    unbound_blocked = sorted(
+        str(story.get("id")) for story in stories
+        if isinstance(story, dict) and story.get("state") == "blocked"
+        and all(story_states.get(str(dep)) in {"accepted", "integrated"}
+                for dep in story.get("dependsOn") or [])
+        and str(story.get("blockedByRef") or "") not in admissible_blockers)
+    if unbound_blocked:
+        issues.append("blocked-story-without-binding:" + ",".join(unbound_blocked[:4]))
+    # A merge that landed under standing authority but never reached the published
+    # status leaves the next story parked behind work that is already done.
+    receipt_units = set(synth.get("_standingMergeUnits") or [])
+    published_units = {str(story.get("workUnit") or "") for story in stories
+                       if isinstance(story, dict) and story.get("mergeSha")}
+    unpublished = sorted(receipt_units - published_units)
+    if unpublished:
+        issues.append("merge-receipt-unpublished:" + ",".join(unpublished[:4]))
     if (phase == "complete" and complete_age_ms >= COMPLETE_IDLE_GRACE_MS
             and not declared.get("nextActions")
             and not synth["openGateCount"] and not synth["activeWorkers"]):
@@ -741,12 +789,14 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
         work_unit = optional_text(story, "workUnit")
         merge_sha = optional_text(story, "mergeSha")
         merge_authority_ref = optional_text(story, "mergeAuthorityRef")
+        blocked_by_ref = optional_text(story, "blockedByRef")
         if merge_sha is not None and not COMMIT_SHA.fullmatch(merge_sha):
             fail("productIncrement story mergeSha must be a full 40-character commit sha")
         normalized.append({"id": story_id, "title": title, "state": state,
                            "dependsOn": dependencies, "riskContribution": risk,
                            "acceptanceRef": acceptance_ref, "workUnit": work_unit,
-                           "mergeSha": merge_sha, "mergeAuthorityRef": merge_authority_ref})
+                           "mergeSha": merge_sha, "mergeAuthorityRef": merge_authority_ref,
+                           "blockedByRef": blocked_by_ref})
     graph = {story["id"]: story["dependsOn"] for story in normalized}
     for story_id, dependencies in graph.items():
         for dep in dependencies:

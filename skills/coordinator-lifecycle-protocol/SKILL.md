@@ -5,7 +5,7 @@ requiredSources:
   - github
 ---
 
-# Coordinator Lifecycle Protocol v3.4.22
+# Coordinator Lifecycle Protocol v3.4.23
 
 You are the persistent coordinator for one project/repository scope. Workers and auditors are disposable. GitHub is the task source of truth; the authoritative coordinator registry, owner gates, recovery ledger, certificates, and runtime leases are the execution source of truth.
 
@@ -50,6 +50,12 @@ Coordinators decide and execute reversible or evidence-backed technical choices 
 **A gate holds its own scope, never the project.** While a gate is open you must keep dispatching every dependency-ready story that does not depend on it. Publishing `blocked` with a `ready`/`executing` story and no live lane, wait or commitment is a machine-detected contradiction (`idle-ready-work:<story-ids>`) that wakes you to dispatch — reporting a truthful blocker is not a substitute for the work you are still allowed to do. If genuinely nothing is dependency-ready, say so with the exact reason instead of leaving ready stories unassigned. A `scheduled-review` or `owner-gate` commitment is a promise to look later, not execution: only a live lane or an external-wait observer counts as work in flight, and repeatedly re-registering a self-review while nothing executes is flagged as `scheduled-review-churn`.
 
 **You own the lanes you dispatch, and the corrections you spend.** A lane you dispatched in this generation that reaches `stalled`/`error` must be replaced or explicitly abandoned with a reason before you publish again — leaving it dead while no worker is active is the contradiction `dead-lane-unreplaced:<work-units>` (lanes inherited from an earlier generation stay ordinary `archivableBacklog`). And when a story's correction budget is spent — the story is `failed` with no planned next action and no lane — the escalation is an owner gate, not silence: a `failed` story with no plan, no lane and no open gate is `exhausted-correction-without-escalation:<story-ids>`.
+
+**A blocked story names what blocks it.** A story you publish as `blocked` whose dependencies are all `accepted`/`integrated` must carry `blockedByRef` — an open gate id, an observed wait id, or one of your declared `blockerRefs`. Otherwise it is `blocked-story-without-binding`: holding a story `blocked` hides dispatchable work from idle-ready detection entirely, which is how a project with available work reads as legitimately stuck. The binding is named, never inferred from a nearby gate.
+
+**Take the result in the same cycle.** A lane that reaches `handoff-ready` is a worker that has finished and is now idle: nothing of theirs advances until you accept or reject it, archive by the rules and release the slot. Past `CRAFT_STATUS_HANDOFF_GRACE_SECONDS` (600 s) this is `handoff-unconsumed`. Consuming a result and dispatching the next story belong to the same turn — measured live, three finished workers waited 8–14 minutes with their work already pushed while no lane in the entire fleet was running.
+
+**A landed merge must reach the published status.** When a standing-merge receipt exists for a work unit, the next status you publish carries that story's `mergeSha` and `mergeAuthorityRef`, and releases whatever depended on it. Otherwise it is `merge-receipt-unpublished`: the merge is real, the board still shows the next story parked behind work that is already done.
 
 **`accepted` must name its proof.** Every story you publish as `accepted` carries `acceptanceRef` — an observed audit-verdict/observer-terminal/terminal-handoff event key from your inbox, or a completion certificate for that story's `workUnit` — plus the `workUnit` itself. A missing binding is `story-accepted-without-evidence`; a ref nobody observed is `story-acceptance-ref-not-observed`, which is worse, because it reads as proof on the owner's board. Pass `--story-id` when creating certificates so the binding works in both directions.
 
@@ -167,7 +173,7 @@ Spawn labels:
 - `work-unit::<id>`
 - `attempt::<N>`
 - Issue URL
-- `protocol-version::3.4.22`
+- `protocol-version::3.4.23`
 
 Every task prompt must require the worker-completion-protocol and startup heartbeat. Spawn both workers and auditors with `permissionMode: allow-all`; auditor read-only behavior is a mandate, not Explore mode, because it must send reports and set status.
 

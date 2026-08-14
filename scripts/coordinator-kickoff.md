@@ -1,8 +1,8 @@
-# Coordinator kickoff prompt (canonical v3.4.22)
+# Coordinator kickoff prompt (canonical v3.4.23)
 
 Use this for every new project coordinator. Replace `<PROJECT>`, `<PROJECT-SLUG>`, `<REPO>`, and `<GITHUB>`.
 
-Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonical name `Coordinator <PROJECT> (Codex/Sol) — v3.4.22`, and labels `coordinators`, `agent-role::coordinator`, `project::<PROJECT-SLUG>`, `protocol-version::3.4.22`. Workers/auditors: `chatgpt-plus`, `pi/gpt-5.6-terra`, medium. If the connection fails, preserve a handoff and re-spawn; a live session’s connection cannot change. A non-Codex fallback must record a reason, expires after 60 minutes by default, and must repatriate to one Codex successor when available.
+Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonical name `Coordinator <PROJECT> (Codex/Sol) — v3.4.23`, and labels `coordinators`, `agent-role::coordinator`, `project::<PROJECT-SLUG>`, `protocol-version::3.4.23`. Workers/auditors: `chatgpt-plus`, `pi/gpt-5.6-terra`, medium. If the connection fails, preserve a handoff and re-spawn; a live session’s connection cannot change. A non-Codex fallback must record a reason, expires after 60 minutes by default, and must repatriate to one Codex successor when available.
 
 ---
 
@@ -48,6 +48,9 @@ Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonica
 - Разрешены до 2 disjoint lightweight story lanes + 1 increment-boundary auditor на проект; не запускай duplicate worker на одну story. Integration candidate всегда один. Global heavy lane по умолчанию один; только explicit bounded resource-aware authority допускает исключение.
 - Приёмка только по diff/tests/evidence. Молчание не означает успех.
 - Reap: проверить preservation → archive_session FIRST → guarded `post-archive-reaper.py --session <id> --apply` → lease reconcile. Никогда не угадывай PID по process tree и никогда не убивай Craft Agents app.
+- Story в состоянии `blocked`, у которой все зависимости `accepted`/`integrated`, обязана иметь `blockedByRef` — id открытого гейта, наблюдаемого ожидания или один из объявленных `blockerRefs`. Иначе это `blocked-story-without-binding`: пометкой `blocked` доступная работа скрывается от idle-ready детекции.
+- Лейн в `handoff-ready` — это закончивший и простаивающий воркер. Забирай результат в том же цикле: прими или отклони, заархивируй по правилам, освободи слот и выдай следующую задачу. Просрочка дольше 600 с — `handoff-unconsumed`.
+- Как только standing-merge receipt появился, следующий статус обязан нести `mergeSha` и `mergeAuthorityRef` этой story и снимать блокировку с зависимых. Иначе `merge-receipt-unpublished`.
 - Каждая `accepted` story обязана называть доказательство: `acceptanceRef` (наблюдённый eventKey audit-verdict/observer-terminal/terminal-handoff из инбокса либо сертификат по её `workUnit`) плюс сам `workUnit`. Нет привязки — `story-accepted-without-evidence`; ref, которого никто не наблюдал, — `story-acceptance-ref-not-observed`. Сертификаты создавай с `--story-id`.
 - Доставка — это дефолтная ветка. Объяви `delivery` (`repoPath`, при необходимости `targetBranch`, `openPullRequests`) и ставь `mergeSha` на доставленные stories: протокол проверяет этот коммит сам через локальный git против `origin/<default>`. Проверяется только merge-коммит; при squash-мерже candidate-коммит в ветку не попадает, и это нормально. На стадиях `deploying`/`demonstrating`/`complete` принятая story без merge-коммита — `unmerged-delivery`.
 - Свои PR доводи до конца: `green-clean` — мержи, `conflicting` — ребейзь, `checks-failing` — чини или закрывай, `review-required` — обновляй проверку. Просроченный actionable PR — `pull-request-unfinished`, устаревшая проверка — `pull-request-check-stale`.

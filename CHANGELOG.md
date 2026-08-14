@@ -4,6 +4,18 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.23] — 2026-08-14
+
+### Idleness that hid in the seams
+
+- `blocked-story-without-binding:<ids>` — a story held `blocked` while every dependency is `accepted`/`integrated` and it names no open gate, observed wait or declared blocker through the new story field `blockedByRef`. Holding a story `blocked` hid dispatchable work from `idle-ready-work` completely, so a project with available work read as legitimately stuck: observed live with a readback story blocked behind a dependency that was already accepted *and merged*. Binding is named, never inferred — measured first, four live stories were legitimately waiting on an open owner gate, so inference would have called healthy projects neglectful;
+- `handoff-unconsumed:<workUnits>` — a lane at `handoff-ready` past `CRAFT_STATUS_HANDOFF_GRACE_SECONDS` (600 s). A finished worker is an idle worker until its result is taken, and consumption plus dispatching the next story belong to the same turn. Measured live: three workers waited 8–14 minutes with their work already pushed while not one lane in the fleet was running;
+- `merge-receipt-unpublished:<workUnits>` — a standing-merge receipt exists but no story declares that merge, so the board keeps the next story parked behind finished work. Observed live minutes after the first standing-authority merge landed.
+
+### One signal stops crying wolf
+
+- `idle-ready-work` no longer fires for a story whose lane already reached `handoff-ready`. That window is a healthy hand-off with its own deadline (above), and counting it as idle devalued the signal that matters. No project-level `blocked-without-blocker-binding` check was added: publishing a `blocked` phase is already refused unless it names a gate, an observed wait or a bounded commitment, and a second check would only duplicate that guard.
+
 ## [3.4.22] — 2026-08-14
 
 ### The gate that repeats becomes a standing authority
@@ -338,7 +350,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.22...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.23...HEAD
+[3.4.23]: https://github.com/razumv/craft-protocol/compare/v3.4.22...v3.4.23
 [3.4.22]: https://github.com/razumv/craft-protocol/compare/v3.4.21...v3.4.22
 [3.4.21]: https://github.com/razumv/craft-protocol/compare/v3.4.20...v3.4.21
 [3.4.20]: https://github.com/razumv/craft-protocol/compare/v3.4.19...v3.4.20
