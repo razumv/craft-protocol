@@ -36,7 +36,7 @@ STATE = Path(os.environ.get("CRAFT_ADMISSION_STATE", RUNTIME / "self-healing/adm
 TICK_STATES = Path(os.environ.get("CRAFT_COORDINATOR_TICK_STATES", RUNTIME / "self-healing/coordinator-ticks")).expanduser()
 LOCK = Path(os.environ.get("CRAFT_ADMISSION_LOCK", RUNTIME / "self-healing/admission.lock")).expanduser()
 DISABLED = Path(os.environ.get("CRAFT_SELF_HEALING_DISABLED", RUNTIME / "self-healing.disabled")).expanduser()
-PROTOCOL_VERSION = "v3.4.25"
+PROTOCOL_VERSION = "v3.4.26"
 AUTOMATION_ID = os.environ.get("CRAFT_RECOVERY_NOTIFIER_AUTOMATION_ID", "a322-admission")
 LEGACY_AUTOMATION_IDS = {"a321-notifier", "a31101", "a31102"}
 CONTROLLER_ACTION_ID = "a322-controller-recovery"
@@ -53,6 +53,8 @@ RECOVERY_MIN_AGE_MS = RECOVERY_MIN_AGE_SECONDS * 1000
 # after a quiet period; then the incidents fall through to the controller lane.
 MAX_REWAKES = int(os.environ.get("CRAFT_ADMISSION_MAX_REWAKES", "2"))
 MAX_PROBE_FAILURES = int(os.environ.get("CRAFT_ADMISSION_MAX_PROBE_FAILURES", "3"))
+TRANSPORT = Path(os.environ.get("CRAFT_ADMISSION_TRANSPORT", RUNTIME / "self-healing/transport.json")).expanduser()
+TRANSPORT_LOST_SECONDS = int(os.environ.get("CRAFT_TRANSPORT_LOST_SECONDS", "900"))
 REWAKE_QUIET_MS = int(os.environ.get("CRAFT_ADMISSION_REWAKE_QUIET_SECONDS", "1800")) * 1000
 NOW_MS = lambda: int(os.environ.get("CRAFT_TEST_NOW_MS", "0")) or int(time.time() * 1000)
 
@@ -849,6 +851,29 @@ def clear_probe_failures(state: dict[str, Any]) -> dict[str, Any]:
     return cleared
 
 
+def record_transport(ok: bool, now: int, reason: str | None = None) -> dict[str, Any]:
+    """Remember whether the fleet's transport answered this tick.
+
+    Losing the transport looks exactly like lazy agents: coordinators go quiet,
+    the ledger grows, finished workers sit uncollected, and nothing says the
+    channel is gone. Observed live 2026-08-14: Tailscale logged out at ~19:02, the
+    server's listening address vanished with the interface, and for an hour the
+    only visible symptom was a fleet that appeared to have stopped caring."""
+    row = read_json(TRANSPORT) or {}
+    if ok:
+        row.update(lastSuccessAt=now, consecutiveFailures=0, lastFailureReason=None)
+    else:
+        row.update(lastFailureAt=now, lastFailureReason=reason,
+                   consecutiveFailures=int(row.get("consecutiveFailures") or 0) + 1)
+        row.setdefault("lastSuccessAt", None)
+    row["schemaVersion"] = 1
+    try:
+        atomic_json(TRANSPORT, row)
+    except OSError:
+        pass
+    return row
+
+
 def hard_block(state: dict[str, Any], now: int, reason: str) -> dict[str, Any]:
     blocked = dict(state)
     blocked.update(phase="blocked", blockedAt=now, reason=reason)
@@ -1158,6 +1183,7 @@ def tick(args: argparse.Namespace) -> int:
                 state = read_json(path) or prepared_cycle(now, workspace, batch)
                 atomic_json(path, state)
                 results.append(state)
+            record_transport(False, now, f"discovery-retry: {exc}")
             print(json.dumps({"schemaVersion": 3, "applied": True, "reason": "discovery-retry", "detail": str(exc), "results": results}, indent=2))
             return 75
         except (AdmissionError, CapabilityError) as exc:
@@ -1184,6 +1210,7 @@ def tick(args: argparse.Namespace) -> int:
                           "statePreserved": True, "path": str(path)}
                 code = 2
             except (DeliveryUnknown, TransientRpcError) as exc:
+                record_transport(False, now, str(exc))
                 result = read_json(path) or prepared_cycle(now, workspace, batch)
                 atomic_json(path, result)
                 result = {**result, "retryReason": str(exc)}
@@ -1194,6 +1221,9 @@ def tick(args: argparse.Namespace) -> int:
                 code = 2
             results.append(result)
             exit_code = max(exit_code, code)
+        if exit_code != 75:
+            # The channel answered this tick: whatever else went wrong is local.
+            record_transport(True, NOW_MS())
         print(json.dumps({"schemaVersion": 3, "applied": True, "results": results}, indent=2))
         return exit_code
 

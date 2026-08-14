@@ -37,6 +37,34 @@ class SelfHealingV311Test(unittest.TestCase):
         return cp, json.loads(cp.stdout) if cp.returncode==0 and cp.stdout else None
     def base(self): self.manifest("coord",cwd="/tmp/project"); self.registry()
 
+    def test_transport_loss_is_a_named_condition(self):
+        # v3.4.26: a lost channel is indistinguishable from lazy agents from the
+        # outside. Live 2026-08-14: Tailscale logged out at ~19:02, the server's
+        # listening address vanished with the interface, and for an hour the only
+        # visible symptom was a fleet that appeared to have stopped caring.
+        self.base()
+        transport = self.runtime / "self-healing" / "transport.json"
+        _, quiet = self.cli("drain")
+        self.assertFalse(quiet["transport"]["lost"])
+        # Failures with no recent success are a lost channel.
+        self.put(transport, {"schemaVersion": 1, "consecutiveFailures": 3,
+                             "lastSuccessAt": self.now - 3_600_000,
+                             "lastFailureReason": "connection timeout"})
+        _, lost = self.cli("drain")
+        self.assertTrue(lost["transport"]["lost"])
+        self.assertEqual(lost["transport"]["consecutiveFailures"], 3)
+        self.assertIn("timeout", lost["transport"]["lastFailureReason"])
+        # One failure after a fresh success is a hiccup, not a loss.
+        self.put(transport, {"schemaVersion": 1, "consecutiveFailures": 1,
+                             "lastSuccessAt": self.now - 60_000})
+        _, hiccup = self.cli("drain")
+        self.assertFalse(hiccup["transport"]["lost"])
+        # A restored channel clears the condition outright.
+        self.put(transport, {"schemaVersion": 1, "consecutiveFailures": 0,
+                             "lastSuccessAt": self.now})
+        _, restored = self.cli("drain")
+        self.assertFalse(restored["transport"]["lost"])
+
     def test_controller_silence_is_reported_when_work_is_waiting(self):
         # v3.4.25: a self-healing lane that stopped is worse than one that never
         # existed. Live, the wake lane was hard-blocked by one failed probe, the
