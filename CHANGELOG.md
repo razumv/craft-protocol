@@ -4,6 +4,12 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.17] — 2026-08-14
+
+### Gate cards carry their title into the UI
+
+- after creating a card the bridge issues an explicit `rename`. The runtime suppresses the created-event broadcast for sessions it did not create for a renderer, so a UI that learns about the card another way displayed its default title ("New chat") until it rehydrated — the card was correctly named on the server the whole time. An explicit rename emits an update the UI does apply.
+
 ## [3.4.16] — 2026-08-14
 
 ### Resolved gate cards stay readable
@@ -273,7 +279,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.16...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.17...HEAD
+[3.4.17]: https://github.com/razumv/craft-protocol/compare/v3.4.16...v3.4.17
 [3.4.16]: https://github.com/razumv/craft-protocol/compare/v3.4.15...v3.4.16
 [3.4.15]: https://github.com/razumv/craft-protocol/compare/v3.4.14...v3.4.15
 [3.4.14]: https://github.com/razumv/craft-protocol/compare/v3.4.13...v3.4.14
