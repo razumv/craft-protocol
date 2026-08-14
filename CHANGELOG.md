@@ -4,6 +4,12 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.16] — 2026-08-14
+
+### Resolved gate cards stay readable
+
+- a resolved owner-gate card is renamed to `✅ <project> · <gateId> → <choice>` and closed, then archived only after `CRAFT_BOARD_DONE_RETENTION_SECONDS` (default 3600 s). Archiving instantly made the card vanish the moment the owner answered, so the board never showed the outcome of their own decision; the retention window is tracked durably so a restart cannot lose or double-archive a card.
+
 ## [3.4.15] — 2026-08-14
 
 ### Promise commitments no longer mask idle work
@@ -267,7 +273,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.15...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.16...HEAD
+[3.4.16]: https://github.com/razumv/craft-protocol/compare/v3.4.15...v3.4.16
 [3.4.15]: https://github.com/razumv/craft-protocol/compare/v3.4.14...v3.4.15
 [3.4.14]: https://github.com/razumv/craft-protocol/compare/v3.4.13...v3.4.14
 [3.4.13]: https://github.com/razumv/craft-protocol/compare/v3.4.12...v3.4.13
