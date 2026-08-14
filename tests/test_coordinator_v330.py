@@ -54,12 +54,15 @@ class Base(unittest.TestCase):
                "lastHeartbeatAt": self.now, **extra}
         self.put(self.runtime / "coordinators" / f"{project}.json", row)
 
-    def lease(self, sid="worker1", parent="coord1", work_unit="wu-1", attempt="1", state="running", role="worker"):
+    def lease(self, sid="worker1", parent="coord1", work_unit="wu-1", attempt="1", state="running",
+              role="worker", last_heartbeat=None):
         self.manifest(sid, role=role, labels=[f"parent-session::{parent}",
                       f"work-unit::{work_unit}", f"attempt::{attempt}"])
-        self.put(self.runtime / "worker-leases" / f"{sid}.json",
-                 {"schemaVersion": 1, "sessionId": sid, "parentSessionId": parent,
-                  "role": role, "workUnit": work_unit, "attempt": attempt, "state": state})
+        row = {"schemaVersion": 1, "sessionId": sid, "parentSessionId": parent,
+               "role": role, "workUnit": work_unit, "attempt": attempt, "state": state}
+        if last_heartbeat is not None:
+            row["lastHeartbeatAt"] = last_heartbeat
+        self.put(self.runtime / "worker-leases" / f"{sid}.json", row)
 
     def cli(self, script, *args, ok=True, now=None):
         env = self.env if now is None else {**self.env, "CRAFT_TEST_NOW_MS": str(now)}
@@ -867,6 +870,84 @@ class StatusTests(Base):
             payload["githubSync"] = bad
             cp, _ = self.publish(payload, ok=False)
             self.assertIn(needle, cp.stderr)
+
+    def test_blocked_story_with_satisfied_dependencies_must_name_its_blocker(self):
+        # v3.4.23: holding a story `blocked` hid available work from idle-ready
+        # detection entirely. Binding is named, never inferred — measured live, four
+        # such stories were legitimately waiting on an open owner gate.
+        self.base_project()
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync()
+        payload["productIncrement"]["stories"] = [
+            {"id": "done", "title": "Done", "state": "accepted", "dependsOn": [],
+             "riskContribution": "low", "acceptanceRef": "cert-b"},
+            {"id": "next", "title": "Next", "state": "blocked", "dependsOn": ["done"],
+             "riskContribution": "low"}]
+        cert_dir = self.runtime / "completion-certificates" / "demo"
+        cert_dir.mkdir(parents=True, exist_ok=True)
+        (cert_dir / "cert-b.json").write_text(json.dumps({"project": "demo", "workUnit": "done"}))
+        self.publish(payload)
+        _, unbound = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("blocked-story-without-binding:next", unbound["issues"])
+        # An open gate the story names explicitly is a real, checkable blocker.
+        self.cli(GATE, "create", "--project", "demo", "--gate", "next-decision",
+                 "--question", "Which way for next?", "--choices", "A,B",
+                 "--owner-only-category", "human-product-judgment-action", "--scope", "work-unit")
+        payload["productIncrement"]["stories"][1]["blockedByRef"] = "next-decision"
+        self.publish(payload)
+        _, bound = self.cli(STATUS, "show", "--project", "demo")
+        self.assertNotIn("blocked-story-without-binding:next", bound["issues"])
+        # A story whose dependency is genuinely unfinished is ordinary sequencing.
+        payload["productIncrement"]["stories"][0]["state"] = "executing"
+        payload["productIncrement"]["stories"][0].pop("acceptanceRef", None)
+        payload["productIncrement"]["stories"][1].pop("blockedByRef", None)
+        self.publish(payload)
+        _, sequenced = self.cli(STATUS, "show", "--project", "demo")
+        self.assertNotIn("blocked-story-without-binding:next", sequenced["issues"])
+
+    def test_finished_worker_awaiting_pickup_is_a_deadline_not_idleness(self):
+        # v3.4.23: counting the hand-off window as idle-ready-work made the healthy
+        # case look like neglect. Measured live: three finished workers waited 8-14
+        # minutes with preservation `pushed` while no lane ran at all.
+        self.base_project()
+        self.lease(state="handoff-ready", work_unit="wu-ready",
+                   last_heartbeat=self.now - 120_000)
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync()
+        payload["productIncrement"]["stories"] = [
+            {"id": "wu-ready", "title": "Handed off", "state": "ready", "dependsOn": [],
+             "riskContribution": "low", "workUnit": "wu-ready"}]
+        self.publish(payload)
+        _, fresh = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in fresh["issues"] if i.startswith("idle-ready-work")])
+        self.assertFalse([i for i in fresh["issues"] if i.startswith("handoff-unconsumed")])
+        # Past the grace the obligation is explicit: take the result.
+        self.lease(state="handoff-ready", work_unit="wu-ready",
+                   last_heartbeat=self.now - 3_600_000)
+        _, overdue = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("handoff-unconsumed:wu-ready", overdue["issues"])
+
+    def test_a_landed_standing_merge_must_reach_the_published_status(self):
+        # v3.4.23: the merge landed and was verified, but the status still described
+        # the pre-merge world, so the next story stayed parked behind finished work.
+        self.base_project()
+        receipt_dir = self.runtime / "standing-merges" / "demo"
+        receipt_dir.mkdir(parents=True, exist_ok=True)
+        (receipt_dir / "wu-merged-abc123abc123.json").write_text(json.dumps(
+            {"project": "demo", "workUnit": "wu-merged", "branch": "main"}))
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync()
+        payload["productIncrement"]["stories"] = [
+            {"id": "merged", "title": "Merged", "state": "accepted", "dependsOn": [],
+             "riskContribution": "low", "acceptanceRef": "wu-merged", "workUnit": "wu-merged"}]
+        self.publish(payload)
+        _, silent = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("merge-receipt-unpublished:wu-merged", silent["issues"])
+        payload["productIncrement"]["stories"][0]["mergeSha"] = "c" * 40
+        payload["productIncrement"]["stories"][0]["mergeAuthorityRef"] = "wu-merged"
+        self.publish(payload)
+        _, published = self.cli(STATUS, "show", "--project", "demo")
+        self.assertNotIn("merge-receipt-unpublished:wu-merged", published["issues"])
 
     def test_accepted_story_must_name_observed_acceptance_evidence(self):
         # v3.4.21: `accepted` builds the owner's counter and Done column, and was
