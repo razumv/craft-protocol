@@ -276,6 +276,30 @@ class SelfHealingV311Test(unittest.TestCase):
         _, d = self.cli("detect")
         self.assertNotIn("orphaned-dead-lane", [x["kind"] for x in d["observations"]])
 
+    def test_every_superseded_coordinator_session_is_detected_not_just_the_last(self):
+        # v3.4.32: the registry remembers only the immediate predecessor, so a chain
+        # of rotations drops earlier generations out of view and they live on
+        # forever. Observed live: five superseded coordinator sessions still open,
+        # three of them for a single project, cluttering the owner's list.
+        self.base()
+        for sid in ("gen7", "gen8", "gen9"):
+            self.manifest(sid, cwd="/tmp/project",
+                          labels=["coordinators", "agent-role::coordinator", "project::alpha"])
+        self.registry(sid="coord", predecessorSessionId="gen9")
+        self.manifest("coord", cwd="/tmp/project",
+                      labels=["coordinators", "agent-role::coordinator", "project::alpha"])
+        _, d = self.cli("detect")
+        stale = sorted(x["sessionId"] for x in d["observations"]
+                       if x["kind"] == "stale-coordinator-session")
+        self.assertEqual(stale, ["gen7", "gen8", "gen9"])
+        # Archiving them clears the condition; the live coordinator is never flagged.
+        for sid in ("gen7", "gen8", "gen9"):
+            self.manifest(sid, cwd="/tmp/project", archived=True,
+                          labels=["coordinators", "agent-role::coordinator", "project::alpha"])
+        _, cleared = self.cli("detect")
+        self.assertNotIn("stale-coordinator-session",
+                         [x["kind"] for x in cleared["observations"]])
+
     def test_live_predecessor_after_settled_handoff_emits_incident(self):
         # v3.4.19: registry validate has flagged predecessor-not-archived since
         # v3.4.8, but nothing woke anyone — the owner kept seeing two coordinators.

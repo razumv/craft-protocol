@@ -4,6 +4,13 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.32] — 2026-08-15
+
+### One coordinator per project, named so the owner can find it
+
+- a coordinator session must be named exactly `[<project>] Coordinator v<protocol-version>`; `coordinator-registry.py inspect/validate` reports `coordinator-name-nonconforming` and `coordinator-name-project-mismatch`. Successors are spawned by their predecessor, which named them whatever it liked — "l2 client", "Coordinator Handoff", "Coordinator Lifecycle Protocol" — until the owner's coordinator list no longer said which project or protocol version a row belonged to;
+- `stale-coordinator-session` flags **every** live coordinator-labelled session that is not its project's current one, not merely the immediate predecessor the registry still remembers. A chain of rotations (gen 8 → 9 → 10) drops earlier generations out of the registry's view and they stay open forever: five such sessions were live at once, three of them for a single project.
+
 ## [3.4.31] — 2026-08-15
 
 ### A gate names the effect, not the domain
@@ -434,7 +441,8 @@ Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's 
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.31...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.32...HEAD
+[3.4.32]: https://github.com/razumv/craft-protocol/compare/v3.4.31...v3.4.32
 [3.4.31]: https://github.com/razumv/craft-protocol/compare/v3.4.30...v3.4.31
 [3.4.30]: https://github.com/razumv/craft-protocol/compare/v3.4.29...v3.4.30
 [3.4.29]: https://github.com/razumv/craft-protocol/compare/v3.4.28...v3.4.29
