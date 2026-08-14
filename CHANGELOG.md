@@ -4,6 +4,12 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.12] — 2026-08-14
+
+### Gate cards finish their own identity
+
+- `sessions:create` options echo back but only name and flag persist on the observed runtime, so a gate card now finishes itself explicitly: `setLabels` (`owner-gate`, `project::<slug>`), `setSessionStatus` (`todo`) and `session:setModel` with the configured cheap connection/model. Cards created by v3.4.11 were correctly named but unlabeled, statusless and still on the workspace default model.
+
 ## [3.4.11] — 2026-08-14
 
 ### Inert, correctly-identified gate cards
@@ -239,7 +245,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.11...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.12...HEAD
+[3.4.12]: https://github.com/razumv/craft-protocol/compare/v3.4.11...v3.4.12
 [3.4.11]: https://github.com/razumv/craft-protocol/compare/v3.4.10...v3.4.11
 [3.4.10]: https://github.com/razumv/craft-protocol/compare/v3.4.9...v3.4.10
 [3.4.9]: https://github.com/razumv/craft-protocol/compare/v3.4.8...v3.4.9
