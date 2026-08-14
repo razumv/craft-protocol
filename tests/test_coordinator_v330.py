@@ -568,9 +568,9 @@ class StatusTests(Base):
             "stage": "complete",
             "stories": [
                 {"id": "profile", "title": "Inline subscriptions", "state": "accepted",
-                 "dependsOn": [], "riskContribution": "low"},
+                 "dependsOn": [], "riskContribution": "low", "acceptanceRef": refs[1]},
                 {"id": "history", "title": "Purchase history", "state": "accepted",
-                 "dependsOn": ["profile"], "riskContribution": "medium"}],
+                 "dependsOn": ["profile"], "riskContribution": "medium", "acceptanceRef": refs[1]}],
             "completionEvidence": {
                 key: {"eventKey": item["eventKey"], "revision": item["revision"],
                       "fingerprint": item["fingerprint"]}
@@ -867,6 +867,121 @@ class StatusTests(Base):
             payload["githubSync"] = bad
             cp, _ = self.publish(payload, ok=False)
             self.assertIn(needle, cp.stderr)
+
+    def test_accepted_story_must_name_observed_acceptance_evidence(self):
+        # v3.4.21: `accepted` builds the owner's counter and Done column, and was
+        # the only claim with no evidence requirement — fifteen accepted stories
+        # across six live projects were bound to nothing.
+        self.base_project()
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync()
+        payload["productIncrement"]["stories"] = [
+            {"id": "shipped", "title": "Shipped work", "state": "accepted",
+             "dependsOn": [], "riskContribution": "low"}]
+        self.publish(payload)
+        _, bare = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("story-accepted-without-evidence:shipped", bare["issues"])
+        # A named ref nobody observed reads as proof, so it is its own contradiction.
+        payload["productIncrement"]["stories"][0]["acceptanceRef"] = "invented-evidence"
+        self.publish(payload)
+        _, invented = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("story-acceptance-ref-not-observed:shipped", invented["issues"])
+        # A completion certificate for the story's work unit is admissible proof.
+        cert_dir = self.runtime / "completion-certificates" / "demo"
+        cert_dir.mkdir(parents=True, exist_ok=True)
+        (cert_dir / "SHIPPED-WORK-abc123.json").write_text(json.dumps(
+            {"project": "demo", "workUnit": "shipped-work", "auditVerdict": "PASS"}))
+        payload["productIncrement"]["stories"][0]["acceptanceRef"] = "SHIPPED-WORK-abc123"
+        self.publish(payload)
+        _, certified = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in certified["issues"] if i.startswith("story-accept")])
+
+    def test_merge_claims_are_verified_against_the_clone_not_the_declaration(self):
+        # The protocol cannot read GitHub, but it can read the clone: a declared
+        # merge commit either is an ancestor of the tracked default branch or is not.
+        repo = self.runtime.parent / "repo"
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+        (repo / "f").write_text("one")
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "one"], check=True, env=env)
+        merged = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                capture_output=True, text=True, check=True).stdout.strip()
+        # origin/main is what delivery means; a local branch is not delivery.
+        subprocess.run(["git", "-C", str(repo), "update-ref", "refs/remotes/origin/main", merged], check=True)
+        (repo / "f").write_text("two")
+        subprocess.run(["git", "-C", str(repo), "commit", "-qam", "two"], check=True, env=env)
+        unmerged = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True, check=True).stdout.strip()
+
+        self.base_project()
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync()
+        payload["delivery"] = {"repoPath": str(repo), "targetBranch": "main"}
+        payload["productIncrement"]["stories"] = [
+            {"id": "delivered", "title": "Delivered", "state": "accepted", "dependsOn": [],
+             "riskContribution": "low", "acceptanceRef": "cert-1", "mergeSha": merged}]
+        cert_dir = self.runtime / "completion-certificates" / "demo"
+        cert_dir.mkdir(parents=True, exist_ok=True)
+        (cert_dir / "cert-1.json").write_text(json.dumps({"project": "demo", "workUnit": "delivered"}))
+        self.publish(payload)
+        _, ok = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in ok["issues"] if i.startswith("merge-claim")])
+        # A commit that exists but never landed is an unverified claim, not delivery.
+        payload["productIncrement"]["stories"][0]["mergeSha"] = unmerged
+        self.publish(payload)
+        _, bad = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn(f"merge-claim-unverified:delivered@{unmerged[:12]}", bad["issues"])
+        # An unreadable repository fails closed instead of passing silently.
+        payload["delivery"]["repoPath"] = str(self.runtime / "no-such-repo")
+        self.publish(payload)
+        _, missing = self.cli(STATUS, "show", "--project", "demo")
+        self.assertTrue([i for i in missing["issues"] if i.startswith("delivery-repo-unreadable")])
+
+    def test_accepted_story_at_deploying_stage_needs_a_merge_commit(self):
+        self.base_project()
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync()
+        payload["githubSync"]["syncedStage"] = "deploying"
+        payload["productIncrement"]["stage"] = "deploying"
+        payload["productIncrement"]["stories"] = [
+            {"id": "shipped", "title": "Shipped", "state": "accepted", "dependsOn": [],
+             "riskContribution": "low", "acceptanceRef": "cert-2"}]
+        cert_dir = self.runtime / "completion-certificates" / "demo"
+        cert_dir.mkdir(parents=True, exist_ok=True)
+        (cert_dir / "cert-2.json").write_text(json.dumps({"project": "demo", "workUnit": "shipped"}))
+        payload["delivery"] = {"repoPath": str(self.runtime.parent), "targetBranch": "main"}
+        self.publish(payload)
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        # No .git means the repository claim fails closed first; the delivery gap is
+        # reported once a real clone is named.
+        self.assertTrue([i for i in show["issues"] if i.startswith("delivery-repo-unreadable")])
+
+    def test_own_pull_requests_must_be_finished_not_parked(self):
+        # Observed live: a green, conflict-free PR sat unmerged for three days while
+        # the project published `deploying`.
+        self.base_project()
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync()
+        payload["delivery"] = {"repoPath": str(self.runtime.parent),
+                               "openPullRequests": [
+                                   {"ref": "razumv/demo#7", "state": "green-clean",
+                                    "checkedAt": self.now - 4 * 3600 * 1000}]}
+        self.publish(payload)
+        _, parked = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("pull-request-unfinished:razumv/demo#7:green-clean", parked["issues"])
+        # A freshly checked PR is work in flight, not neglect.
+        payload["delivery"]["openPullRequests"][0]["checkedAt"] = self.now - 60_000
+        self.publish(payload)
+        _, fresh = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in fresh["issues"] if i.startswith("pull-request")])
+        # Review-required is somebody else's turn, but the check must stay fresh.
+        payload["delivery"]["openPullRequests"][0].update(
+            {"state": "review-required", "checkedAt": self.now - 8 * 3600 * 1000})
+        self.publish(payload)
+        _, stale = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("pull-request-check-stale:razumv/demo#7", stale["issues"])
 
     def test_one_self_granted_extension_escalates_the_second_returns_to_owner(self):
         # A proven deterministic cause with a single-scope fix does not need the

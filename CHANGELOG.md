@@ -4,6 +4,23 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.21] — 2026-08-14
+
+### An upgrade no longer disables self-healing
+
+- `install.sh` remembers whether the kill switch was absent before the install and removes it again after the payload lands and its tests pass. It still arms the switch *before* mutating anything, so a failed install leaves recovery disabled — but a successful one re-arms the fleet. Observed live: two upgrades left self-healing off for three hours while eleven conditions accumulated unacted, and nothing said so;
+- `recovery-incident.py detect`/`report` now carry `killSwitch` (`present`, `ageMs`, `observedConditions`, `staleWithOpenConditions`). While the switch is present nothing may be claimed, so the disabled state cannot heal itself — what it can do is stop being invisible past `CRAFT_KILL_SWITCH_STALE_SECONDS` (1800 s).
+
+### `accepted` and `delivered` become evidence-bound
+
+- every `accepted` story names `acceptanceRef` — an observed audit-verdict/observer-terminal/terminal-handoff event key, or a completion certificate for its `workUnit` — plus the `workUnit`. Missing is `story-accepted-without-evidence`; named-but-unobserved is `story-acceptance-ref-not-observed`, which is worse because it reads as proof. Measured before the rule: fifteen accepted stories across six projects, none bound to anything. Certificates take `--story-id` so the binding is two-way;
+- a new `delivery` declaration (`repoPath`, optional `targetBranch`, `openPullRequests`) makes delivery the **one field the protocol verifies itself**: a story's `mergeSha` must be an ancestor of `origin/<default branch>` in that clone, or it is `merge-claim-unverified`. The default branch is read from `origin/HEAD` rather than assumed, and only the merge commit is checked — under a squash merge the candidate commit legitimately never lands, so requiring it would flag healthy projects (measured against live certificates before the rule was written). At `deploying`/`demonstrating`/`complete`, an accepted story with no merge commit is `unmerged-delivery`;
+- declared open pull requests carry a duty: `green-clean` → merge, `conflicting` → rebase, `checks-failing` → fix or close, `review-required` → keep the check fresh. An actionable PR parked past `CRAFT_STATUS_PR_ACTION_GRACE_SECONDS` (3600 s) is `pull-request-unfinished`; a check older than `CRAFT_STATUS_PR_CHECK_STALE_SECONDS` (21600 s) is `pull-request-check-stale`. Observed live: a green, conflict-free PR unmerged for three days while its project published `deploying`.
+
+### Work that no machine could see
+
+- `unregistered-child-lane` — a child of a live coordinator with no registered lease, older than `CRAFT_UNREGISTERED_CHILD_SECONDS` (600 s). Without a lease an executor is invisible to idle-ready detection, dead-lane detection, watchdog liveness, worktree uniqueness, preservation proof and archivable backlog simultaneously, so real work reports as an idle project. Observed live: six such children across three projects, one of them running the owner-authorized correction attempt.
+
 ## [3.4.20] — 2026-08-14
 
 ### Fewer gates for the owner, more the fleet fixes itself
@@ -309,7 +326,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.20...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.21...HEAD
+[3.4.21]: https://github.com/razumv/craft-protocol/compare/v3.4.20...v3.4.21
 [3.4.20]: https://github.com/razumv/craft-protocol/compare/v3.4.19...v3.4.20
 [3.4.19]: https://github.com/razumv/craft-protocol/compare/v3.4.18...v3.4.19
 [3.4.18]: https://github.com/razumv/craft-protocol/compare/v3.4.17...v3.4.18
