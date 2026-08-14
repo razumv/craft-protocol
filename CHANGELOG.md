@@ -4,6 +4,15 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.30] — 2026-08-14
+
+### Authorizing a merge no longer requires proof that only the merge can produce
+
+- `standing-authority.py` now validates a **pre-merge** certificate: independent `PASS` on the exact candidate, green required CI, a head proven unchanged, no unresolved gates. It no longer demands `mergeSha`, `mergedMainRunIds` or `mergedMainAllSuccess` — evidence that exists only *after* the merge being authorized. `completion-certificate.py` gains `pre_merge_errors()` for exactly this judgement while `validate()` keeps its full post-merge contract;
+- the standing-merge receipt records `readbackOwed`, and the coordinator skill states the split: merging is not finishing, and the completion certificate written after the merge still carries the readback.
+
+Observed live: a project whose protected branch takes true merge commits reported the cycle precisely — "the certificate validator requires merged-master readback evidence before standing authority can authorize the merge that creates that evidence" — and stopped rather than working around it. Projects on squash merges had been hiding the same cycle by merging first and writing the receipt afterwards, which inverted authorization into a post-hoc stamp.
+
 ## [3.4.29] — 2026-08-14
 
 ### A gate exists to be answered
@@ -414,7 +423,8 @@ Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's 
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.29...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.30...HEAD
+[3.4.30]: https://github.com/razumv/craft-protocol/compare/v3.4.29...v3.4.30
 [3.4.29]: https://github.com/razumv/craft-protocol/compare/v3.4.28...v3.4.29
 [3.4.28]: https://github.com/razumv/craft-protocol/compare/v3.4.27...v3.4.28
 [3.4.27]: https://github.com/razumv/craft-protocol/compare/v3.4.26...v3.4.27

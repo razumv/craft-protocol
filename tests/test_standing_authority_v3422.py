@@ -86,6 +86,35 @@ class StandingAuthorityTest(unittest.TestCase):
         self.assertTrue(out["authorized"])
         self.assertEqual(out["refusals"], [])
 
+    def test_authorization_needs_pre_merge_proof_not_post_merge_readback(self):
+        # v3.4.30: requiring merged-branch readback *to authorize* the merge is a
+        # cycle — the readback needs the merge. Observed live: a project on true
+        # merge commits stalled on exactly this, while squash-merge projects quietly
+        # inverted the order and wrote receipts after merging.
+        self.grant()
+        pre = {"schemaVersion": 1, "project": "demo", "workUnit": "wu-1",
+               "storyId": "story-1", "candidateSha": self.candidate,
+               "auditedSha": self.candidate, "auditorSessionId": "auditor-1",
+               "auditVerdict": "PASS", "requiredCiRunIds": ["ci-1"],
+               "requiredCiAllSuccess": True, "unresolvedGates": [], "headUnchanged": True}
+        path = self.root / "pre.json"
+        path.write_text(json.dumps(pre))
+        _, out = self.check(cert=path)
+        self.assertTrue(out["authorized"], out["refusals"])
+        # The receipt records that the readback is still owed after the merge.
+        _, used = self.cli("use", "--project", "demo", "--work-unit", "wu-1",
+                           "--branch", "dev", "--certificate", str(path),
+                           "--repo", str(self.repo), "--session", "coord-1")
+        self.assertTrue(used["receipt"]["readbackOwed"])
+        # Pre-merge proof is still proof: a failed audit refuses exactly as before.
+        path.write_text(json.dumps({**pre, "auditVerdict": "FAIL"}))
+        _, failed = self.check(cert=path, ok=False)
+        self.assertIn("certificate:audit-not-pass", failed["refusals"])
+        # And red required CI refuses.
+        path.write_text(json.dumps({**pre, "requiredCiAllSuccess": False}))
+        _, red = self.check(cert=path, ok=False)
+        self.assertIn("certificate:required-ci-not-green", red["refusals"])
+
     def test_without_a_grant_nothing_is_authorized(self):
         cp, out = self.check(ok=False)
         self.assertEqual(cp.returncode, 4)
