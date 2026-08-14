@@ -48,7 +48,8 @@ BOOKKEEPING_KINDS = {"coordinator-status-missing", "coordinator-status-stale",
                      "external-wait-deadline"}
 LANE_RECOVERY_KINDS = {"worker-suspect", "worker-stalled", "worker-error"}
 HOUSEKEEPING_KINDS = {"cwd-collision", "orphaned-dead-lane", "preservation-unknown",
-                      "owner-gate-blocked", "job-exit-unreported", "predecessor-unarchived"}
+                      "owner-gate-blocked", "job-exit-unreported", "predecessor-unarchived",
+                      "stale-coordinator-session"}
 HOUSEKEEPING_QUOTA = int(os.environ.get("CRAFT_DRAIN_HOUSEKEEPING_QUOTA", "1"))
 DRAIN_LIMIT = int(os.environ.get("CRAFT_DRAIN_LIMIT", "3"))
 CONTROLLER_SILENT_SECONDS = int(os.environ.get("CRAFT_CONTROLLER_SILENT_SECONDS", "1800"))
@@ -70,6 +71,7 @@ ACTION_MATRIX = {
     "coordinator-pi-sigterm": ["wake-coordinator", "renew-request", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
     "coordinator-worker-terminal-status": ["wake-coordinator", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
     "predecessor-unarchived": ["wake-coordinator", "verify-preservation", "archive-reap-if-proven"],
+    "stale-coordinator-session": ["wake-coordinator", "verify-preservation", "archive-reap-if-proven"],
     "orphaned-dead-lane": ["verify-worktree-clean", "archive-reap-if-clean", "owner-escalation-if-dirty"],
     "unregistered-child-lane": ["wake-coordinator", "require-lease-registration", "release-slot-if-abandoned"],
     "controller-silent": ["inspect-admission-lane", "clear-deferred-probe", "owner-escalation"],
@@ -260,6 +262,26 @@ def collect_observations():
             # direct wake is futile, so the controller owns the recovery stages.
             out.append(observation("coordinator-worker-terminal-status", "high", project, sid,
                 {"sessionStatus": session_status, "generation": record.get("generation")}))
+        # The registry remembers only the immediate predecessor, so a chain of
+        # rotations (gen 8 -> 9 -> 10) drops the earlier generations out of view and
+        # they live on forever. Observed live: five superseded coordinator sessions
+        # still open, three of them for one project, cluttering the owner's list.
+        for other_id, other in sorted(manifests.items()):
+            if other.get("isArchived") or other_id == sid:
+                continue
+            labels = other.get("labels") or []
+            if "agent-role::coordinator" not in labels:
+                continue
+            if common.label_value(other, "project::") != project:
+                continue
+            if other_id in {str(record.get("pendingSessionId") or ""),
+                            str(record.get("successorSessionId") or "")}:
+                continue
+            stable = {"project": project, "supersededBy": sid}
+            out.append(observation("stale-coordinator-session", "medium", project, other_id,
+                {**stable, "sessionName": other.get("name"),
+                 "currentGeneration": record.get("generation")},
+                fingerprint_evidence=stable, coordinatorSessionId=sid))
         predecessor = str(record.get("predecessorSessionId") or "")
         accepted = int(record.get("transferAcceptedAt") or record.get("claimedAt") or 0)
         if (predecessor and record.get("state") in {"authoritative", "rotating"}

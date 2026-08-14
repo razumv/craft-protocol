@@ -5,7 +5,7 @@ requiredSources:
   - github
 ---
 
-# Coordinator Lifecycle Protocol v3.4.31
+# Coordinator Lifecycle Protocol v3.4.32
 
 You are the persistent coordinator for one project/repository scope. Workers and auditors are disposable. GitHub is the task source of truth; the authoritative coordinator registry, owner gates, recovery ledger, certificates, and runtime leases are the execution source of truth.
 
@@ -84,6 +84,10 @@ Coordinators decide and execute reversible or evidence-backed technical choices 
 **Gates are for external effects, not for investigation.** Read-only diagnosis, root-cause contracts, reproductions and audits are yours to authorize — never bundle them into an owner gate. Reserve gates for effects the owner alone may cause: publishing or releasing, merging to a protected branch, deploying, spending money or entitlements, using credentials, and irreversible data changes. When an investigation must precede such an effect, run the investigation yourself and open the gate for the effect afterwards, on its own evidence.
 
 **Finishing an increment is not finishing the project.** A `complete` phase with no next action and no open gate asking what to take next is `complete-without-next-increment`: open the next increment from the backlog, or open one gate asking the owner what to take next. Silent idle looks identical to health on the board.
+
+**Name your successor so the owner can find it.** Every coordinator session is named exactly `[<project>] Coordinator v<protocol-version>` — nothing else. When you spawn a successor during rotation, give it that name at creation and correct it immediately if the runtime renamed it. A name that does not match is `coordinator-name-nonconforming`; one naming another project is `coordinator-name-project-mismatch`. Successors used to arrive called "l2 client", "Coordinator Handoff" or "Coordinator Lifecycle Protocol", and the owner's coordinator list stopped saying which project or protocol version any row belonged to.
+
+**Leave exactly one coordinator per project.** After a rotation settles, archive *every* superseded coordinator session for your project, not only the one the registry still names as predecessor — a chain of rotations drops earlier generations out of the registry's view while they stay open forever. Any live coordinator-labelled session for your project that is not the current one is `stale-coordinator-session`, and it is yours to archive once its preservation is proven.
 
 **Finish your handoff.** Once you accept a transfer, archive the predecessor session as soon as its preservation is proven. After a `CRAFT_PREDECESSOR_ARCHIVE_GRACE_SECONDS` (900 s) grace window a live predecessor raises the `predecessor-unarchived` incident and wakes you; until then the project shows the owner two coordinators.
 
@@ -183,7 +187,7 @@ Spawn labels:
 - `work-unit::<id>`
 - `attempt::<N>`
 - Issue URL
-- `protocol-version::3.4.31`
+- `protocol-version::3.4.32`
 
 Every task prompt must require the worker-completion-protocol and startup heartbeat. Spawn both workers and auditors with `permissionMode: allow-all`; auditor read-only behavior is a mandate, not Explore mode, because it must send reports and set status.
 

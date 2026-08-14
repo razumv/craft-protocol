@@ -30,6 +30,11 @@ FALLBACK_TTL = int(os.environ.get("CRAFT_FALLBACK_TTL_SECONDS", "3600"))
 VALID_STATES = {"authoritative", "rotating", "hold", "superseded", "needs-owner"}
 
 
+# [<project>] Coordinator v<major>.<minor>.<patch> — nothing else, so the list the
+# owner scans says project and protocol version on every row.
+COORDINATOR_NAME = re.compile(r"^\[(?P<project>[a-z0-9][a-z0-9._-]{0,63})\] Coordinator v(?P<version>\d+\.\d+\.\d+)$")
+
+
 def clean_project(raw: str) -> str:
     value = re.sub(r"[^a-z0-9._-]+", "-", raw.strip().lower()).strip("-")
     if not value:
@@ -291,6 +296,16 @@ def inspect_one(project: str) -> dict[str, Any]:
             if isinstance(tokens, int) and tokens >= max_tokens:
                 issues.append(f"coordinator-complexity-threshold:tokens={tokens}")
         if manifest.get("projectId") != value.get("projectId"): issues.append("native-project-binding-drift")
+        # A coordinator's session name is how the owner finds it among hundreds.
+        # Successors are spawned by their predecessor, which named them whatever it
+        # liked — "l2 client", "Coordinator Handoff", "Coordinator Lifecycle
+        # Protocol" — so the owner's coordinator list stopped saying which project
+        # or protocol anything belonged to. The format is fixed and checkable.
+        name = str(manifest.get("name") or "")
+        if not COORDINATOR_NAME.fullmatch(name):
+            issues.append("coordinator-name-nonconforming")
+        elif COORDINATOR_NAME.fullmatch(name).group("project") != project:
+            issues.append("coordinator-name-project-mismatch")
         if manifest.get("llmConnection") != value.get("connection") or manifest.get("model") != value.get("model"): issues.append("provider-record-drift")
         labels = set(manifest.get("labels") or [])
         for required in ("coordinators", "agent-role::coordinator"):

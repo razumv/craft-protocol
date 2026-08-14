@@ -17,9 +17,9 @@ class OrchestrationV320Test(unittest.TestCase):
             "CRAFT_RUNTIME": str(self.runtime), "CRAFT_COORDINATOR_TTL_SECONDS": "1", "CRAFT_FALLBACK_TTL_SECONDS": "1"})
     def tearDown(self): self.temp.cleanup()
     def manifest(self, sid, project="demo", model="pi/gpt-5.6-sol", connection="chatgpt-plus", archived=False,
-                 labels=None, messages=1, tokens=1):
+                 labels=None, messages=1, tokens=1, name=None):
         d = self.sessions / sid; d.mkdir(exist_ok=True)
-        value = {"id": sid, "name": sid, "createdAt": int(time.time()*1000), "isArchived": archived,
+        value = {"id": sid, "name": name or f"[{project}] Coordinator v3.4.32", "createdAt": int(time.time()*1000), "isArchived": archived,
             "sessionStatus": "todo", "workingDirectory": str(self.root/f"wt-{sid}"), "projectId": f"pid-{project}",
             "model": model, "llmConnection": connection, "messageCount": messages, "tokenUsage": {"totalTokens": tokens},
             "labels": labels or ["coordinators", "agent-role::coordinator", f"project::{project}", "protocol-version::3"]}
@@ -160,6 +160,25 @@ class OrchestrationV320Test(unittest.TestCase):
         self.assertNotEqual(p.returncode,0)
         self.exec_tool("owner-gate.py","resolve","--project","gve","--gate",gate_id,"--choice","RESUME","--authority","direct-owner","--evidence","resume again")
         self.exec_tool("owner-gate.py","check","--project","gve","--action","spawn")
+    def test_08b_coordinator_name_must_say_project_and_protocol(self):
+        # v3.4.32: successors are spawned by their predecessor, which named them
+        # whatever it liked — "l2 client", "Coordinator Handoff", "Coordinator
+        # Lifecycle Protocol" — so the owner's coordinator list stopped saying which
+        # project or protocol version a row belonged to, while superseded sessions
+        # piled up beside the live one.
+        self.manifest("coord", name="Coordinator Handoff")
+        self.exec_tool("coordinator-registry.py", "claim", "--project", "demo",
+                       "--session", "coord", "--ttl", "3600")
+        p = self.exec_tool("coordinator-registry.py", "inspect", "--project", "demo", ok=False)
+        self.assertIn("coordinator-name-nonconforming", p.stdout)
+        self.manifest("coord", name="[demo] Coordinator v3.4.32")
+        p = self.exec_tool("coordinator-registry.py", "inspect", "--project", "demo")
+        self.assertNotIn("coordinator-name-nonconforming", p.stdout)
+        # A conforming name that names someone else's project is its own defect.
+        self.manifest("coord", name="[other] Coordinator v3.4.32")
+        p = self.exec_tool("coordinator-registry.py", "inspect", "--project", "demo", ok=False)
+        self.assertIn("coordinator-name-project-mismatch", p.stdout)
+
     def test_09_gate_direct_owner_required(self):
         self.exec_tool("owner-gate.py","create","--project","demo","--gate","g1","--question","Q?","--choices","A,B","--owner-only-category","human-product-judgment-action","--external-effect","product-direction-decision","--scope","merge"); p=self.exec_tool("owner-gate.py","resolve","--project","demo","--gate","g1","--choice","A","--authority","coordinator","--evidence","relay",ok=False); self.assertNotEqual(p.returncode,0)
     def test_09b_technical_transition_cannot_create_owner_gate(self):
