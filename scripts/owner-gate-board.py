@@ -7,9 +7,12 @@ owner gate gets a `🚦 <project> · <gateId>` card whose notes carry the exact
 question and choices. The owner resolves a gate by typing exactly one of its
 choices as a message into the card; the bridge reads only owner-typed user
 messages from the durable session log, resolves through `owner-gate.py` with
-`direct-owner` authority and the message as auditable evidence, then marks and
-archives the card. A gate resolved elsewhere archives its card on the next
-pass. Project HOLD gates require the exact `RESUME` choice, unchanged.
+`direct-owner` authority and the message as auditable evidence, then renames the
+card to its resolved outcome and closes its status. The card stays visible in the
+closed column for `CRAFT_BOARD_DONE_RETENTION_SECONDS` before being archived, so
+the owner sees the result of their own decision. A gate resolved elsewhere is
+completed the same way on the next pass. Project HOLD gates require the exact
+`RESUME` choice, unchanged.
 """
 from __future__ import annotations
 import argparse
@@ -37,6 +40,9 @@ WORKSPACE_ID = os.environ.get("CRAFT_WORKSPACE_ID", "")
 # provider turn, and any turn the owner's choice starts is cancelled at once.
 CARD_MODEL = os.environ.get("CRAFT_BOARD_MODEL", "")
 CARD_CONNECTION = os.environ.get("CRAFT_BOARD_CONNECTION", "")
+# A resolved card stays visible in the board's closed column for this long, so the
+# owner sees the outcome of their own decision instead of a card vanishing at once.
+DONE_RETENTION_MS = int(os.environ.get("CRAFT_BOARD_DONE_RETENTION_SECONDS", "3600")) * 1000
 SCHEMA = 1
 
 
@@ -115,9 +121,14 @@ def card_notes(gate: dict[str, Any]) -> str:
             f"с authority `direct-owner` и ссылкой на это сообщение как evidence.\n")
 
 
-def close_card(session_id: str, title: str) -> None:
+def complete_card(session_id: str, title: str) -> None:
+    """Show the decision on the board: rename to the resolved title and close the
+    status. Archival is deferred so the outcome stays readable."""
     cli("invoke", "sessions:command", json.dumps(session_id), json.dumps({"type": "rename", "name": title}))
     cli("invoke", "sessions:command", json.dumps(session_id), json.dumps({"type": "setSessionStatus", "state": "done"}))
+
+
+def archive_card(session_id: str) -> None:
     cli("invoke", "sessions:command", json.dumps(session_id), json.dumps({"type": "archive"}))
 
 
@@ -129,7 +140,17 @@ def cmd_sync(args: argparse.Namespace) -> int:
         cards: dict[str, Any] = board.get("cards") or {}
         gates = {board_key(g): g for g in open_gates()}
 
-        # Cards whose gate closed (resolved anywhere) are completed and archived.
+        # Retained resolved cards are archived once their review window passes.
+        retained: dict[str, Any] = board.get("retained") or {}
+        for key in list(retained):
+            row = retained[key]
+            if now - int(row.get("completedAt") or 0) >= DONE_RETENTION_MS:
+                actions.append({"action": "archive-retained-card", "gate": key})
+                if args.apply:
+                    archive_card(str(row["sessionId"]))
+                retained.pop(key)
+
+        # Cards whose gate closed (resolved anywhere) are completed and retained.
         for key in list(cards):
             card = cards[key]
             project, gate_id = key.split("::", 1)
@@ -138,7 +159,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
                 choice = (gate or {}).get("choice") or "resolved"
                 actions.append({"action": "complete-card", "gate": key, "choice": choice})
                 if args.apply:
-                    close_card(card["sessionId"], f"✅ {project} · {gate_id} → {choice}")
+                    complete_card(card["sessionId"], f"✅ {project} · {gate_id} → {choice}")
+                retained[key] = {"sessionId": card["sessionId"], "completedAt": now, "choice": choice}
                 cards.pop(key)
 
         # Open gates without a card get one.
@@ -204,21 +226,23 @@ def cmd_sync(args: argparse.Namespace) -> int:
                     actions.append({"action": "resolve-failed", "gate": key,
                                     "error": (proc.stderr or proc.stdout).strip()[:200]})
                     continue
-                close_card(str(card["sessionId"]),
-                           f"✅ {gate.get('project')} · {gate.get('gateId')} → {choice}")
+                complete_card(str(card["sessionId"]),
+                              f"✅ {gate.get('project')} · {gate.get('gateId')} → {choice}")
+                retained[key] = {"sessionId": card["sessionId"], "completedAt": now, "choice": choice}
                 cards.pop(key, None)
 
         board["cards"] = cards
+        board["retained"] = retained
         if args.apply:
             common.atomic_json(BOARD, board)
-    print(json.dumps({"applied": args.apply, "actions": actions,
-                      "openGates": len(gates), "cards": len(cards)}, ensure_ascii=False, indent=2))
+    print(json.dumps({"applied": args.apply, "actions": actions, "openGates": len(gates),
+                      "cards": len(cards), "retained": len(retained)}, ensure_ascii=False, indent=2))
     return 0
 
 
 def cmd_report(_: argparse.Namespace) -> int:
     board = common.read_json(BOARD) or {"cards": {}}
-    print(json.dumps({"cards": board.get("cards") or {},
+    print(json.dumps({"cards": board.get("cards") or {}, "retained": board.get("retained") or {},
                       "openGates": [board_key(g) for g in open_gates()]}, ensure_ascii=False, indent=2))
     return 0
 

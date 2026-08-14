@@ -113,11 +113,13 @@ class GateBoardTest(unittest.TestCase):
         self.assertEqual(gate["choice"], "SHIP")
         self.assertEqual(gate["authority"], "direct-owner")
         self.assertIn("card-1", gate["authorityEvidence"])
-        # Card completed and archived; mapping dropped.
-        archived = [c for c in self.cli_calls()
-                    if c[0] == "invoke" and len(c) > 3 and '"archive"' in c[3]]
-        self.assertTrue(archived)
+        # Card completed, closed and retained for owner review; mapping dropped.
+        payloads = [json.loads(c[3]) for c in self.cli_calls()
+                    if c[0] == "invoke" and c[1] == "sessions:command" and len(c) > 3]
+        self.assertTrue(any(p.get("type") == "setSessionStatus" and p.get("state") == "done"
+                            for p in payloads))
         self.assertEqual(self.board()["cards"], {})
+        self.assertEqual(list(self.board()["retained"]), ["demo::ship-decision"])
 
     def test_unrecognized_and_ambiguous_choices_never_resolve(self):
         self.make_gate(choices="SHIP,ship-later")
@@ -140,6 +142,37 @@ class GateBoardTest(unittest.TestCase):
         _, gates = self.run_tool(GATE, "list", "--project", "demo")
         self.assertEqual(gates["gates"][0]["state"], "resolved")
 
+    def test_resolved_card_is_retained_in_done_then_archived(self):
+        # The owner should see the outcome of their own decision on the board, so
+        # a resolved card is renamed and closed but archived only after the
+        # retention window.
+        self.make_gate()
+        self.run_tool(BOARD, "sync", "--apply")
+        self.owner_types("card-1", "SHIP")
+        self.env["CRAFT_BOARD_DONE_RETENTION_SECONDS"] = "3600"
+        _, out = self.run_tool(BOARD, "sync", "--apply")
+        self.assertIn("resolve", [a["action"] for a in out["actions"]])
+        payloads = [json.loads(c[3]) for c in self.cli_calls()
+                    if c[0] == "invoke" and c[1] == "sessions:command" and len(c) > 3]
+        self.assertTrue(any(p.get("type") == "rename" and p.get("name", "").startswith("\u2705")
+                            for p in payloads))
+        self.assertTrue(any(p.get("type") == "setSessionStatus" and p.get("state") == "done"
+                            for p in payloads))
+        self.assertFalse(any(p.get("type") == "archive" for p in payloads))
+        board = self.board()
+        self.assertEqual(list(board["retained"]), ["demo::ship-decision"])
+        self.assertEqual(board["cards"], {})
+        # Nothing changes while the window is open.
+        _, held = self.run_tool(BOARD, "sync", "--apply")
+        self.assertEqual([a["action"] for a in held["actions"]], [])
+        # A zero window archives it on the next pass.
+        self.env["CRAFT_BOARD_DONE_RETENTION_SECONDS"] = "0"
+        _, aged = self.run_tool(BOARD, "sync", "--apply")
+        self.assertIn("archive-retained-card", [a["action"] for a in aged["actions"]])
+        self.assertTrue(any('"archive"' in c[3] for c in self.cli_calls()
+                            if c[0] == "invoke" and len(c) > 3))
+        self.assertEqual(self.board()["retained"], {})
+
     def test_gate_resolved_elsewhere_completes_card(self):
         self.make_gate()
         self.run_tool(BOARD, "sync", "--apply")
@@ -148,6 +181,7 @@ class GateBoardTest(unittest.TestCase):
         _, out = self.run_tool(BOARD, "sync", "--apply")
         self.assertIn("complete-card", [a["action"] for a in out["actions"]])
         self.assertEqual(self.board()["cards"], {})
+        self.assertEqual(list(self.board()["retained"]), ["demo::ship-decision"])
 
 
 if __name__ == "__main__":

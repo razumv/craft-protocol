@@ -1,4 +1,4 @@
-# Protocol v3.4.15 defaults
+# Protocol v3.4.16 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -112,6 +112,7 @@ Unresolved re-wake (3.4.14): consumed wake re-issued up to 2x after 1800s quiet,
 Idle-ready detection (3.4.14): ready/executing story with no lane/wait/work-observer commitment → idle-ready-work
 Work observers (3.4.15):       only worker-lease and external-wait commitments prove execution; review/gate promises do not
 Self-review churn (3.4.15):    >=2 timed-out scheduled reviews with no execution → scheduled-review-churn
+Gate card retention (3.4.16):  resolved card renamed ✅ + status done, archived after 3600s (CRAFT_BOARD_DONE_RETENTION_SECONDS)
 Rotation adoption (3.4.3):     lease parent rebinds to registry successor via activeChildren; labels stay historical
 Evidence adoption (3.4.7):     inbox adopt re-addresses predecessor events, immutable bindings survive; waits rebind on reconcile
 Block supersede (3.4.3):       durable block of a superseded target identity yields to the new generation's cycle

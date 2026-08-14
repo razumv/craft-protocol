@@ -48,8 +48,9 @@ class OrchestrationV320Test(unittest.TestCase):
                       (ROOT / "skills/coordinator-lifecycle-protocol/SKILL.md").read_text())
         self.assertIn(f"# Worker Completion Protocol {version}",
                       (ROOT / "skills/worker-completion-protocol/SKILL.md").read_text())
-        self.assertIn(f"Protocol {version}",
-                      (ROOT / "skills/self-healing-controller/SKILL.md").read_text())
+        controller = (ROOT / "skills/self-healing-controller/SKILL.md").read_text()
+        self.assertIn(f"# Self-Healing Controller — Protocol {version}", controller)
+        self.assertIn(f"Craft Protocol {version} incidents", controller)
         self.assertIn(f"(canonical {version})", (ROOT / "scripts/coordinator-kickoff.md").read_text())
         self.assertIn(f"protocol v{released}.", (ROOT / "install.sh").read_text())
         self.assertIn(f'PROTOCOL_VERSION = "{version}"',
