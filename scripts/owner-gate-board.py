@@ -186,6 +186,12 @@ def cmd_sync(args: argparse.Namespace) -> int:
                 if not session_id:
                     fail(f"card creation returned no session id for {key}")
                 cli("invoke", "sessions:setNotes", json.dumps(session_id), json.dumps(card_notes(gate)))
+                # The runtime suppresses the created-event broadcast for sessions it
+                # did not create for a renderer, so a UI that learns about the card
+                # some other way shows its default title ("New chat") until it
+                # rehydrates. An explicit rename emits an update the UI does apply.
+                cli("invoke", "sessions:command", json.dumps(session_id),
+                    json.dumps({"type": "rename", "name": options["name"]}))
                 # Creation options echo back but only name/flag persist on the
                 # observed runtime; labels, status and model need their exact
                 # commands, so the card is finished explicitly rather than hoped for.

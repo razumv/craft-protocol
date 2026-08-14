@@ -99,6 +99,12 @@ class GateBoardTest(unittest.TestCase):
         self.assertTrue(any('"setLabels"' in c[3] for c in follow))
         self.assertTrue(any('"setSessionStatus"' in c[3] for c in follow))
         self.assertTrue(any(c[1] == "session:setModel" for c in self.cli_calls()))
+        # An explicit rename after creation makes the owner-facing title reach a UI
+        # that never saw the suppressed created-event.
+        renames = [json.loads(c[3]) for c in self.cli_calls()
+                   if c[0] == "invoke" and c[1] == "sessions:command" and len(c) > 3]
+        self.assertTrue(any(p.get("type") == "rename" and p.get("name") == options["name"]
+                            for p in renames))
         kinds = [c[1] for c in self.cli_calls() if c[0] == "invoke"]
         self.assertIn("sessions:setNotes", kinds)
         # The owner types the exact choice into the card.
