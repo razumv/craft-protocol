@@ -93,6 +93,12 @@ class GateBoardTest(unittest.TestCase):
         self.assertTrue(options["isFlagged"])
         self.assertEqual(options["model"], "pi/gpt-5.4-mini")
         self.assertEqual(options["llmConnection"], "chatgpt-plus")
+        # Creation options are not enough on the observed runtime: labels, status
+        # and model are finished with their exact commands.
+        follow = [c for c in self.cli_calls() if c[0] == "invoke" and len(c) > 3]
+        self.assertTrue(any('"setLabels"' in c[3] for c in follow))
+        self.assertTrue(any('"setSessionStatus"' in c[3] for c in follow))
+        self.assertTrue(any(c[1] == "session:setModel" for c in self.cli_calls()))
         kinds = [c[1] for c in self.cli_calls() if c[0] == "invoke"]
         self.assertIn("sessions:setNotes", kinds)
         # The owner types the exact choice into the card.

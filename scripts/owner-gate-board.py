@@ -164,6 +164,16 @@ def cmd_sync(args: argparse.Namespace) -> int:
                 if not session_id:
                     fail(f"card creation returned no session id for {key}")
                 cli("invoke", "sessions:setNotes", json.dumps(session_id), json.dumps(card_notes(gate)))
+                # Creation options echo back but only name/flag persist on the
+                # observed runtime; labels, status and model need their exact
+                # commands, so the card is finished explicitly rather than hoped for.
+                cli("invoke", "sessions:command", json.dumps(session_id),
+                    json.dumps({"type": "setLabels", "labels": options["labels"]}))
+                cli("invoke", "sessions:command", json.dumps(session_id),
+                    json.dumps({"type": "setSessionStatus", "state": "todo"}))
+                if CARD_MODEL:
+                    cli("invoke", "session:setModel", json.dumps(session_id), json.dumps(WORKSPACE_ID),
+                        json.dumps(CARD_MODEL), json.dumps(CARD_CONNECTION or ""))
                 cards[key] = {"sessionId": session_id, "createdAt": now, "lastSeenTs": now}
 
         # Owner-typed choices resolve their gates.
