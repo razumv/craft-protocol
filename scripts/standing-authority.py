@@ -141,7 +141,13 @@ def refusals(authority: dict[str, Any] | None, certificate: dict[str, Any] | Non
             out.append("certificate-project-mismatch")
         if str(certificate.get("workUnit") or "") != work_unit:
             out.append("certificate-work-unit-mismatch")
-        for error in cert_tool.validate(certificate):
+        # Authorization is a pre-merge judgement: an independent PASS on this exact
+        # candidate, green required CI, a head proven unchanged, no unresolved gates.
+        # The merged-branch readback belongs to the completion certificate written
+        # after the merge — demanding it here made authorization impossible on any
+        # branch that takes real merge commits, and turned it into a post-hoc stamp
+        # wherever squash merges hid the cycle.
+        for error in cert_tool.pre_merge_errors(certificate):
             out.append(f"certificate:{error}")
     gates = blocking_gates(project, work_unit)
     if gates:
@@ -237,6 +243,9 @@ def cmd_use(args: argparse.Namespace) -> int:
                "candidateSha": certificate.get("candidateSha"),
                "certificatePath": str(Path(args.certificate).expanduser()),
                "riskTier": args.risk_tier, "coordinatorSessionId": args.session,
+               # The merge is authorized, the proof that it landed cleanly is not yet
+               # written: the completion certificate still owes merged-branch readback.
+               "readbackOwed": True,
                "authorityGrantedAt": (result.get("authority") or {}).get("grantedAt"),
                "usedAt": result["checkedAt"]}
     candidate = str(certificate.get("candidateSha") or "")

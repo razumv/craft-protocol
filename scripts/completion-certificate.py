@@ -16,6 +16,26 @@ ROOT = common.RUNTIME / "completion-certificates"; SCHEMA = 1
 SHA = re.compile(r"^[0-9a-f]{7,64}$")
 
 
+# Evidence that can only exist after the merge. Requiring it *to authorize* the
+# merge is a cycle: standing authority asks for a certificate, the certificate asks
+# for merged-branch readback, and the readback needs the merge. Observed live on
+# 2026-08-14: a project with true merge commits stalled on exactly this, while
+# projects on squash merges silently inverted the order and wrote their receipts
+# after merging, turning authorization into a rubber stamp.
+POST_MERGE_KEYS = ("mergeSha", "mergedMainRunIds", "mergedMainAllSuccess")
+
+
+def pre_merge_errors(value: dict[str, Any]) -> list[str]:
+    """What must be true *before* a merge may be authorized.
+
+    Everything the full certificate demands except the post-merge readback: an
+    independent PASS on this exact candidate, green required CI, a head proven
+    unchanged, and no unresolved gates."""
+    return [e for e in validate(value)
+            if not any(key.lower() in e.lower() for key in POST_MERGE_KEYS)
+            and e not in {"merged-main-not-green"}]
+
+
 def validate(value: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     required = ["project", "workUnit", "candidateSha", "auditedSha", "auditorSessionId", "auditVerdict", "requiredCiRunIds", "mergeSha", "mergedMainRunIds", "unresolvedGates"]
