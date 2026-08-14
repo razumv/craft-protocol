@@ -158,6 +158,52 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         if ok and cp.returncode: self.fail(cp.stdout+cp.stderr)
         return cp,json.loads(cp.stdout)
     def apply(self,ok=True,env=None): return self.cli("tick","--controller-session","controller","--apply",ok=ok,env=env)
+    def broken_harness(self):
+        """A probe that cannot answer — the exact 2026-08-14 production failure."""
+        self.harness.write_text("#!/bin/sh\nexit 9\n"); self.harness.chmod(0o755)
+
+    def test_unobservable_probe_defers_and_only_blocks_when_it_persists(self):
+        # v3.4.25: being unable to look is not evidence of danger. One failed
+        # controller-harness probe used to block the wake lane permanently: the
+        # controller went 56 minutes without a turn and the ledger grew to 74 open
+        # conditions while every project looked merely busy.
+        self.incident()
+        self.broken_harness()
+        cp, out = self.apply(ok=False)
+        state = self.controller_state()
+        self.assertEqual(state["phase"], "probe-deferred")
+        self.assertEqual(state["probeFailureCount"], 1)
+        self.assertIn("harness proof unavailable", state["probeFailureReason"])
+        # Each unavailable probe spends budget rather than passing a verdict.
+        self.apply(ok=False); self.apply(ok=False)
+        state = self.controller_state()
+        self.assertEqual(state["phase"], "blocked")
+        self.assertIn("probe-unavailable-repeatedly", state["reason"])
+
+    def test_a_recovered_probe_resumes_the_lane_and_clears_the_count(self):
+        self.incident()
+        self.broken_harness()
+        self.apply(ok=False)
+        self.assertEqual(self.controller_state()["probeFailureCount"], 1)
+        # The probe answers again: the lane delivers, and the failure count goes.
+        self.harness.write_text('#!/bin/sh\necho \'{"healthy":true,"rows":[{"sessionId":"controller","sessionRole":"recovery-controller","state":"active"}]}\'\n')
+        self.harness.chmod(0o755)
+        self.apply()
+        state = self.controller_state()
+        self.assertNotIn("probeFailureCount", state)
+        self.assertIn(state["phase"], {"delivered", "pending-consumption", "consumed"})
+
+    def test_a_proven_unsafe_condition_still_blocks_at_once(self):
+        # Ambiguity about *which* controller is live is proven danger, not a
+        # missing observation, and must keep its immediate durable block.
+        self.incident()
+        self.harness.write_text('#!/bin/sh\necho \'{"healthy":true,"rows":[{"sessionId":"controller","sessionRole":"recovery-controller","state":"active"},{"sessionId":"other","sessionRole":"recovery-controller","state":"active"}]}\'\n')
+        self.harness.chmod(0o755)
+        self.apply(ok=False)
+        state = self.controller_state()
+        self.assertEqual(state["phase"], "blocked")
+        self.assertIn("uniquely live", state["reason"])
+
     def direct_state(self):
         digest=hashlib.sha256(b"alpha").hexdigest()[:20]
         return json.loads((self.runtime/f"self-healing/coordinator-ticks/{digest}.json").read_text())

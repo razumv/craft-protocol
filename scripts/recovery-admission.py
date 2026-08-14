@@ -36,7 +36,7 @@ STATE = Path(os.environ.get("CRAFT_ADMISSION_STATE", RUNTIME / "self-healing/adm
 TICK_STATES = Path(os.environ.get("CRAFT_COORDINATOR_TICK_STATES", RUNTIME / "self-healing/coordinator-ticks")).expanduser()
 LOCK = Path(os.environ.get("CRAFT_ADMISSION_LOCK", RUNTIME / "self-healing/admission.lock")).expanduser()
 DISABLED = Path(os.environ.get("CRAFT_SELF_HEALING_DISABLED", RUNTIME / "self-healing.disabled")).expanduser()
-PROTOCOL_VERSION = "v3.4.24"
+PROTOCOL_VERSION = "v3.4.25"
 AUTOMATION_ID = os.environ.get("CRAFT_RECOVERY_NOTIFIER_AUTOMATION_ID", "a322-admission")
 LEGACY_AUTOMATION_IDS = {"a321-notifier", "a31101", "a31102"}
 CONTROLLER_ACTION_ID = "a322-controller-recovery"
@@ -52,6 +52,7 @@ RECOVERY_MIN_AGE_MS = RECOVERY_MIN_AGE_SECONDS * 1000
 # A consumed wake whose condition persists is re-issued a bounded number of times
 # after a quiet period; then the incidents fall through to the controller lane.
 MAX_REWAKES = int(os.environ.get("CRAFT_ADMISSION_MAX_REWAKES", "2"))
+MAX_PROBE_FAILURES = int(os.environ.get("CRAFT_ADMISSION_MAX_PROBE_FAILURES", "3"))
 REWAKE_QUIET_MS = int(os.environ.get("CRAFT_ADMISSION_REWAKE_QUIET_SECONDS", "1800")) * 1000
 NOW_MS = lambda: int(os.environ.get("CRAFT_TEST_NOW_MS", "0")) or int(time.time() * 1000)
 
@@ -86,6 +87,18 @@ class TransientRpcError(AdmissionError):
 
 class DeliveryUnknown(AdmissionError):
     """A target mutation may have succeeded and must be retried idempotently."""
+
+
+class ProbeUnavailable(AdmissionError):
+    """A safety fact could not be *observed* — not a proven-unsafe condition.
+
+    Being unable to look is not evidence of danger. A durable block belongs to
+    conditions proven unsafe (ambiguous controller identity, runtime mismatch,
+    foreign workspace); a probe that timed out or returned garbage must be retried
+    and only becomes durable after it fails repeatedly. Observed live 2026-08-14:
+    one failed controller-harness probe blocked the wake lane permanently, the
+    controller went 56 minutes without a turn, and the incident ledger grew to 74
+    open conditions while every project looked merely busy."""
 
 
 class StateError(AdmissionError):
@@ -172,7 +185,7 @@ def require_persistent_controller(session_id: str) -> dict[str, Any]:
         rows = report.get("rows", [])
         matches = [item for item in rows if item.get("sessionId") == session_id]
     except Exception as exc:
-        raise AdmissionError("controller harness proof unavailable") from exc
+        raise ProbeUnavailable("controller harness proof unavailable") from exc
     # The singleton invariant is "no other live controller", not "this controller
     # already registered". A runtime restart kills every harness, so demanding a
     # proven-active receipt before delivery self-deadlocks the controller lane:
@@ -814,6 +827,28 @@ def recover(state: dict[str, Any], inspection: dict[str, Any], token: str, args:
             "processingGeneration": advanced}
 
 
+def probe_deferral(state: dict[str, Any], now: int, reason: str) -> tuple[dict[str, Any], bool]:
+    """Record an unobservable safety fact and say whether the budget is spent.
+
+    Each consecutive failure to observe increments the counter; a successful cycle
+    clears it. Only a repeatedly unavailable probe becomes durable, and then with a
+    reason that names the real problem instead of implying proven danger."""
+    deferred = dict(state)
+    count = int(deferred.get("probeFailureCount") or 0) + 1
+    deferred.update(phase="probe-deferred", probeFailureCount=count,
+                    probeFailureReason=reason, probeDeferredAt=now)
+    return deferred, count >= MAX_PROBE_FAILURES
+
+
+def clear_probe_failures(state: dict[str, Any]) -> dict[str, Any]:
+    if not state.get("probeFailureCount"):
+        return state
+    cleared = dict(state)
+    for key in ("probeFailureCount", "probeFailureReason", "probeDeferredAt"):
+        cleared.pop(key, None)
+    return cleared
+
+
 def hard_block(state: dict[str, Any], now: int, reason: str) -> dict[str, Any]:
     blocked = dict(state)
     blocked.update(phase="blocked", blockedAt=now, reason=reason)
@@ -909,8 +944,14 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
                  "rewakeOf": state.get("messageId"), "rewakeReason": "condition-unresolved-after-consumed-wake"}
         if apply:
             atomic_json(path, state)
-    elif state is None or state.get("phase") == "consumed":
+    elif state is None or state.get("phase") in {"consumed", "probe-deferred"}:
+        # A deferred probe is a retry, not a verdict: start the cycle afresh and
+        # carry the failure count so a permanently unavailable probe still ends
+        # in a durable block instead of retrying forever.
+        carried = int((state or {}).get("probeFailureCount") or 0)
         state = prepared_cycle(now, workspace, batch)
+        if carried:
+            state["probeFailureCount"] = carried
     elif state.get("phase") == "prepared":
         # No message ID exists yet, so a crash-replayed prepare may safely fold
         # in newer incidents before the first/duplicate-safe delivery.
@@ -925,6 +966,7 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
         state["phase"] = "consumed" if receipt_state == "consumed" else (
             "pending-consumption" if receipt["status"] in {"pending-consumption", "duplicate"} else "delivered")
         state["deliveryStatus"] = receipt["status"]
+        state = clear_probe_failures(state)
         if state["phase"] == "consumed":
             state["consumedAt"] = receipt["receipt"]["consumedAt"]
         atomic_json(path, state)
@@ -1078,6 +1120,16 @@ def tick(args: argparse.Namespace) -> int:
                                    if batch["targetType"] == "recovery-controller"
                                    else require_exact_coordinator_target(batch))
                 require_manifest_workspace(target_manifest)
+            except ProbeUnavailable as exc:
+                current = read_json(path) or prepared_cycle(now, workspace, batch)
+                deferred, exhausted = probe_deferral(current, now, str(exc))
+                if exhausted:
+                    deferred = hard_block(deferred, now,
+                                          f"probe-unavailable-repeatedly: {exc}")
+                if args.apply:
+                    atomic_json(path, deferred)
+                pre_results.append(deferred)
+                invalid_paths.append(path)
             except AdmissionError as exc:
                 current = read_json(path) or prepared_cycle(now, workspace, batch)
                 blocked = hard_block(current, now, str(exc))

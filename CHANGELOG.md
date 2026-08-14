@@ -4,6 +4,18 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.25] — 2026-08-14
+
+### Being unable to look is not evidence of danger
+
+- a failed *observation* now defers the admission cycle instead of condemning it. `ProbeUnavailable` (a controller-harness probe that times out or returns garbage) records `phase: probe-deferred` with a failure count and is retried next tick; only `CRAFT_ADMISSION_MAX_PROBE_FAILURES` (3) consecutive failures produce a durable block, under a reason that names the unavailable probe. Proven-unsafe conditions — ambiguous controller identity, runtime mismatch, foreign workspace — still block immediately and durably, exactly as before. Observed live: one failed probe hard-blocked the wake lane at 18:16, the controller went 56 minutes without a turn, and the open ledger grew to 74 while every project looked merely busy;
+- a successful cycle clears the failure count, so a transient hiccup leaves no residue.
+
+### Perception no longer depends on an agent
+
+- the admission cron runs `recovery-incident.py detect --apply` every tick. Until now only the controller session ran detection, so a quiet controller froze the ledger too: admission kept deciding from a stale view while conditions piled up unseen. Detection is deterministic and needs no agent, so it must not depend on one;
+- `drain` reports `controller` — when the lane last took a turn, how much delivery-blocking work waits, and whether it is `silent` (blocking work present, no turn within `CRAFT_CONTROLLER_SILENT_SECONDS` (1800), kill switch absent). A deliberate kill switch is rest, not silence. Nothing here restarts the controller; it stops the failure from being invisible, which is what made it expensive.
+
 ## [3.4.24] — 2026-08-14
 
 ### The recovery lane stops waiting for permission to work
@@ -362,7 +374,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.24...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.25...HEAD
+[3.4.25]: https://github.com/razumv/craft-protocol/compare/v3.4.24...v3.4.25
 [3.4.24]: https://github.com/razumv/craft-protocol/compare/v3.4.23...v3.4.24
 [3.4.23]: https://github.com/razumv/craft-protocol/compare/v3.4.22...v3.4.23
 [3.4.22]: https://github.com/razumv/craft-protocol/compare/v3.4.21...v3.4.22

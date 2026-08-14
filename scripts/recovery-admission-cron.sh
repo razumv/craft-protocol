@@ -41,5 +41,14 @@ if [[ ! -x "$RPC_CLI" ]]; then
 fi
 export CRAFT_RPC_CLI="$RPC_CLI"
 export CRAFT_SERVER_URL="$SERVER_URL"
+
+# Detection is deterministic and needs no agent, so it must not depend on one.
+# Until v3.4.25 only the controller session ran `detect --apply`; when that lane
+# went quiet the ledger froze too, and admission kept deciding from a stale view
+# while conditions piled up unseen. Perception now happens every tick regardless
+# of whether any controller turn ever starts.
+"$PYTHON" "${SCRIPT:h}/recovery-incident.py" detect --apply >> "$LOG" 2>&1 || \
+  print -r -- '{"warning":"incident detection failed this tick"}' >> "$LOG"
+
 "$PYTHON" "$SCRIPT" tick --controller-session "$CONTROLLER" --workspace-id "$WORKSPACE_ID" \
   --expected-runtime-version "$EXPECTED_RUNTIME_VERSION" --expected-runtime-commit "$EXPECTED_RUNTIME_COMMIT" --apply >> "$LOG" 2>&1
