@@ -44,6 +44,9 @@ class SelfHealingV311Test(unittest.TestCase):
         # visible symptom was a fleet that appeared to have stopped caring.
         self.base()
         transport = self.runtime / "self-healing" / "transport.json"
+        # v3.4.27 withholds `lost` on a saturated host, so this test pins the ratio:
+        # otherwise it asserts something about the machine it happens to run on.
+        self.env = {**self.env, "CRAFT_HOST_SATURATION_RATIO": "10000"}
         _, quiet = self.cli("drain")
         self.assertFalse(quiet["transport"]["lost"])
         # Failures with no recent success are a lost channel.
