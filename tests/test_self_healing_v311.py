@@ -37,6 +37,29 @@ class SelfHealingV311Test(unittest.TestCase):
         return cp, json.loads(cp.stdout) if cp.returncode==0 and cp.stdout else None
     def base(self): self.manifest("coord",cwd="/tmp/project"); self.registry()
 
+    def test_orphaned_dead_lane_gets_a_disposition_path(self):
+        # v3.4.20: a dead lane whose dispatching coordinator is gone can never be
+        # preservation-proven, so it sat outside archivableBacklog forever while
+        # holding a worktree — 23 of them accumulated, the oldest 91 hours old.
+        self.base()
+        self.manifest("orphan", cwd="/tmp/orphan")
+        self.lease("orphan", parentSessionId="dead-coord", state="stalled",
+                   preservationState="unknown", createdAt=self.now-200_000_000)
+        _, d = self.cli("detect")
+        rows = [x for x in d["observations"] if x["kind"] == "orphaned-dead-lane"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["evidence"]["parentSessionId"], "dead-coord")
+        # A lane whose parent still owns a project is ordinary worker recovery.
+        self.lease("orphan", parentSessionId="coord", state="stalled",
+                   preservationState="unknown", createdAt=self.now-200_000_000)
+        _, d = self.cli("detect")
+        self.assertNotIn("orphaned-dead-lane", [x["kind"] for x in d["observations"]])
+        # A recently dispatched orphan is still within its coordinator's reach.
+        self.lease("orphan", parentSessionId="dead-coord", state="stalled",
+                   preservationState="unknown", createdAt=self.now-60_000)
+        _, d = self.cli("detect")
+        self.assertNotIn("orphaned-dead-lane", [x["kind"] for x in d["observations"]])
+
     def test_live_predecessor_after_settled_handoff_emits_incident(self):
         # v3.4.19: registry validate has flagged predecessor-not-archived since
         # v3.4.8, but nothing woke anyone — the owner kept seeing two coordinators.

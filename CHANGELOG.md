@@ -4,6 +4,20 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.20] — 2026-08-14
+
+### Fewer gates for the owner, more the fleet fixes itself
+
+- a coordinator may grant itself **exactly one** further bounded correction attempt when the cause is proven deterministic and the fix fits one named scope, declared as `correctionBudgetExtensions` (`storyId`, `rootCauseRef`, `correctionScope`, `grantedAt`). A second extension for the same story is `correction-budget-extension-reused` and returns to the owner. Observed live: a 38-character Alembic revision that cannot fit `varchar(32)` consumed an owner gate for a one-line fix;
+- gates are for external effects only. Investigation, root-cause contracts, reproductions and audits are self-authorized; publishing, merging, deploying, spending and credential use stay owner-only. A coordinator had bundled "investigate this flaky CI" together with "release this" into one gate, so the owner could not authorize the cheap half;
+- `complete-without-next-increment` — a `complete` phase left standing for `CRAFT_STATUS_COMPLETE_IDLE_SECONDS` (1800 s) with no next action and no gate asking what to take next. A finished increment is not a finished project, and silent idle looked exactly like health on the board;
+- `coordinator-not-live` gains the actions `verify-session-absent` and `respawn-from-handoff-snapshot`; the controller skill states the exact respawn-and-transfer procedure. A coordinator session that vanished from both server and disk previously waited for the owner while its project stopped;
+- `orphaned-dead-lane` — a `stalled`/`error` lane older than `CRAFT_ORPHANED_LANE_SECONDS` (86400 s) whose dispatching coordinator no longer owns any project. It can never become preservation-proven, so it stayed outside `archivableBacklog` forever: 23 accumulated live, the oldest 91 hours, each holding a worktree. Clean worktrees are now reapable; dirty ones raise one gate instead of vanishing.
+
+### Increment cards show the work, not just a counter
+
+- `increment-board.py` joins the protocol payload (it was an owner-local script) and renders **one subtask per Product Increment story** under each project card. Board status follows story state (`accepted`/`integrated` → done, `executing` → in progress, `failed`/`blocked` → needs review), a story leaving the increment is archived, a new increment rolls the whole set, and `--reset-cards` archives cards plus subtasks and rebuilds them in the same pass. `0/5` on a card now has five readable rows beneath it.
+
 ## [3.4.19] — 2026-08-14
 
 ### Neglect that only the owner used to notice becomes machine-detected
@@ -295,7 +309,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.19...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.20...HEAD
+[3.4.20]: https://github.com/razumv/craft-protocol/compare/v3.4.19...v3.4.20
 [3.4.19]: https://github.com/razumv/craft-protocol/compare/v3.4.18...v3.4.19
 [3.4.18]: https://github.com/razumv/craft-protocol/compare/v3.4.17...v3.4.18
 [3.4.17]: https://github.com/razumv/craft-protocol/compare/v3.4.16...v3.4.17

@@ -1,4 +1,4 @@
-# Protocol v3.4.19 defaults
+# Protocol v3.4.20 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -113,6 +113,16 @@ Idle-ready detection (3.4.14): ready/executing story with no lane/wait/work-obse
 Work observers (3.4.15):       only worker-lease and external-wait commitments prove execution; review/gate promises do not
 Self-review churn (3.4.15):    >=2 timed-out scheduled reviews with no execution → scheduled-review-churn
 Gate card retention (3.4.16):  resolved card renamed ✅ + status done, archived after 3600s (CRAFT_BOARD_DONE_RETENTION_SECONDS)
+GitHub sync (3.4.18):          material stage without githubSync, or naming an older stage → github-sync-missing/stale
+Own dead lane (3.4.19):        lane dispatched this generation in stalled/error with no active worker → dead-lane-unreplaced
+Exhausted correction (3.4.19): failed story with no plan, lane or open gate → exhausted-correction-without-escalation
+Predecessor archive (3.4.19):  live predecessor 900s after an accepted handoff → predecessor-unarchived incident + wake
+Correction extension (3.4.20): one self-granted bounded extension per story; the second → correction-budget-extension-reused
+Gate scope (3.4.20):           gates only for external effects; investigation/root-cause/audit is self-authorized
+Complete idle (3.4.20):        complete standing 1800s with no next action or gate → complete-without-next-increment (CRAFT_STATUS_COMPLETE_IDLE_SECONDS)
+Vanished coordinator (3.4.20): verify-session-absent then respawn-from-handoff-snapshot before owner escalation
+Orphaned lane (3.4.20):        dead lane >86400s whose dispatcher owns no project → orphaned-dead-lane (CRAFT_ORPHANED_LANE_SECONDS)
+Increment cards (3.4.20):      one subtask per story; status follows story state; --reset-cards rebuilds cards + subtasks
 Rotation adoption (3.4.3):     lease parent rebinds to registry successor via activeChildren; labels stay historical
 Evidence adoption (3.4.7):     inbox adopt re-addresses predecessor events, immutable bindings survive; waits rebind on reconcile
 Block supersede (3.4.3):       durable block of a superseded target identity yields to the new generation's cycle
@@ -159,7 +169,7 @@ Ack evidence:                  same token/generation + published status revision
 Status storage:                ~/.craft-agent/runtime/coordinator-status/<project>.json
 Status customer fields:        demonstrableNow, remainingOutcome, etaRange, confidence, realBlocker
 Status Product Increment:      ID, stage, risk tier, real-workflow criterion, non-goals, 1..8 acyclic stories
-GitHub sync (3.4.19):          githubSync {issue, commentRef, projectField, syncedStage, syncedAt}; material stage without it → github-sync-missing/stale
+GitHub sync (3.4.20):          githubSync {issue, commentRef, projectField, syncedStage, syncedAt}; material stage without it → github-sync-missing/stale
 Status next actions:           up to 3 ordered; each needs trigger + required evidence + success/failure branch
 Status classifications:        verified, executing, waiting-observed, blocked, stale, contradictory
 Commitment storage:            ~/.craft-agent/runtime/coordinator-commitments/<project>/<id>.json
