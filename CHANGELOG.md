@@ -4,6 +4,16 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.26] — 2026-08-14
+
+### A lost transport stops looking like a lazy fleet
+
+- the admission tick records whether the channel answered: `runtime/self-healing/transport.json` keeps `lastSuccessAt`, `consecutiveFailures` and the last failure reason, incremented on every transient/discovery retry and cleared as soon as a tick completes without one;
+- `recovery-incident.py drain` reports `transport` — including `lost`, set when failures stand with no success inside `CRAFT_TRANSPORT_LOST_SECONDS` (900). One failure after a fresh success is a hiccup, not a loss;
+- the controller skill states the consequence: when the transport is lost, wakes cannot arrive and results cannot be collected however healthy the local records look, so the turn reports the cause instead of spending its budget on deliveries that cannot land.
+
+Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's listening address vanished with the tun interface, and for an hour the only visible symptom was a fleet that appeared to have stopped caring — coordinators silent, the ledger growing, finished workers uncollected. Nothing here restores a channel the host no longer has; naming the condition is the entire fix.
+
 ## [3.4.25] — 2026-08-14
 
 ### Being unable to look is not evidence of danger
@@ -374,7 +384,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.25...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.26...HEAD
+[3.4.26]: https://github.com/razumv/craft-protocol/compare/v3.4.25...v3.4.26
 [3.4.25]: https://github.com/razumv/craft-protocol/compare/v3.4.24...v3.4.25
 [3.4.24]: https://github.com/razumv/craft-protocol/compare/v3.4.23...v3.4.24
 [3.4.23]: https://github.com/razumv/craft-protocol/compare/v3.4.22...v3.4.23

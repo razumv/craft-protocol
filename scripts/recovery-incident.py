@@ -48,6 +48,8 @@ HOUSEKEEPING_QUOTA = int(os.environ.get("CRAFT_DRAIN_HOUSEKEEPING_QUOTA", "1"))
 DRAIN_LIMIT = int(os.environ.get("CRAFT_DRAIN_LIMIT", "3"))
 CONTROLLER_SILENT_SECONDS = int(os.environ.get("CRAFT_CONTROLLER_SILENT_SECONDS", "1800"))
 PERSISTENT_CONTROLLER = SELF_HEALING / "persistent-controller.json"
+TRANSPORT = SELF_HEALING / "transport.json"
+TRANSPORT_LOST_SECONDS = int(os.environ.get("CRAFT_TRANSPORT_LOST_SECONDS", "900"))
 HARNESSES = RUNTIME / "controller-harnesses"
 CLAIM_TTL_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CLAIM_TTL_SECONDS", "900"))
 MAX_ATTEMPTS = int(os.environ.get("CRAFT_RECOVERY_MAX_ATTEMPTS", "2"))
@@ -398,6 +400,21 @@ def controller_last_turn_at() -> int:
     return newest
 
 
+def transport_state() -> dict[str, Any]:
+    """Whether the fleet's channel is answering, as a named condition.
+
+    A lost transport is indistinguishable from lazy agents from the outside: the
+    ledger grows, coordinators fall silent, results go uncollected. Naming it is
+    the whole fix — nothing here can restore a channel the host no longer has."""
+    row = common.read_json(TRANSPORT) or {}
+    last_ok = row.get("lastSuccessAt")
+    failures = int(row.get("consecutiveFailures") or 0)
+    age = now_ms() - int(last_ok) if isinstance(last_ok, int) else None
+    lost = bool(failures and (age is None or age > TRANSPORT_LOST_SECONDS * 1000))
+    return {"lastSuccessAt": last_ok, "ageMs": age, "consecutiveFailures": failures,
+            "lastFailureReason": row.get("lastFailureReason"), "lost": lost}
+
+
 def controller_silence(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """A self-healing lane that has stopped is worse than one that never existed.
 
@@ -463,6 +480,7 @@ def drain(args: argparse.Namespace) -> dict[str, Any]:
     selected = ordered[:limit]
     return {"schemaVersion": SCHEMA, "disabled": DISABLED.exists(),
             "killSwitch": kill_switch_state(rows), "controller": silence,
+            "transport": transport_state(),
             "openCount": len(rows), "deliveryBlockingCount": len(blocking),
             "housekeepingCount": len(rows) - len(blocking),
             # A turn that ends with delivery still blocked must be followed by
