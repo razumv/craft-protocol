@@ -94,6 +94,46 @@ class SelfHealingV311Test(unittest.TestCase):
         _, paused = self.cli("drain")
         self.assertFalse(paused["controller"]["silent"])
 
+    def test_an_idle_executor_outranks_a_bookkeeping_mismatch(self):
+        # v3.4.27: with a three-action turn budget, status contradictions and overdue
+        # commitments consumed every turn while two finished workers waited 25 and 30
+        # minutes to be collected. An executor idle right now goes first.
+        self.base()
+        self.lease("worker1", state="handoff-ready")
+        self.put(self.runtime / "coordinator-status" / "alpha.json",
+                 {"schemaVersion": 1, "project": "alpha", "coordinatorSessionId": "coord",
+                  "generation": 1, "revision": 1, "publishedAt": 1, "updatedAt": 1,
+                  "declared": {"objective": "x", "phase": "executing", "nextActions": []}})
+        self.cli("detect", "--apply")
+        _, drained = self.cli("drain", "--limit", "2")
+        kinds = [w["kind"] for w in drained["work"]]
+        self.assertEqual(kinds[0], "terminal-handoff-unconsumed")
+        self.assertEqual(drained["work"][0]["rank"], 1)
+        bookkeeping = [w for w in drained["work"] if w["kind"].startswith("coordinator-status")]
+        self.assertTrue(all(w["rank"] >= 2 for w in bookkeeping))
+
+    def test_host_saturation_is_not_reported_as_a_lost_channel(self):
+        # v3.4.27: eight parallel builds from unrelated work drove the load to 59 on
+        # an 8-core host and every RPC timed out — while the channel was fine.
+        self.base()
+        transport = self.runtime / "self-healing" / "transport.json"
+        self.put(transport, {"schemaVersion": 1, "consecutiveFailures": 4,
+                            "lastSuccessAt": self.now - 3_600_000,
+                            "lastFailureReason": "connection timeout"})
+        env = {**self.env, "CRAFT_HOST_SATURATION_RATIO": "0.0001"}
+        cp = subprocess.run([str(TOOL), "drain"], env=env, text=True, capture_output=True)
+        saturated = json.loads(cp.stdout)["transport"]
+        self.assertTrue(saturated["host"]["saturated"])
+        self.assertFalse(saturated["lost"])
+        self.assertTrue(saturated["hostStarved"])
+        # On an idle host the same failures do mean the channel is gone.
+        env = {**self.env, "CRAFT_HOST_SATURATION_RATIO": "10000"}
+        cp = subprocess.run([str(TOOL), "drain"], env=env, text=True, capture_output=True)
+        calm = json.loads(cp.stdout)["transport"]
+        self.assertFalse(calm["host"]["saturated"])
+        self.assertTrue(calm["lost"])
+        self.assertFalse(calm["hostStarved"])
+
     def test_drain_puts_pipeline_blockers_before_housekeeping(self):
         # v3.4.24: the ledger is worked in the order that unblocks delivery. Live,
         # 23 cwd-collision and 10 orphaned-lane records shared one queue with four

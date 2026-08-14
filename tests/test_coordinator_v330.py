@@ -40,10 +40,10 @@ class Base(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value) + "\n", encoding="utf-8")
 
-    def manifest(self, sid, role="worker", status="in_progress", archived=False, labels=None):
+    def manifest(self, sid, role="worker", status="in_progress", archived=False, labels=None, **extra):
         base = [f"agent-role::{role}"] + (labels or [])
         self.put(self.sessions / sid / "session.jsonl",
-                 {"id": sid, "sessionStatus": status, "isArchived": archived, "labels": base})
+                 {"id": sid, "sessionStatus": status, "isArchived": archived, "labels": base, **extra})
 
     def coordinator(self, sid="coord1"):
         self.manifest(sid, role="coordinator", labels=["coordinators", "protocol-version::3.3.0"])
@@ -870,6 +870,41 @@ class StatusTests(Base):
             payload["githubSync"] = bad
             cp, _ = self.publish(payload, ok=False)
             self.assertIn(needle, cp.stderr)
+
+    def test_a_lane_without_its_required_sources_is_flagged(self):
+        # v3.4.27: sources attach to a session, so a research worker spawned without
+        # them cannot reach Similarweb or BuiltWith whatever its contract says — it
+        # returns plausible prose that no downstream check can distinguish from
+        # evidence. Observed live: a research coordinator ran an hour with an empty
+        # source list while its own contract required five.
+        self.base_project()
+        self.manifest("worker1", role="worker",
+                      labels=["parent-session::coord1", "work-unit::wu-research", "attempt::1"],
+                      enabledSourceSlugs=["similarweb"])
+        self.put(self.runtime / "worker-leases" / "worker1.json",
+                 {"schemaVersion": 1, "sessionId": "worker1", "parentSessionId": "coord1",
+                  "role": "worker", "workUnit": "wu-research", "attempt": "1", "state": "running"})
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync()
+        payload["productIncrement"]["stories"] = [
+            {"id": "dossier", "title": "Competitor dossier", "state": "executing",
+             "dependsOn": [], "riskContribution": "low", "workUnit": "wu-research",
+             "requiredSources": ["similarweb", "builtwith", "wayback-machine"]}]
+        self.publish(payload)
+        _, starved = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("lane-missing-required-sources:wu-research:builtwith,wayback-machine",
+                      starved["issues"])
+        # Attaching what the contract requires clears it.
+        self.manifest("worker1", role="worker",
+                      labels=["parent-session::coord1", "work-unit::wu-research", "attempt::1"],
+                      enabledSourceSlugs=["similarweb", "builtwith", "wayback-machine"])
+        _, equipped = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in equipped["issues"] if i.startswith("lane-missing")])
+        # A story that requires nothing is not policed.
+        payload["productIncrement"]["stories"][0].pop("requiredSources")
+        self.publish(payload)
+        _, unconstrained = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in unconstrained["issues"] if i.startswith("lane-missing")])
 
     def test_blocked_story_with_satisfied_dependencies_must_name_its_blocker(self):
         # v3.4.23: holding a story `blocked` hid available work from idle-ready

@@ -34,13 +34,17 @@ SAFETY_KINDS = {"ambiguous-coordinator-owner", "project-mapping-conflict"}
 # Conditions that stop the pipeline right now: a finished worker nobody collects,
 # a coordinator that cannot own or publish, a wait nobody observes. Recovering an
 # old stalled lane matters too, but it does not unblock a queue the way these do.
-PIPELINE_KINDS = {"terminal-handoff-unconsumed", "coordinator-not-live", "coordinator-lease-stale",
-                  "coordinator-session-error", "coordinator-pi-sigterm", "transfer-stuck",
-                  "coordinator-worker-terminal-status", "coordinator-status-missing",
-                  "coordinator-status-stale", "coordinator-status-contradiction",
-                  "coordinator-plan-unexecutable", "coordinator-inbox-ready",
-                  "coordinator-commitment-overdue", "unregistered-child-lane", "heavy-lock-wait",
-                  "external-wait-terminal", "external-wait-unobserved", "external-wait-deadline"}
+# An executor idle right now outranks a bookkeeping mismatch. Measured live: with a
+# three-action turn budget, status contradictions and overdue commitments consumed
+# every turn while two finished workers waited 25 and 30 minutes to be collected.
+IDLE_EXECUTOR_KINDS = {"terminal-handoff-unconsumed", "coordinator-not-live", "coordinator-lease-stale",
+                       "coordinator-session-error", "coordinator-pi-sigterm", "transfer-stuck",
+                       "coordinator-worker-terminal-status", "unregistered-child-lane",
+                       "heavy-lock-wait", "external-wait-terminal", "external-wait-unobserved"}
+BOOKKEEPING_KINDS = {"coordinator-status-missing", "coordinator-status-stale",
+                     "coordinator-status-contradiction", "coordinator-plan-unexecutable",
+                     "coordinator-inbox-ready", "coordinator-commitment-overdue",
+                     "external-wait-deadline"}
 LANE_RECOVERY_KINDS = {"worker-suspect", "worker-stalled", "worker-error"}
 HOUSEKEEPING_KINDS = {"cwd-collision", "orphaned-dead-lane", "preservation-unknown",
                       "owner-gate-blocked", "job-exit-unreported", "predecessor-unarchived"}
@@ -50,6 +54,7 @@ CONTROLLER_SILENT_SECONDS = int(os.environ.get("CRAFT_CONTROLLER_SILENT_SECONDS"
 PERSISTENT_CONTROLLER = SELF_HEALING / "persistent-controller.json"
 TRANSPORT = SELF_HEALING / "transport.json"
 TRANSPORT_LOST_SECONDS = int(os.environ.get("CRAFT_TRANSPORT_LOST_SECONDS", "900"))
+HOST_SATURATION_RATIO = float(os.environ.get("CRAFT_HOST_SATURATION_RATIO", "2.5"))
 HARNESSES = RUNTIME / "controller-harnesses"
 CLAIM_TTL_SECONDS = int(os.environ.get("CRAFT_RECOVERY_CLAIM_TTL_SECONDS", "900"))
 MAX_ATTEMPTS = int(os.environ.get("CRAFT_RECOVERY_MAX_ATTEMPTS", "2"))
@@ -400,6 +405,21 @@ def controller_last_turn_at() -> int:
     return newest
 
 
+def host_load() -> dict[str, Any]:
+    """Host saturation looks exactly like a lost channel: everything times out.
+
+    Measured live: eight parallel build processes from unrelated work drove the
+    1-minute load to 59 on an 8-core host, RPC timed out at 10 s, and the channel
+    itself was perfectly fine. Naming saturation keeps the transport verdict honest."""
+    try:
+        load1 = os.getloadavg()[0]
+    except (OSError, AttributeError):
+        return {"load1": None, "cores": None, "saturated": False}
+    cores = os.cpu_count() or 1
+    return {"load1": round(load1, 2), "cores": cores,
+            "saturated": bool(load1 / cores > HOST_SATURATION_RATIO)}
+
+
 def transport_state() -> dict[str, Any]:
     """Whether the fleet's channel is answering, as a named condition.
 
@@ -411,8 +431,13 @@ def transport_state() -> dict[str, Any]:
     failures = int(row.get("consecutiveFailures") or 0)
     age = now_ms() - int(last_ok) if isinstance(last_ok, int) else None
     lost = bool(failures and (age is None or age > TRANSPORT_LOST_SECONDS * 1000))
+    host = host_load()
     return {"lastSuccessAt": last_ok, "ageMs": age, "consecutiveFailures": failures,
-            "lastFailureReason": row.get("lastFailureReason"), "lost": lost}
+            "lastFailureReason": row.get("lastFailureReason"),
+            # Starved is not lost: with the host saturated, timeouts say nothing
+            # about the channel, and calling it lost would send recovery the wrong way.
+            "lost": bool(lost and not host["saturated"]),
+            "hostStarved": bool(failures and host["saturated"]), "host": host}
 
 
 def controller_silence(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -423,7 +448,7 @@ def controller_silence(rows: list[dict[str, Any]]) -> dict[str, Any]:
     blocked by a single failed probe, the controller went 56 minutes without a
     turn, and the ledger grew to 74 open conditions while every project looked
     merely busy. A deliberate kill switch is rest, not silence."""
-    blocking = [r for r in rows if drain_rank(r) <= 2]
+    blocking = [r for r in rows if drain_rank(r) <= 3]
     last = controller_last_turn_at()
     age = now_ms() - last if last else None
     silent = bool(blocking and not DISABLED.exists()
@@ -436,11 +461,13 @@ def drain_rank(row: dict[str, Any]) -> int:
     kind = str(row.get("kind") or "")
     if kind in SAFETY_KINDS:
         return 0
-    if kind in PIPELINE_KINDS:
+    if kind in IDLE_EXECUTOR_KINDS:
         return 1
-    if kind in LANE_RECOVERY_KINDS:
+    if kind in BOOKKEEPING_KINDS:
         return 2
-    return 3
+    if kind in LANE_RECOVERY_KINDS:
+        return 3
+    return 4
 
 
 def drain_order(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -458,7 +485,7 @@ def drain_order(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     housekeeping = 0
     for row in ordered:
-        if drain_rank(row) == 3:
+        if drain_rank(row) == 4:
             if housekeeping >= HOUSEKEEPING_QUOTA:
                 continue
             housekeeping += 1
@@ -475,7 +502,7 @@ def drain(args: argparse.Namespace) -> dict[str, Any]:
     rows = [r for r in read_incidents().values() if r.get("state") == "open"]
     ordered = drain_order(rows)
     silence = controller_silence(rows)
-    blocking = [r for r in rows if drain_rank(r) <= 2]
+    blocking = [r for r in rows if drain_rank(r) <= 3]
     limit = max(1, int(getattr(args, "limit", DRAIN_LIMIT) or DRAIN_LIMIT))
     selected = ordered[:limit]
     return {"schemaVersion": SCHEMA, "disabled": DISABLED.exists(),

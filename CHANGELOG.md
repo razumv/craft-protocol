@@ -4,6 +4,20 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.27] — 2026-08-14
+
+### An idle executor goes before the bookkeeping
+
+- `drain` splits the old pipeline rank in two: an executor idle right now (an uncollected finished worker, a coordinator that cannot own or publish, an unobserved wait) ranks above a bookkeeping mismatch (status missing/stale/contradictory, plan unexecutable, inbox ready, commitment overdue). Measured live: with a three-action turn budget, contradictions and overdue commitments consumed every turn while two finished workers waited 25 and 30 minutes to be collected. Lane recovery and housekeeping follow, housekeeping still under its quota.
+
+### Research without its sources is not evidence
+
+- a story declares `requiredSources`, and a live lane that cannot reach them is `lane-missing-required-sources`. Sources attach to a session, so a worker spawned without them returns plausible prose that no downstream check can tell from evidence. Observed live: a research coordinator ran for an hour with an empty source list while its own contract named five, and nothing anywhere said so.
+
+### A saturated host is not a lost channel
+
+- `drain` reports `transport.host` (1-minute load, cores, `saturated` past `CRAFT_HOST_SATURATION_RATIO` (2.5) per core) and withholds `lost` while the host is saturated, reporting `hostStarved` instead. Measured live: eight parallel builds from unrelated work drove the load to 59 on a 10-core host and every RPC timed out at 10 s while the channel was perfectly fine. Starvation is fixed by reducing load, never by recovery actions against coordinators that are answering.
+
 ## [3.4.26] — 2026-08-14
 
 ### A lost transport stops looking like a lazy fleet
@@ -384,7 +398,8 @@ Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's 
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.26...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.27...HEAD
+[3.4.27]: https://github.com/razumv/craft-protocol/compare/v3.4.26...v3.4.27
 [3.4.26]: https://github.com/razumv/craft-protocol/compare/v3.4.25...v3.4.26
 [3.4.25]: https://github.com/razumv/craft-protocol/compare/v3.4.24...v3.4.25
 [3.4.24]: https://github.com/razumv/craft-protocol/compare/v3.4.23...v3.4.24

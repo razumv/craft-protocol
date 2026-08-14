@@ -64,6 +64,7 @@ RISK_TIERS = {"low", "medium", "high"}
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
 STORY_STATES = {"planned", "ready", "executing", "integrated", "accepted", "blocked", "failed", "deferred"}
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+SOURCE_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 # Delivery is verified against the clone's own remote-tracking branch, so a claim
 # is machine truth rather than a declaration the protocol has to take on faith.
 DELIVERY_GRACE_MS = int(os.environ.get("CRAFT_STATUS_DELIVERY_GRACE_SECONDS", "3600")) * 1000
@@ -215,6 +216,19 @@ def verification_evidence_keys(project: str, generation: int | None) -> list[str
     return keys
 
 
+def lane_sources(session_id: str) -> list[str]:
+    """The sources a lane can actually reach.
+
+    Sources attach to a session, so a research worker spawned without them cannot
+    reach Similarweb or BuiltWith no matter what its contract says — it comes back
+    with plausible prose and no evidence, which no other check can tell apart from
+    real work. Observed live: a research coordinator ran for an hour with an empty
+    source list while its contract required five."""
+    manifest = object_or_none(common.read_manifest(session_id)) if session_id else None
+    raw = (manifest or {}).get("enabledSourceSlugs") or []
+    return [str(x) for x in raw if isinstance(x, str)]
+
+
 def certificate_ids(project: str) -> list[str]:
     """Completion certificates are the other admissible proof of acceptance.
 
@@ -337,6 +351,8 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
         "_observedWaitIds": [str(w.get("waitId")) for w in observed_waits],
         "_openGateIds": [str(g.get("gateId")) for g in open_gates],
         "_terminalLaneUnits": [str(l.get("workUnit")) for l in terminal_workers if l.get("workUnit")],
+        "_laneSources": {str(l.get("workUnit")): lane_sources(str(l.get("sessionId") or ""))
+                         for l in active_workers if l.get("workUnit")},
         "_overdueHandoffs": [str(l.get("workUnit") or l.get("sessionId")) for l in terminal_workers
                              if now - exact_int(l.get("lastHeartbeatAt"), now) > HANDOFF_GRACE_MS],
     }
@@ -386,6 +402,24 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
     if (idle_ready and not synth["activeWorkers"] and not synth["observedWaitCount"]
             and not synth["workObserverCommitmentCount"]):
         issues.append("idle-ready-work:" + ",".join(idle_ready[:8]))
+    # A lane whose contract names sources it cannot reach will return prose instead
+    # of evidence, and nothing downstream can tell the difference.
+    lane_sources_map = synth.get("_laneSources") or {}
+    starved: list[str] = []
+    for story in increment.get("stories") or []:
+        if not isinstance(story, dict):
+            continue
+        required = set(story.get("requiredSources") or [])
+        if not required:
+            continue
+        unit = str(story.get("workUnit") or story.get("id"))
+        if unit not in lane_sources_map:
+            continue
+        missing = required - set(lane_sources_map.get(unit) or [])
+        if missing:
+            starved.append(f"{unit}:{','.join(sorted(missing)[:3])}")
+    if starved:
+        issues.append("lane-missing-required-sources:" + ",".join(sorted(starved)[:3]))
     # Consumption is not optional and not "later": until the result is taken the
     # worker is idle and the next story never starts.
     # A plan step must say who performs it, and a step that waits on the owner must
@@ -821,13 +855,19 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
         merge_sha = optional_text(story, "mergeSha")
         merge_authority_ref = optional_text(story, "mergeAuthorityRef")
         blocked_by_ref = optional_text(story, "blockedByRef")
+        raw_sources = story.get("requiredSources") or []
+        if not isinstance(raw_sources, list) or len(raw_sources) > LIST_LIMIT:
+            fail("productIncrement story requiredSources must be a bounded list")
+        if any(not isinstance(x, str) or not SOURCE_SLUG.fullmatch(x) for x in raw_sources):
+            fail("productIncrement story requiredSources entries must be source slugs")
+        required_sources = sorted(set(raw_sources))
         if merge_sha is not None and not COMMIT_SHA.fullmatch(merge_sha):
             fail("productIncrement story mergeSha must be a full 40-character commit sha")
         normalized.append({"id": story_id, "title": title, "state": state,
                            "dependsOn": dependencies, "riskContribution": risk,
                            "acceptanceRef": acceptance_ref, "workUnit": work_unit,
                            "mergeSha": merge_sha, "mergeAuthorityRef": merge_authority_ref,
-                           "blockedByRef": blocked_by_ref})
+                           "blockedByRef": blocked_by_ref, "requiredSources": required_sources})
     graph = {story["id"]: story["dependsOn"] for story in normalized}
     for story_id, dependencies in graph.items():
         for dep in dependencies:
