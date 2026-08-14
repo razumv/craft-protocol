@@ -36,7 +36,7 @@ STATE = Path(os.environ.get("CRAFT_ADMISSION_STATE", RUNTIME / "self-healing/adm
 TICK_STATES = Path(os.environ.get("CRAFT_COORDINATOR_TICK_STATES", RUNTIME / "self-healing/coordinator-ticks")).expanduser()
 LOCK = Path(os.environ.get("CRAFT_ADMISSION_LOCK", RUNTIME / "self-healing/admission.lock")).expanduser()
 DISABLED = Path(os.environ.get("CRAFT_SELF_HEALING_DISABLED", RUNTIME / "self-healing.disabled")).expanduser()
-PROTOCOL_VERSION = "v3.4.18"
+PROTOCOL_VERSION = "v3.4.19"
 AUTOMATION_ID = os.environ.get("CRAFT_RECOVERY_NOTIFIER_AUTOMATION_ID", "a322-admission")
 LEGACY_AUTOMATION_IDS = {"a321-notifier", "a31101", "a31102"}
 CONTROLLER_ACTION_ID = "a322-controller-recovery"
@@ -68,7 +68,7 @@ BLOCKED_KINDS = {"owner-gate-blocked", "cwd-collision", "project-mapping-conflic
 # Protocol v3.3.0 coordinator inbox/status/commitment wakes ride the existing v3.2.2
 # admission lane. They are generation-fenced and never grant merge/rotation authority.
 COORDINATOR_V33_WAKE_KINDS = {"coordinator-inbox-ready", "coordinator-status-missing", "coordinator-status-stale", "coordinator-plan-unexecutable", "coordinator-commitment-overdue", "coordinator-status-contradiction"}
-WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "coordinator-worker-terminal-status", "job-exit-unreported", "heavy-lock-wait", "terminal-handoff-unconsumed", "external-wait-terminal", "external-wait-unobserved", "external-wait-deadline"} | COORDINATOR_V33_WAKE_KINDS
+WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "coordinator-worker-terminal-status", "predecessor-unarchived", "job-exit-unreported", "heavy-lock-wait", "terminal-handoff-unconsumed", "external-wait-terminal", "external-wait-unobserved", "external-wait-deadline"} | COORDINATOR_V33_WAKE_KINDS
 ROUTINE_KINDS = {"coordinator-tick-due", "coordinator-lease-stale", "terminal-handoff-unconsumed", "external-wait-terminal"} | COORDINATOR_V33_WAKE_KINDS
 
 

@@ -37,6 +37,25 @@ class SelfHealingV311Test(unittest.TestCase):
         return cp, json.loads(cp.stdout) if cp.returncode==0 and cp.stdout else None
     def base(self): self.manifest("coord",cwd="/tmp/project"); self.registry()
 
+    def test_live_predecessor_after_settled_handoff_emits_incident(self):
+        # v3.4.19: registry validate has flagged predecessor-not-archived since
+        # v3.4.8, but nothing woke anyone — the owner kept seeing two coordinators.
+        self.manifest("coord", cwd="/tmp/project"); self.manifest("old", cwd="/tmp/project")
+        self.registry(predecessorSessionId="old", transferAcceptedAt=self.now-3_600_000)
+        _, d = self.cli("detect")
+        rows = [x for x in d["observations"] if x["kind"] == "predecessor-unarchived"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["evidence"]["predecessorSessionId"], "old")
+        # A freshly accepted handoff is still within the archiving grace window.
+        self.registry(predecessorSessionId="old", transferAcceptedAt=self.now-60_000)
+        _, d = self.cli("detect")
+        self.assertNotIn("predecessor-unarchived", [x["kind"] for x in d["observations"]])
+        # An archived predecessor is the completed duty.
+        self.manifest("old", archived=True, cwd="/tmp/project")
+        self.registry(predecessorSessionId="old", transferAcceptedAt=self.now-3_600_000)
+        _, d = self.cli("detect")
+        self.assertNotIn("predecessor-unarchived", [x["kind"] for x in d["observations"]])
+
     def test_worker_terminal_status_coordinator_emits_incident(self):
         # An authoritative coordinator parked in a worker-terminal session status is
         # deaf to queued wakes; detection must surface it deterministically.

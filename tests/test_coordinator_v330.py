@@ -868,6 +868,55 @@ class StatusTests(Base):
             cp, _ = self.publish(payload, ok=False)
             self.assertIn(needle, cp.stderr)
 
+    def test_dead_lane_this_generation_dispatched_must_be_replaced(self):
+        # A lane the coordinator itself dispatched and that died is neglect, not
+        # housekeeping debt: holding it silently is how a project looks busy.
+        self.base_project()
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync()
+        self.publish(payload)
+        reg = json.loads((self.runtime / "coordinators" / "demo.json").read_text())
+        self.put(self.runtime / "worker-leases" / "worker1.json",
+                 {"schemaVersion": 1, "sessionId": "worker1", "parentSessionId": "coord1",
+                  "role": "worker", "workUnit": "wu-1", "attempt": "1", "state": "stalled",
+                  "createdAt": int(reg.get("claimedAt") or 0) + 1000})
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("dead-lane-unreplaced:wu-1", show["issues"])
+        # A lane inherited from an earlier generation is housekeeping debt, not neglect.
+        self.put(self.runtime / "worker-leases" / "worker1.json",
+                 {"schemaVersion": 1, "sessionId": "worker1", "parentSessionId": "coord1",
+                  "role": "worker", "workUnit": "wu-1", "attempt": "1", "state": "stalled",
+                  "createdAt": int(reg.get("claimedAt") or 0) - 60_000})
+        _, inherited = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in inherited["issues"] if i.startswith("dead-lane")])
+
+    def test_failed_story_without_plan_gate_or_lane_is_unescalated(self):
+        # The correction budget is bounded; a failed story with no plan, no lane and
+        # no owner gate is a dead end the owner never hears about.
+        self.base_project()
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync()
+        payload["nextActions"] = []
+        payload["childRefs"] = []
+        payload["productIncrement"]["stories"] = [
+            {"id": "correction", "title": "Correction attempt", "state": "failed",
+             "dependsOn": [], "riskContribution": "medium"},
+            {"id": "kept", "title": "Kept evidence", "state": "accepted",
+             "dependsOn": [], "riskContribution": "low"}]
+        self.publish(payload)
+        self.put(self.runtime / "worker-leases" / "worker1.json",
+                 {"schemaVersion": 1, "sessionId": "worker1", "parentSessionId": "coord1",
+                  "role": "worker", "workUnit": "wu-1", "attempt": "1", "state": "handoff-ready"})
+        _, show = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("exhausted-correction-without-escalation:correction", show["issues"])
+        # An owner gate is the sanctioned escalation and clears it.
+        self.cli(GATE, "create", "--project", "demo", "--gate", "correction-exhausted",
+                 "--question", "Authorise an exceptional third attempt?", "--choices", "AUTHORIZE,HOLD",
+                 "--owner-only-category", "human-product-judgment-action", "--scope", "work-unit")
+        _, escalated = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in escalated["issues"]
+                          if i.startswith("exhausted-correction-without-escalation")])
+
     def test_blocked_publish_with_open_gate_reference_is_allowed(self):
         self.base_project()
         self.cli(GATE, "create", "--project", "demo", "--gate", "ship-decision",

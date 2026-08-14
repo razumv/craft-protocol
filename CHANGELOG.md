@@ -4,6 +4,14 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.19] — 2026-08-14
+
+### Neglect that only the owner used to notice becomes machine-detected
+
+- `dead-lane-unreplaced:<work-units>` — a lane the *current* generation dispatched that is now `stalled`/`error` while no active worker exists. The coordinator dispatched it, so leaving it dead is neglect rather than inherited housekeeping debt; lanes created before this generation's acceptance stay `archivableBacklog` as before. Observed live: a focused-reaccept lane stalled for two hours while the project reported healthy;
+- `exhausted-correction-without-escalation:<story-ids>` — a `failed` story with no planned next action, no open owner gate and no active lane. The correction budget is bounded, so a spent budget must reach the owner through a gate instead of stopping silently. Observed live: a project failed the same acceptance twice, emptied its plan, and waited for nobody;
+- `predecessor-unarchived` becomes an incident with a `CRAFT_PREDECESSOR_ARCHIVE_GRACE_SECONDS` (900 s) grace window, wired into the wake kinds and the action matrix. Registry validate has flagged this since v3.4.8, but no lane acted on the flag, so a settled handoff kept leaving two live coordinators on one project until the owner spotted them — three times.
+
 ## [3.4.18] — 2026-08-14
 
 ### GitHub synchronisation becomes machine-observable
@@ -287,7 +295,8 @@ All notable changes are documented here. The project follows [Semantic Versionin
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.18...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.19...HEAD
+[3.4.19]: https://github.com/razumv/craft-protocol/compare/v3.4.18...v3.4.19
 [3.4.18]: https://github.com/razumv/craft-protocol/compare/v3.4.17...v3.4.18
 [3.4.17]: https://github.com/razumv/craft-protocol/compare/v3.4.16...v3.4.17
 [3.4.16]: https://github.com/razumv/craft-protocol/compare/v3.4.15...v3.4.16
