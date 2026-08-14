@@ -41,7 +41,18 @@ def all_gates(project: str | None = None) -> list[dict[str, Any]]:
 
 
 def cmd_create(args: argparse.Namespace) -> int:
-    choices = [x.strip() for x in args.choices.split(",") if x.strip()]
+    # Coordinators write choice lists both ways. A pipe-joined list used to become a
+    # single unselectable choice, so the owner could not answer their own gate at
+    # all — observed twice on 2026-08-14, each time forcing the decision to be
+    # recorded as free text instead of a choice. A gate exists to be answered, so
+    # both separators are accepted and normalized here.
+    choices, seen = [], set()
+    for raw in re.split(r"[,|]", args.choices):
+        choice = raw.strip()
+        if not choice or choice in seen:
+            continue
+        seen.add(choice)
+        choices.append(choice)
     if not choices: raise SystemExit("at least one choice required")
     category = getattr(args, "owner_only_category", None)
     if category not in OWNER_ONLY_CATEGORIES:
