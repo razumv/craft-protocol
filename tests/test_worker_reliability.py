@@ -144,32 +144,29 @@ class ReliabilityToolsTest(unittest.TestCase):
         proc = self.exec_tool("worker-lease.py", "create", "--session", "selfy",
                               "--parent", "selfy", check=False)
         self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("self-parented", proc.stderr)
+        self.assertIn("admission token", proc.stderr)
         # A live worker parenting a sub-lane is refused; only coordinators own lanes.
         self.manifest("rogue-parent")
         self.manifest("child")
         proc = self.exec_tool("worker-lease.py", "create", "--session", "child",
                               "--parent", "rogue-parent", check=False)
         self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("not a live coordinator", proc.stderr)
+        self.assertIn("admission token", proc.stderr)
         # A live coordinator parent is accepted.
         coord = self.manifest("coord-parent")
         value = json.loads(coord.read_text().splitlines()[0])
         value["labels"] = ["agent-role::coordinator"]
         coord.write_text(json.dumps(value) + "\n")
-        self.exec_tool("worker-lease.py", "create", "--session", "child",
-                       "--parent", "coord-parent")
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
         # An absent parent manifest stays permitted for watchdog backfill.
         self.manifest("orphan")
-        self.exec_tool("worker-lease.py", "create", "--session", "orphan",
-                       "--parent", "missing-coordinator")
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
 
     def test_create_refuses_worktree_collision(self):
         shared = self.root / "shared-wt"
         self.manifest("lane1", worktree=shared)
-        self.exec_tool("worker-lease.py", "create", "--session", "lane1")
-        # Idempotent re-create for the same session stays allowed.
-        self.exec_tool("worker-lease.py", "create", "--session", "lane1")
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
+        # Legacy sessions are backfilled by reconcile; explicit create needs admission.
         self.manifest("lane2", worktree=shared)
         proc = self.exec_tool("worker-lease.py", "create", "--session", "lane2", check=False)
         self.assertNotEqual(proc.returncode, 0)
@@ -177,7 +174,7 @@ class ReliabilityToolsTest(unittest.TestCase):
 
     def test_observable_job_writes_exit_receipt(self):
         self.manifest("job")
-        self.exec_tool("worker-lease.py", "create", "--session", "job")
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
         log = self.root / "job.log"
         self.exec_tool("observable-job.py", "start", "--session", "job", "--cwd", str(self.root),
                  "--log", str(log), "--", "/bin/sh", "-c", "echo observable-ok")
@@ -197,8 +194,8 @@ class ReliabilityToolsTest(unittest.TestCase):
     def test_heavy_jobs_are_serialized(self):
         self.manifest("heavy1")
         self.manifest("heavy2")
-        self.exec_tool("worker-lease.py", "create", "--session", "heavy1")
-        self.exec_tool("worker-lease.py", "create", "--session", "heavy2")
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
         self.exec_tool("observable-job.py", "start", "--session", "heavy1", "--cwd", str(self.root),
                        "--log", str(self.root / "heavy1.log"), "--heavy", "--",
                        "/bin/sh", "-c", "sleep 1")
@@ -234,7 +231,7 @@ class ReliabilityToolsTest(unittest.TestCase):
         proc = subprocess.Popen(["/bin/sleep", "300"])
         try:
             self.manifest("gta")
-            self.exec_tool("worker-lease.py", "create", "--session", "gta")
+            self.exec_tool("worker-lease.py", "reconcile", "--apply")
             jobs = self.runtime / "worker-jobs"
             jobs.mkdir(parents=True, exist_ok=True)
             (jobs / "gta.json").write_text(json.dumps(

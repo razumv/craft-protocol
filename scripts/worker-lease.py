@@ -435,8 +435,10 @@ def cmd_create(args: argparse.Namespace) -> int:
             raise SystemExit(f"refusing lease for archived session: {args.session}")
         if role_of(manifest) not in ROLES:
             raise SystemExit(f"refusing lease for role={role_of(manifest)}")
-        require_admission(args.admission_token, args.session, args)
         value = read_json(lease_path(args.session)) or lease_from_manifest(manifest)
+        # Structural role/cwd refusals remain more specific than token refusal.
+        refuse_role_drift_create(args.session, value)
+        require_admission(args.admission_token, args.session, args)
         for key, arg in (
             ("parentSessionId", "parent"), ("workUnit", "work_unit"),
             ("attempt", "attempt"), ("phase", "phase"), ("worktree", "worktree"),
@@ -444,7 +446,6 @@ def cmd_create(args: argparse.Namespace) -> int:
             raw = getattr(args, arg, None)
             if raw is not None:
                 value[key] = expand(raw) if key == "worktree" else raw
-        refuse_role_drift_create(args.session, value)
         value["state"] = args.state
         value["lastHeartbeatAt"] = now_ms()
         save_lease(value)
