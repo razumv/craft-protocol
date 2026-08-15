@@ -74,7 +74,7 @@ def rm_pidfile(sid):
 DEAD_LANE_STATES = ("stalled", "error")
 
 
-def lease_state(session_id: str) -> str | None:
+def lease_state(session_id):  # no PEP 604 annotation: this script must import under any python3
     """What the lane's own lease says, which outlives any session status."""
     runtime = os.path.expanduser(os.environ.get("CRAFT_RUNTIME", "~/.craft-agent/runtime"))
     path = os.path.expanduser(os.environ.get("CRAFT_WORKER_LEASES",
