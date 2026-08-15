@@ -19,7 +19,7 @@ def live(s):
  if not m or m.get('id')!=s or not common.session_live(m): raise SystemExit('live session manifest required')
  return m
 def role(m): return common.role_of(m)
-def canon(raw): return os.path.normcase(os.path.realpath(os.path.expanduser(str(raw))))
+def canon(raw): return common.canonical_path(raw)
 def wd(m): return canon(m.get('workingDirectory') or m.get('sdkCwd') or '')
 def fp(v): return hashlib.sha256(json.dumps(v,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 def strict(m): return f'protocol-version::{VERSION}' in set(m.get('labels') or [])

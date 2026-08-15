@@ -21,6 +21,8 @@ RUNTIME = Path(os.environ.get("CRAFT_RUNTIME", HOME / ".craft-agent/runtime")).e
 JOBS = RUNTIME / "worker-jobs"
 HEAVY_LOCK = RUNTIME / "heavy-job.lock"
 HEAVY_OWNER = RUNTIME / "heavy-job-owner.json"
+_spec = importlib.util.spec_from_file_location("orch_common", Path(__file__).with_name("orchestration-common.py"))
+COMMON = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(COMMON)  # type: ignore
 LEASE_TOOL = Path(__file__).with_name("worker-lease.py")
 SESSIONS = Path(os.environ.get("CRAFT_SESSIONS", Path(os.environ.get("CRAFT_WORKSPACE", HOME / ".craft-agent/workspaces/general")) / "sessions")).expanduser()
 
@@ -37,7 +39,7 @@ def require_admitted_v3435(session_id: str, cwd: str) -> None:
         record = read_json_file(record_path) or {}
         if record.get("state") == "admitted" and record.get("sessionId") == session_id:
             matches.append(record)
-    if len(matches) != 1 or (matches[0].get("identity") or {}).get("worktree") != os.path.normcase(os.path.realpath(os.path.expanduser(cwd))):
+    if len(matches) != 1 or (matches[0].get("identity") or {}).get("worktree") != COMMON.canonical_path(cwd):
         raise SystemExit("observable job requires matching admitted lane")
     # Re-run shared confirmation so post-confirm manifest/registry drift refuses.
     spec = importlib.util.spec_from_file_location("lane_admission", Path(__file__).with_name("lane-admission.py"))

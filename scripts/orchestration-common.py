@@ -103,5 +103,10 @@ def project_of(manifest: dict[str, Any]) -> str | None:
     return label_value(manifest, "project::") or label_value(manifest, "work-scope::") or manifest.get("projectId")
 
 
+def canonical_path(raw: str | Path | None) -> str | None:
+    """One canonical filesystem identity across all protocol boundaries."""
+    return os.path.normcase(os.path.realpath(os.path.abspath(os.path.expanduser(str(raw))))) if raw else None
+
+
 def expand_path(raw: str | None) -> str | None:
-    return str(Path(raw).expanduser().resolve()) if raw else None
+    return canonical_path(raw)

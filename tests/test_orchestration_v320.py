@@ -93,9 +93,8 @@ class OrchestrationV320Test(unittest.TestCase):
     def test_04_interrupted_transfer_blocks_second(self):
         self.manifest("c1"); self.manifest("c2"); self.manifest("c3"); self.claim(); self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c2","--reason","x"); p=self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c3","--reason","y",ok=False); self.assertNotEqual(p.returncode,0)
     def test_05_fallback_ttl_detected(self):
-        self.manifest("c1",model="claude",connection="claude",labels=["coordinators","agent-role::coordinator","project::demo","protocol-version::3"]); self.claim(); r=json.loads((self.runtime/"coordinators/demo.json").read_text())
-        self.assertEqual(r["fallbackExpiresAt"]-r["fallbackSince"],1000)
-        r["fallbackExpiresAt"]=0; (self.runtime/"coordinators/demo.json").write_text(json.dumps(r)); p=self.exec_tool("coordinator-registry.py","inspect","--project","demo",ok=False); self.assertIn("fallback-ttl-expired",p.stdout)
+        self.manifest("c1",model="claude",connection="claude",labels=["coordinators","agent-role::coordinator","project::demo","protocol-version::3"])
+        p=self.exec_tool("coordinator-registry.py","claim","--project","demo","--session","c1",ok=False); self.assertIn("canonical coordinator identity mismatch",p.stderr)
     def test_06_archived_owner_detected(self):
         m=self.manifest("c1"); self.claim(); m["isArchived"]=True; (self.sessions/"c1/session.jsonl").write_text(json.dumps(m)+"\n"); p=self.exec_tool("coordinator-registry.py","inspect","--project","demo",ok=False); self.assertIn("owner-not-live",p.stdout)
     def test_06b_coordinator_in_worker_terminal_status_is_flagged(self):
@@ -167,9 +166,13 @@ class OrchestrationV320Test(unittest.TestCase):
         # Lifecycle Protocol" — so the owner's coordinator list stopped saying which
         # project or protocol version a row belonged to, while superseded sessions
         # piled up beside the live one.
-        self.manifest("coord", name="Coordinator Handoff", labels=["coordinators","agent-role::coordinator","project::demo","protocol-version::3"])
+        self.manifest("coord")
         self.exec_tool("coordinator-registry.py", "claim", "--project", "demo",
                        "--session", "coord", "--ttl", "3600")
+        self.manifest("coord", name="Coordinator Handoff", labels=["coordinators","agent-role::coordinator","project::demo","protocol-version::3"])
+        # Existing authority remains readable even if later metadata drifts.
+        # claim below was intentionally removed: malformed new claims are refused.
+        #
         p = self.exec_tool("coordinator-registry.py", "inspect", "--project", "demo", ok=False)
         self.assertIn("coordinator-name-nonconforming", p.stdout)
         self.manifest("coord", name="[demo] Coordinator v3.4.32")

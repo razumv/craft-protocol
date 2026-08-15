@@ -29,6 +29,9 @@ JOBS = RUNTIME / "worker-jobs"
 COORDINATORS = RUNTIME / "coordinators"
 PID_DIR = Path(os.environ.get("CRAFT_PID_DIR", HOME / ".craft-agent/pids")).expanduser()
 LOCK = RUNTIME / "worker-leases.lock"
+HERE = Path(__file__).resolve().parent
+_spec = importlib.util.spec_from_file_location("orch_common", HERE / "orchestration-common.py")
+COMMON = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(COMMON)  # type: ignore
 SCHEMA = 1
 HEALTHY_SECONDS = int(os.environ.get("CRAFT_LEASE_HEALTHY_SECONDS", "900"))
 STALLED_SECONDS = int(os.environ.get("CRAFT_LEASE_STALLED_SECONDS", "1800"))
@@ -120,7 +123,7 @@ def role_of(manifest: dict[str, Any]) -> str:
 def expand(path: str | None) -> str | None:
     # One canonical path representation for manifests, CLI values, leases and
     # collision scans: resolve symlinks (/var -> /private/var on macOS) first.
-    return os.path.normcase(os.path.realpath(os.path.expanduser(path))) if path else None
+    return COMMON.canonical_path(path)
 
 
 def last_event(session_id: str) -> tuple[int, str | None, str | None]:
@@ -483,6 +486,10 @@ def cmd_heartbeat(args: argparse.Namespace) -> int:
             print(json.dumps({"sessionId": args.session, "state": "ignored",
                               "reason": f"role={role_of(manifest)}", "removed": removed}, indent=2))
             return 0
+        try:
+            validate_existing_admission(args.session)
+        except SystemExit as exc:
+            print(json.dumps({"sessionId": args.session, "state": "admission-refused", "reason": str(exc)}, indent=2)); return 4
         value = read_json(lease_path(args.session)) or lease_from_manifest(manifest)
         value["state"] = args.state or "running"
         if value["state"] in ("starting", "running", "suspect"):
@@ -516,6 +523,10 @@ def cmd_finish(args: argparse.Namespace) -> int:
             print(json.dumps({"sessionId": args.session, "state": "ignored",
                               "reason": f"role={role_of(manifest)}"}, indent=2))
             return 0
+        try:
+            validate_existing_admission(args.session)
+        except SystemExit as exc:
+            print(json.dumps({"sessionId": args.session, "state": "admission-refused", "reason": str(exc)}, indent=2)); return 4
         value = read_json(lease_path(args.session)) or lease_from_manifest(manifest)
         value["state"] = "handoff-ready"
         value["phase"] = "terminal-handoff"
