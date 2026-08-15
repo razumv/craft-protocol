@@ -4,6 +4,15 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.33] — 2026-08-15
+
+### A plan that promises a worker must have work to dispatch
+
+- `worker-action-without-dispatchable-story:<indexes>` — a `nextActions` entry executed by a `worker` or `auditor` while no story is `ready`/`executing`, no lane runs and no result waits to be collected. The work exists in the coordinator's prose and not in the increment DAG, so nobody can pick it up while every other check reads healthy;
+- actions carry `storyRef`, and one naming a story the increment does not contain is `plan-action-story-not-observed`.
+
+Measured live across five unattended hours: four of seven projects sat in exactly this state — roughly 1800 coordinator events between them, three lanes dispatched, one completion certificate, and nothing at all reaching a protected branch. Their plans read "a fresh worker produces one clean candidate" and "one focused independent auditor accepts the candidate" while their increments held only `accepted`, `integrated`, `failed` and `blocked` stories, so `idle-ready-work` stayed correctly silent.
+
 ## [3.4.32] — 2026-08-15
 
 ### One coordinator per project, named so the owner can find it
@@ -441,7 +450,8 @@ Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's 
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.32...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.33...HEAD
+[3.4.33]: https://github.com/razumv/craft-protocol/compare/v3.4.32...v3.4.33
 [3.4.32]: https://github.com/razumv/craft-protocol/compare/v3.4.31...v3.4.32
 [3.4.31]: https://github.com/razumv/craft-protocol/compare/v3.4.30...v3.4.31
 [3.4.30]: https://github.com/razumv/craft-protocol/compare/v3.4.29...v3.4.30

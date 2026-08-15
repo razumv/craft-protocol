@@ -1,6 +1,6 @@
 #!/bin/zsh
 # SPDX-License-Identifier: Apache-2.0
-# Safe installer for Craft Agents orchestration protocol v3.4.32.
+# Safe installer for Craft Agents orchestration protocol v3.4.33.
 # Dry-run by default. Use --apply only after reviewing README.md.
 set -eu
 
@@ -23,7 +23,7 @@ SKILLS="$WORKSPACE/skills"
 RUNTIME="$CRAFT/runtime"
 LOGS="$CRAFT/logs"
 STAMP=$(date '+%Y%m%d-%H%M%S')
-BACKUP="$CRAFT/backups/orchestration-v3.4.32-$STAMP"
+BACKUP="$CRAFT/backups/orchestration-v3.4.33-$STAMP"
 PYTHON="${CRAFT_PYTHON:-/opt/homebrew/bin/python3}"
 [[ -x "$PYTHON" ]] || PYTHON=$(command -v python3)
 PLIST_NAME="com.craft-protocol.worker-watchdog.plist"
