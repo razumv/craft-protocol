@@ -312,6 +312,19 @@ def save_lease(value: dict[str, Any]) -> None:
     atomic_json(lease_path(str(value["sessionId"])), value)
 
 
+def quarantine_admission_failure(session_id: str, reason: str,
+                                  manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Persist one fail-closed lease state while the worker-lease lock is held."""
+    current = manifest or read_manifest(session_id)
+    value = read_json(lease_path(session_id))
+    if value is None:
+        value = lease_from_manifest(current) if current else {"sessionId": session_id}
+    value.update({"sessionId": session_id, "state": "error",
+                  "phase": "admission-fail-closed", "lastError": reason})
+    save_lease(value)
+    return value
+
+
 def remove_runtime(session_id: str) -> list[str]:
     removed: list[str] = []
     for path in (lease_path(session_id), job_path(session_id), PID_DIR / f"{session_id}.pid"):
@@ -489,7 +502,9 @@ def cmd_heartbeat(args: argparse.Namespace) -> int:
         try:
             validate_existing_admission(args.session)
         except SystemExit as exc:
-            print(json.dumps({"sessionId": args.session, "state": "admission-refused", "reason": str(exc)}, indent=2)); return 4
+            reason = str(exc)
+            quarantine_admission_failure(args.session, reason, manifest)
+            print(json.dumps({"sessionId": args.session, "state": "admission-refused", "reason": reason}, indent=2)); return 4
         value = read_json(lease_path(args.session)) or lease_from_manifest(manifest)
         value["state"] = args.state or "running"
         if value["state"] in ("starting", "running", "suspect"):
@@ -526,7 +541,9 @@ def cmd_finish(args: argparse.Namespace) -> int:
         try:
             validate_existing_admission(args.session)
         except SystemExit as exc:
-            print(json.dumps({"sessionId": args.session, "state": "admission-refused", "reason": str(exc)}, indent=2)); return 4
+            reason = str(exc)
+            quarantine_admission_failure(args.session, reason, manifest)
+            print(json.dumps({"sessionId": args.session, "state": "admission-refused", "reason": reason}, indent=2)); return 4
         value = read_json(lease_path(args.session)) or lease_from_manifest(manifest)
         value["state"] = "handoff-ready"
         value["phase"] = "terminal-handoff"
@@ -580,9 +597,9 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             try:
                 validate_existing_admission(sid)
             except SystemExit as exc:
-                reason = str(exc); lease.update({"state": "error", "phase": "admission-fail-closed", "lastError": reason})
+                reason = str(exc)
                 actions.append({"action": "admission-refused", "sessionId": sid, "reason": reason})
-                if args.apply: save_lease(lease)
+                if args.apply: quarantine_admission_failure(sid, reason, manifest)
                 continue
             new = classify(lease, manifest, now_ms())
             lease["state"] = new
@@ -603,7 +620,9 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             try:
                 validate_existing_admission(sid)
             except SystemExit as exc:
-                actions.append({"action": "admission-refused", "sessionId": sid, "reason": str(exc)})
+                reason = str(exc)
+                actions.append({"action": "admission-refused", "sessionId": sid, "reason": reason})
+                if args.apply: quarantine_admission_failure(sid, reason, manifest)
                 continue
             value = lease_from_manifest(manifest)
             value["state"] = classify(value, manifest, now_ms())

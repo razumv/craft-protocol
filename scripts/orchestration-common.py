@@ -103,6 +103,24 @@ def project_of(manifest: dict[str, Any]) -> str | None:
     return label_value(manifest, "project::") or label_value(manifest, "work-scope::") or manifest.get("projectId")
 
 
+def valid_reporting_policy(row: dict[str, Any] | None, now: int | None = None) -> bool:
+    """Return whether a durable v3.4.35 owner-reporting policy is exact.
+
+    This is intentionally strict: malformed durable state is never a usable
+    policy at any consumer boundary.
+    """
+    current = now_ms() if now is None else now
+    return bool(
+        isinstance(row, dict)
+        and type(row.get("schemaVersion")) is int and row["schemaVersion"] == 1
+        and row.get("mode") == "pull-only"
+        and isinstance(row.get("ownerFacingSessionId"), str) and row["ownerFacingSessionId"].strip()
+        and type(row.get("configuredAt")) is int and 0 < row["configuredAt"] <= current
+        and row.get("interception") == "unavailable"
+        and row.get("detection") == "best-effort-session-transcript"
+    )
+
+
 def canonical_path(raw: str | Path | None) -> str | None:
     """One canonical filesystem identity across all protocol boundaries."""
     return os.path.normcase(os.path.realpath(os.path.abspath(os.path.expanduser(str(raw))))) if raw else None

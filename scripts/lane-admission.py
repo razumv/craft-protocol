@@ -31,14 +31,15 @@ def parent_truth(parent, project):
  if m.get('projectId')!=r.get('projectId'): raise SystemExit('parent projectId mismatch')
  return r,m
 def collisions(identity,session=None):
+ worktree=canon(identity['worktree'])
  for p in ROOT.glob('*.json'):
   x=common.read_json(p) or {}; i=x.get('identity') or {}
-  if x.get('state') in {'reserved','admitted'} and (i.get('worktree')==identity['worktree'] or (session and x.get('sessionId')==session)) and x.get('token')!=identity.get('token'): raise SystemExit('live admission collision')
+  if x.get('state') in {'reserved','admitted'} and (canon(i.get('worktree'))==worktree or (session and x.get('sessionId')==session)) and x.get('token')!=identity.get('token'): raise SystemExit('live admission collision')
  for sid,m in common.all_manifests().items():
-  if sid!=session and common.session_live(m) and role(m) in ROLES and wd(m)==identity['worktree']: raise SystemExit('live manifest worktree collision')
+  if sid!=session and common.session_live(m) and role(m) in ROLES and wd(m)==worktree: raise SystemExit('live manifest worktree collision')
  for p in (common.RUNTIME/'worker-leases').glob('*.json'):
   x=common.read_json(p) or {}
-  if p.stem!=session and x.get('state')!='handoff-ready' and x.get('worktree')==identity['worktree']: raise SystemExit('live lease worktree collision')
+  if p.stem!=session and x.get('state')!='handoff-ready' and canon(x.get('worktree'))==worktree: raise SystemExit('live lease worktree collision')
 def cmd_reserve(a):
  parent=live(a.parent); project=lab(parent,'project::')
  if not project: raise SystemExit('parent project label required')

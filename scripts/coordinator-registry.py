@@ -94,13 +94,7 @@ def manifest_or_die(sid: str) -> dict[str, Any]:
 
 def reporting_policy(required: bool = False) -> dict[str, Any]:
     row = common.read_json(REPORTING_POLICY)
-    now = common.now_ms()
-    valid = bool(isinstance(row, dict) and row.get("schemaVersion") == 1 and row.get("mode") == "pull-only"
-                 and isinstance(row.get("ownerFacingSessionId"), str) and row["ownerFacingSessionId"].strip()
-                 and isinstance(row.get("configuredAt"), int) and 0 < row["configuredAt"] <= now
-                 and row.get("interception") == "unavailable"
-                 and row.get("detection") == "best-effort-session-transcript")
-    if not valid:
+    if not common.valid_reporting_policy(row):
         if required: raise SystemExit("v3.4.35 requires valid configured pull-only reporting policy")
         return {}
     fingerprint = __import__("hashlib").sha256(json.dumps({"mode": row.get("mode"), "ownerFacingSessionId": row.get("ownerFacingSessionId"), "configuredAt": row.get("configuredAt")}, sort_keys=True).encode()).hexdigest()
@@ -226,15 +220,17 @@ def cmd_reconcile_activity(args: argparse.Namespace) -> int:
 
 
 def validate_successor_manifest(manifest: dict[str, Any], project: str, record: dict[str, Any]) -> None:
-    labels = set(manifest.get("labels") or [])
+    raw_labels = manifest.get("labels")
+    labels = raw_labels if isinstance(raw_labels, list) and all(isinstance(x, str) for x in raw_labels) else []
     # Existing authoritative v3.4.34 coordinators remain live, but every new
     # transfer successor is admitted as the current canonical v3.4.35 identity.
     expected_name = f"[{project}] Coordinator v3.4.35"
     roles = [x for x in labels if x.startswith("agent-role::")]
     projects = [x for x in labels if x.startswith("project::")]
+    protocols = [x for x in labels if x.startswith("protocol-version::")]
     if (manifest.get("name") != expected_name or "coordinators" not in labels
             or roles != ["agent-role::coordinator"] or projects != [f"project::{project}"]
-            or "protocol-version::3.4.35" not in labels):
+            or protocols != ["protocol-version::3.4.35"]):
         raise SystemExit("successor canonical coordinator identity mismatch")
     if (manifest.get("projectId") != record.get("projectId")
             or manifest.get("llmConnection") != PREFERRED_CONNECTION
@@ -347,7 +343,14 @@ def inspect_one(project: str) -> dict[str, Any]:
         if pred_manifest and not pred_manifest.get("isArchived"):
             issues.append(f"predecessor-not-archived:{predecessor}")
     if manifest:
-        if "protocol-version::3.4.35" in set(manifest.get("labels") or []):
+        raw_labels = manifest.get("labels")
+        if isinstance(raw_labels, list) and "protocol-version::3.4.35" in raw_labels:
+            roles = [x for x in raw_labels if isinstance(x, str) and x.startswith("agent-role::")]
+            projects = [x for x in raw_labels if isinstance(x, str) and x.startswith("project::")]
+            protocols = [x for x in raw_labels if isinstance(x, str) and x.startswith("protocol-version::")]
+            if (roles != ["agent-role::coordinator"] or projects != [f"project::{project}"]
+                    or protocols != ["protocol-version::3.4.35"]):
+                issues.append("canonical-coordinator-identity-mismatch")
             policy = reporting_policy(False)
             if not policy or any(value.get(k) != v for k, v in policy.items()): issues.append("owner-reporting-policy-drift")
         # A coordinator parked in a worker-terminal session status is deaf to queued

@@ -27,6 +27,14 @@ LEASE_TOOL = Path(__file__).with_name("worker-lease.py")
 SESSIONS = Path(os.environ.get("CRAFT_SESSIONS", Path(os.environ.get("CRAFT_WORKSPACE", HOME / ".craft-agent/workspaces/general")) / "sessions")).expanduser()
 
 
+def quarantine_admission_failure(session_id: str, reason: str) -> None:
+    """Use the lease registry's shared atomic admission-failure quarantine."""
+    spec = importlib.util.spec_from_file_location("worker_lease", LEASE_TOOL)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)  # type: ignore
+    with module.locked():
+        module.quarantine_admission_failure(session_id, reason)
+
+
 def require_admitted_v3435(session_id: str, cwd: str) -> None:
     try:
         manifest = json.loads((SESSIONS / session_id / "session.jsonl").open(encoding="utf-8").readline())
@@ -159,7 +167,11 @@ def supervise(args: argparse.Namespace) -> int:
 
 
 def cmd_start(args: argparse.Namespace) -> int:
-    require_admitted_v3435(args.session, args.cwd)
+    try:
+        require_admitted_v3435(args.session, args.cwd)
+    except SystemExit as exc:
+        quarantine_admission_failure(args.session, str(exc))
+        raise
     if not args.command:
         raise SystemExit("command required after --")
     if read_job(args.session) and not args.replace:
