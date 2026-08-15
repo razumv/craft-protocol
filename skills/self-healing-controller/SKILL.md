@@ -1,9 +1,9 @@
 ---
 name: self-healing-controller
-description: Bounded evidence-first recovery controller for Craft Protocol v3.4.33 incidents with exact self-registered harness cleanup. Wakes coordinators, reconciles terminal children and coordinator inbox/status/commitment trust, and rotates only through preservation-proven project-bound bridges.
+description: Bounded evidence-first recovery controller for Craft Protocol v3.4.34 incidents with exact self-registered harness cleanup. Wakes coordinators, reconciles terminal children and coordinator inbox/status/commitment trust, and rotates only through preservation-proven project-bound bridges.
 ---
 
-# Self-Healing Controller — Protocol v3.4.33
+# Self-Healing Controller — Protocol v3.4.34
 
 You are the bounded turn of the one persistent infrastructure recovery controller, not a project coordinator. Process only deterministic incidents emitted by `~/.craft-agent/scripts/recovery-incident.py` and admitted to this exact controller target.
 
@@ -105,6 +105,10 @@ A coordinator session that no longer exists — absent from both the server and 
 3. Two-phase transfer: `coordinator-registry.py begin-transfer` naming the absent session, then `accept-transfer` for the successor. Verify the new generation and that `inspect` reports no issues.
 4. Send the successor a kickoff naming the snapshot path, the increment state to restore, and the current protocol version.
 5. Escalate to the owner only if no verified project-bound bridge exists, or if the snapshot is missing so the increment state cannot be restored.
+
+### Dead lanes never reach a terminal session status
+
+A lane that stalls or errors keeps whatever session status it last had, so the reaper's terminal-status precondition never becomes true and it sits forever. `scan-reapable-workers.py` now treats the *lease* as the authority on whether a lane is over — `stalled` and `error` qualify — while preservation still decides whether it may go: a dirty or unpushed worktree is never reaped, only escalated. Measured live: 23 dead lanes aged 70–110 hours, 14 with clean worktrees that were always safe to take.
 
 ### Orphaned dead lane (`orphaned-dead-lane`)
 

@@ -16,10 +16,12 @@ Default: JSON report. --reap: kill the resolved PID (guarded: never the app), th
 remove its PID file. Archiving the session is the AGENT's job (no external CLI).
 """
 import json, os, glob, re, subprocess, sys, time
-WS = os.path.expanduser("~/.craft-agent/workspaces/general")   # <WORKSPACE>
-SESS = os.path.join(WS, "sessions")
-PID_DIR = os.path.expanduser("~/.craft-agent/pids")
-IDLE_MIN = 10
+# Paths follow the same environment contract as every other protocol script; this
+# one hardcoded them, which is also why it had no test coverage.
+WS = os.path.expanduser(os.environ.get("CRAFT_WORKSPACE", "~/.craft-agent/workspaces/general"))
+SESS = os.path.expanduser(os.environ.get("CRAFT_SESSIONS", os.path.join(WS, "sessions")))
+PID_DIR = os.path.expanduser(os.environ.get("CRAFT_PID_DIR", "~/.craft-agent/pids"))
+IDLE_MIN = int(os.environ.get("CRAFT_REAP_IDLE_MINUTES", "10"))
 REAP = "--reap" in sys.argv
 ALL = "--all" in sys.argv        # system backstop only (launchd): reap across all projects
 PARENT = None                    # coordinator scope: only workers whose parent-session == PARENT
@@ -68,6 +70,21 @@ def pidfile_pid(sid):
 def rm_pidfile(sid):
     try: os.remove(os.path.join(PID_DIR, f"{sid}.pid"))
     except Exception: pass
+
+DEAD_LANE_STATES = ("stalled", "error")
+
+
+def lease_state(session_id: str) -> str | None:
+    """What the lane's own lease says, which outlives any session status."""
+    runtime = os.path.expanduser(os.environ.get("CRAFT_RUNTIME", "~/.craft-agent/runtime"))
+    path = os.path.expanduser(os.environ.get("CRAFT_WORKER_LEASES",
+                                             os.path.join(runtime, "worker-leases")))
+    try:
+        with open(os.path.join(path, f"{session_id}.json"), encoding="utf-8") as handle:
+            return json.load(handle).get("state")
+    except Exception:
+        return None
+
 
 def manifest(d):
     f = os.path.join(d, "session.jsonl")
@@ -158,7 +175,13 @@ def main():
         if PARENT and parent_of(m) != PARENT: continue
         status = m.get("sessionStatus"); name = (m.get("name") or "")[:50]
         wd = m.get("workingDirectory") or m.get("sdkCwd")
-        if status not in ("needs-review", "done"):
+        # A lane that died never reaches a terminal session status: it sits at
+        # whatever the board last set, so the reaper skipped it as `status=todo`
+        # forever. Measured live: 23 dead lanes aged 70-110 hours, 14 of them with
+        # clean worktrees that were always safe to reap. The lease is the authority
+        # on whether the lane is over; preservation still decides whether it may go.
+        lane_state = lease_state(sid)
+        if status not in ("needs-review", "done") and lane_state not in DEAD_LANE_STATES:
             skipped.append({"id": sid, "reason": f"status={status}", "name": name}); continue
         idle = (now - (m.get("lastMessageAt") or m.get("lastUsedAt") or 0)) / 60000
         if idle < IDLE_MIN:
@@ -167,7 +190,7 @@ def main():
         if not ok:
             skipped.append({"id": sid, "reason": f"not preserved: {detail}", "name": name}); continue
         pid, src = resolve_pid(sid, wd, cwdmap, legacy)
-        item = {"id": sid, "pid": pid, "pid_source": src, "status": status,
+        item = {"id": sid, "pid": pid, "pid_source": src, "status": status, "laneState": lane_state,
                 "role": role_of(m), "idle_min": round(idle), "worktree": wd,
                 "handoff": detail, "name": name}
         if src.startswith("cwd-collision:"):
