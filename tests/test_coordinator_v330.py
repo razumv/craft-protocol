@@ -871,6 +871,44 @@ class StatusTests(Base):
             cp, _ = self.publish(payload, ok=False)
             self.assertIn(needle, cp.stderr)
 
+    def test_a_plan_that_promises_a_worker_must_have_work_to_dispatch(self):
+        # v3.4.33: four of seven projects spent five hours with plans promising "a
+        # fresh worker produces the candidate" while no story was ready or executing
+        # — ~1800 coordinator events, three lanes dispatched between them, nothing
+        # reaching a protected branch, and every existing check reading healthy.
+        self.base_project()
+        # No lane in flight: the plan is all this project has.
+        (self.runtime / "worker-leases" / "worker1.json").unlink()
+        payload = self.increment_payload()
+        payload["githubSync"] = self.github_sync()
+        payload["childRefs"] = []
+        payload["productIncrement"]["stories"] = [
+            {"id": "done", "title": "Done", "state": "accepted", "dependsOn": [],
+             "riskContribution": "low", "acceptanceRef": "cert-w"}]
+        payload["nextActions"] = [
+            {"description": "A fresh worker produces one clean candidate",
+             "executor": "worker", "trigger": "now", "requiredEvidence": "pushed candidate",
+             "successBranch": "accept", "failureBranch": "preserve"}]
+        cert_dir = self.runtime / "completion-certificates" / "demo"
+        cert_dir.mkdir(parents=True, exist_ok=True)
+        (cert_dir / "cert-w.json").write_text(json.dumps({"project": "demo", "workUnit": "done"}))
+        self.publish(payload)
+        _, prose = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("worker-action-without-dispatchable-story:1", prose["issues"])
+        # Putting the work in the increment is what makes the promise real.
+        payload["productIncrement"]["stories"].append(
+            {"id": "next", "title": "Next candidate", "state": "ready",
+             "dependsOn": ["done"], "riskContribution": "low"})
+        payload["nextActions"][0]["storyRef"] = "next"
+        self.publish(payload)
+        _, real = self.cli(STATUS, "show", "--project", "demo")
+        self.assertFalse([i for i in real["issues"] if i.startswith("worker-action-without")])
+        # A story reference the increment does not contain is a plan about nothing.
+        payload["nextActions"][0]["storyRef"] = "imaginary"
+        self.publish(payload)
+        _, ghost = self.cli(STATUS, "show", "--project", "demo")
+        self.assertIn("plan-action-story-not-observed:imaginary", ghost["issues"])
+
     def test_a_gate_must_name_the_effect_only_the_owner_may_cause(self):
         # v3.4.31: coordinators escalated by *domain* — "money" for writing a test in
         # a wallet project, "product judgment" for removing an extended attribute

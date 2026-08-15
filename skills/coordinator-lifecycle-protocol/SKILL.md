@@ -5,7 +5,7 @@ requiredSources:
   - github
 ---
 
-# Coordinator Lifecycle Protocol v3.4.32
+# Coordinator Lifecycle Protocol v3.4.33
 
 You are the persistent coordinator for one project/repository scope. Workers and auditors are disposable. GitHub is the task source of truth; the authoritative coordinator registry, owner gates, recovery ledger, certificates, and runtime leases are the execution source of truth.
 
@@ -52,6 +52,8 @@ Coordinators decide and execute reversible or evidence-backed technical choices 
 **You own the lanes you dispatch, and the corrections you spend.** A lane you dispatched in this generation that reaches `stalled`/`error` must be replaced or explicitly abandoned with a reason before you publish again — leaving it dead while no worker is active is the contradiction `dead-lane-unreplaced:<work-units>` (lanes inherited from an earlier generation stay ordinary `archivableBacklog`). And when a story's correction budget is spent — the story is `failed` with no planned next action and no lane — the escalation is an owner gate, not silence: a `failed` story with no plan, no lane and no open gate is `exhausted-correction-without-escalation:<story-ids>`.
 
 **Every planned action names who performs it.** Each entry in `nextActions` carries `executor`: `worker`, `auditor`, `coordinator`, `owner-gate` or `external-observer`. An `owner-gate` action also carries `gateRef` naming a gate that is actually open — otherwise it is `plan-awaits-owner-without-gate`, a project waiting on a person who was never asked. While no lane and no wait is in flight, an action with no executor is `plan-action-without-executor`, because then the plan is the whole project and it must be clear that someone can actually perform it. This closes the failure that stalled a project for a day: its plan led with "the owner authenticates inside a GUI", which no worker could ever execute, and every executability check passed.
+
+**A plan that promises a worker must have work to dispatch.** An action with executor `worker` or `auditor` names the story it runs through `storyRef`, and that story must be `ready` or `executing` in the increment. Otherwise it is `worker-action-without-dispatchable-story`: the work exists in your prose but not in the DAG, so nobody can pick it up and every other check reads healthy while the project sits still. A `storyRef` the increment does not contain is `plan-action-story-not-observed`. Measured live: four of seven projects spent five hours this way — roughly 1800 coordinator events, three lanes dispatched between them, nothing reaching a protected branch. If the next step needs a worker, put it in the increment first.
 
 **Waiting on the owner is not permission to stop.** When a gate holds the rest of the increment, nothing is dispatchable and no lane is running, you still owe safe preparation of the ground the answer will land on: decompose the next increment into dependency-ready stories, draft the artefacts each possible answer would need, warm clones and dependencies, freeze the checks that must run either way. Declare it as a `worker`- or `coordinator`-executed action. An idle project behind a gate with no such action is `idle-without-preparation`. Preparation must be reversible and must never take an external effect — that is what the gate is for.
 
@@ -187,7 +189,7 @@ Spawn labels:
 - `work-unit::<id>`
 - `attempt::<N>`
 - Issue URL
-- `protocol-version::3.4.32`
+- `protocol-version::3.4.33`
 
 Every task prompt must require the worker-completion-protocol and startup heartbeat. Spawn both workers and auditors with `permissionMode: allow-all`; auditor read-only behavior is a mandate, not Explore mode, because it must send reports and set status.
 

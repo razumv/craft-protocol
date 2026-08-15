@@ -447,6 +447,25 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
     if (synth["openGateCount"] and not dispatchable and not synth["activeWorkers"]
             and not synth["observedWaitCount"] and not agent_actions):
         issues.append("idle-without-preparation")
+    # Work described in prose is not work anyone can pick up. A plan may promise
+    # "a fresh worker produces the candidate" while no story is ready or executing:
+    # the increment offers nothing to dispatch, every existing check reads healthy,
+    # and the project sits still. Measured live: four of seven projects spent five
+    # hours this way, ~1800 coordinator events and three lanes dispatched between
+    # them, with nothing reaching a protected branch.
+    story_ids = {str(story.get("id")) for story in increment.get("stories") or []
+                 if isinstance(story, dict)}
+    dispatch_actions = [str(i + 1) for i, action in enumerate(actions)
+                        if action.get("executor") in {"worker", "auditor"}]
+    if (dispatch_actions and not dispatchable and not synth["activeWorkers"]
+            and not synth["terminalWorkers"]):
+        issues.append("worker-action-without-dispatchable-story:" + ",".join(dispatch_actions[:4]))
+    # An action that names a story the increment does not contain is a plan about
+    # work nobody is tracking.
+    unknown_refs = sorted({str(action.get("storyRef")) for action in actions
+                           if action.get("storyRef") and str(action["storyRef"]) not in story_ids})
+    if unknown_refs:
+        issues.append("plan-action-story-not-observed:" + ",".join(unknown_refs[:4]))
     overdue = sorted(set(synth.get("_overdueHandoffs") or []))
     if overdue:
         issues.append("handoff-unconsumed:" + ",".join(overdue[:4]))
@@ -1120,9 +1139,10 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
         if executor is not None and executor not in ACTION_EXECUTORS:
             fail(f"nextActions[].executor must be one of {sorted(ACTION_EXECUTORS)}")
         gate_ref = optional_text(action, "gateRef")
+        story_ref = optional_text(action, "storyRef")
         norm_actions.append({**{k: action[k] for k in
                                 ("description", "trigger", "requiredEvidence", "successBranch", "failureBranch")},
-                             "executor": executor, "gateRef": gate_ref})
+                             "executor": executor, "gateRef": gate_ref, "storyRef": story_ref})
     completed = payload.get("completedOutcomes") or []
     if not isinstance(completed, list) or len(completed) > LIST_LIMIT:
         fail("completedOutcomes must be a bounded list")
