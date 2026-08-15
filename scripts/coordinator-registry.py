@@ -28,6 +28,7 @@ PREFERRED_MODEL = os.environ.get("CRAFT_COORDINATOR_MODEL", "pi/gpt-5.6-sol")
 DEFAULT_TTL = int(os.environ.get("CRAFT_COORDINATOR_TTL_SECONDS", "3600"))
 FALLBACK_TTL = int(os.environ.get("CRAFT_FALLBACK_TTL_SECONDS", "3600"))
 VALID_STATES = {"authoritative", "rotating", "hold", "superseded", "needs-owner"}
+REPORTING_POLICY = RUNTIME / "reporting-policy.json"
 
 
 # [<project>] Coordinator v<major>.<minor>.<patch> — nothing else, so the list the
@@ -91,6 +92,15 @@ def manifest_or_die(sid: str) -> dict[str, Any]:
     return manifest
 
 
+def reporting_policy(required: bool = False) -> dict[str, Any]:
+    row = common.read_json(REPORTING_POLICY)
+    if not row or row.get("mode") != "pull-only":
+        if required: raise SystemExit("v3.4.35 requires configured pull-only reporting policy")
+        return {}
+    fingerprint = __import__("hashlib").sha256(json.dumps({"mode": row.get("mode"), "ownerFacingSessionId": row.get("ownerFacingSessionId"), "configuredAt": row.get("configuredAt")}, sort_keys=True).encode()).hexdigest()
+    return {"reportingMode": "pull-only", "reportingPolicyRevision": row.get("configuredAt"), "reportingPolicyFingerprint": fingerprint}
+
+
 def provider_fields(manifest: dict[str, Any]) -> dict[str, Any]:
     connection = manifest.get("llmConnection")
     model = manifest.get("model")
@@ -127,6 +137,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
             "leaseExpiresAt": now + int(args.ttl) * 1000,
             "transferStartedAt": None, "fallbackReason": args.fallback_reason,
             "unresolvedGates": [], "activeChildren": [], **provider_fields(manifest),
+            **reporting_policy("protocol-version::3.4.35" in set(manifest.get("labels") or [])),
         }
         save(value)
     print(json.dumps({"ok": True, "record": value}, ensure_ascii=False, indent=2))
@@ -233,6 +244,7 @@ def cmd_begin_transfer(args: argparse.Namespace) -> int:
     project = clean_project(args.project); successor = manifest_or_die(args.successor)
     identity = transfer_identity(successor)
     validate_successor_manifest(successor, project, load(project) or {})
+    reporting_policy(True)
     # A coordinator is project-bound.  Do not defer this proof until after the
     # predecessor has entered rotating state.
     if successor.get("projectId") != (load(project) or {}).get("projectId"):
@@ -263,6 +275,7 @@ def cmd_accept_transfer(args: argparse.Namespace) -> int:
         if args.expected_generation is not None and int(value.get("generation") or 0) != args.expected_generation:
             raise SystemExit("generation mismatch")
         validate_successor_manifest(manifest, project, value)
+        policy = reporting_policy(True)
         expected_identity = value.get("successorIdentity")
         if not isinstance(expected_identity, dict):
             raise SystemExit("transfer identity admission missing; begin a new transfer")
@@ -275,7 +288,7 @@ def cmd_accept_transfer(args: argparse.Namespace) -> int:
                       "leaseExpiresAt": now + int(args.ttl) * 1000, "transferAcceptedAt": now,
                       "transferStartedAt": None, "transferIdentityAcceptedAt": now,
                       "priorFallbackReason": value.get("fallbackReason"),
-                      "fallbackReason": None, **provider_fields(manifest)})
+                      "fallbackReason": None, **provider_fields(manifest), **policy})
         save(value)
     print(json.dumps({"ok": True, "record": value}, indent=2)); return 0
 
@@ -318,6 +331,9 @@ def inspect_one(project: str) -> dict[str, Any]:
         if pred_manifest and not pred_manifest.get("isArchived"):
             issues.append(f"predecessor-not-archived:{predecessor}")
     if manifest:
+        if "protocol-version::3.4.35" in set(manifest.get("labels") or []):
+            policy = reporting_policy(False)
+            if not policy or any(value.get(k) != v for k, v in policy.items()): issues.append("owner-reporting-policy-drift")
         # A coordinator parked in a worker-terminal session status is deaf to queued
         # admission wakes until a direct owner message; that is role drift, not rest.
         if (value.get("state") in {"authoritative", "rotating"}

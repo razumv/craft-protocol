@@ -26,6 +26,10 @@ def cmd_check(a):
  except OSError: raise SystemExit("session transcript unavailable")
  out={"compliant":not hits,"sessionId":sid,"violations":hits,"detectionCoverage":"best-effort-session-transcript","interception":"unavailable","absenceIsProof":False}
  print(json.dumps(out,indent=2));return 0 if not hits else 4
+def cmd_query(_):
+ policy=common.read_json(PATH)
+ if not policy: raise SystemExit("reporting policy not configured")
+ print(json.dumps({"policy":policy,"interception":"unavailable","detectionCoverage":"best-effort-session-transcript","absenceIsProof":False},indent=2));return 0
 def parser():
- p=argparse.ArgumentParser(description=__doc__);s=p.add_subparsers(dest="command",required=True);c=s.add_parser("configure");c.add_argument("--owner-facing-session",required=True);c.set_defaults(func=cmd_configure);k=s.add_parser("check");k.add_argument("--session",required=True);k.set_defaults(func=cmd_check);return p
+ p=argparse.ArgumentParser(description=__doc__);s=p.add_subparsers(dest="command",required=True);c=s.add_parser("configure");c.add_argument("--owner-facing-session",required=True);c.set_defaults(func=cmd_configure);k=s.add_parser("check");k.add_argument("--session",required=True);k.set_defaults(func=cmd_check);q=s.add_parser("query");q.set_defaults(func=cmd_query);return p
 if __name__=="__main__":raise SystemExit(parser().parse_args().func(parser().parse_args()))

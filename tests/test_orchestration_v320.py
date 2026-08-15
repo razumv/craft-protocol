@@ -15,6 +15,7 @@ class OrchestrationV320Test(unittest.TestCase):
         self.sessions = self.root / "sessions"; self.runtime = self.root / "runtime"; self.sessions.mkdir()
         self.env = os.environ.copy(); self.env.update({"CRAFT_WORKSPACE": str(self.root), "CRAFT_SESSIONS": str(self.sessions),
             "CRAFT_RUNTIME": str(self.runtime), "CRAFT_COORDINATOR_TTL_SECONDS": "1", "CRAFT_FALLBACK_TTL_SECONDS": "1"})
+        self.runtime.mkdir(exist_ok=True); (self.runtime / "reporting-policy.json").write_text(json.dumps({"mode":"pull-only","ownerFacingSessionId":"owner","configuredAt":1}))
     def tearDown(self): self.temp.cleanup()
     def manifest(self, sid, project="demo", model="pi/gpt-5.6-sol", connection="chatgpt-plus", archived=False,
                  labels=None, messages=1, tokens=1, name=None):
