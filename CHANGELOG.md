@@ -4,6 +4,16 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.34] — 2026-08-15
+
+### Dead lanes finally have a way out
+
+- `scan-reapable-workers.py` treats a lane's **lease** as the authority on whether it is over: `stalled` and `error` qualify alongside a terminal session status. A lane that dies never reaches `needs-review` — it keeps whatever status the board last set — so the reaper skipped it as `status=todo` indefinitely. Preservation still decides whether it may go: dirty or unpushed worktrees are skipped exactly as before;
+- `increment-board.py` no longer marks `stalled`/`error` lanes as `todo`. The board was actively making dead lanes look alive, which is what kept them out of the reaper's reach;
+- the scanner now honours `CRAFT_WORKSPACE`, `CRAFT_SESSIONS`, `CRAFT_PID_DIR`, `CRAFT_RUNTIME` and `CRAFT_REAP_IDLE_MINUTES` like every other protocol script. It was the only one with hardcoded paths, which is also why it had no test coverage.
+
+Measured live: 23 dead lanes aged 70–110 hours, every one of them an unarchived session; 14 had clean worktrees. Reapable candidates went from 2 to 11 the moment the lease was consulted, with the 9 dirty ones still correctly refused.
+
 ## [3.4.33] — 2026-08-15
 
 ### A plan that promises a worker must have work to dispatch
@@ -450,7 +460,8 @@ Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's 
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.33...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.34...HEAD
+[3.4.34]: https://github.com/razumv/craft-protocol/compare/v3.4.33...v3.4.34
 [3.4.33]: https://github.com/razumv/craft-protocol/compare/v3.4.32...v3.4.33
 [3.4.32]: https://github.com/razumv/craft-protocol/compare/v3.4.31...v3.4.32
 [3.4.31]: https://github.com/razumv/craft-protocol/compare/v3.4.30...v3.4.31

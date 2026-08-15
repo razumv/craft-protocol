@@ -262,7 +262,8 @@ def sync_coordinator_statuses() -> list[str]:
 
 
 def sync_lane_statuses() -> list[str]:
-    """Active lanes read `todo`; the protocol owns `needs-review` terminality."""
+    """Executing lanes read `todo`; the protocol owns terminality, and a dead lane
+    is left alone so its disposition stays visible instead of looking like work."""
     actions: list[str] = []
     for path in sorted((RUNTIME / "worker-leases").glob("*.json")):
         lease = read(path)
@@ -270,7 +271,11 @@ def sync_lane_statuses() -> list[str]:
         row = manifest(sid)
         if not row or row.get("isArchived"):
             continue
-        if (lease.get("state") in {"starting", "running", "suspect", "stalled", "error"}
+        # Only lanes that are actually executing read `todo`. Marking a stalled or
+        # errored lane as active was hiding it from the reaper, whose eligibility
+        # begins at a terminal session status: 23 dead lanes aged 70-110 hours had
+        # accumulated, and the board itself was keeping them looking alive.
+        if (lease.get("state") in {"starting", "running"}
                 and row.get("sessionStatus") not in {"todo", "backlog"}):
             cli("invoke", "sessions:command", json.dumps(sid),
                 json.dumps({"type": "setSessionStatus", "state": "todo"}))

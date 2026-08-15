@@ -263,6 +263,45 @@ class ReliabilityToolsTest(unittest.TestCase):
         finally:
             proc.kill()
 
+    def test_a_dead_lane_is_reapable_even_though_its_status_never_turned_terminal(self):
+        # v3.4.34: a lane that dies never reaches needs-review — it keeps whatever
+        # status the board last set — so the reaper skipped it as `status=todo`
+        # forever. Measured live: 23 dead lanes aged 70-110 hours, 14 with clean
+        # worktrees that were always safe to reap.
+        import subprocess as sp
+        # A finished lane whose work is committed and pushed: nothing is at risk.
+        bare = self.root / "origin.git"
+        sp.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        wt = self.root / "wt-dead"
+        self.manifest("dead", status="todo", worktree=wt)
+        env_git = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+        sp.run(["git", "init", "-q", "-b", "main", str(wt)], check=True)
+        (wt / "f").write_text("done")
+        sp.run(["git", "-C", str(wt), "add", "-A"], check=True)
+        sp.run(["git", "-C", str(wt), "commit", "-qm", "done"], check=True, env=env_git)
+        sp.run(["git", "-C", str(wt), "remote", "add", "origin", str(bare)], check=True)
+        sp.run(["git", "-C", str(wt), "push", "-q", "-u", "origin", "main"], check=True)
+        (self.runtime / "worker-leases").mkdir(parents=True, exist_ok=True)
+        (self.runtime / "worker-leases" / "dead.json").write_text(json.dumps(
+            {"schemaVersion": 1, "sessionId": "dead", "parentSessionId": "parent",
+             "role": "worker", "workUnit": "unit", "state": "stalled"}))
+        env = {**self.env, "CRAFT_WORKER_LEASES": str(self.runtime / "worker-leases"),
+               "CRAFT_REAP_IDLE_MINUTES": "0", "CRAFT_WORKSPACE": str(self.root)}
+        out = sp.run(["python3", str(SCRIPTS / "scan-reapable-workers.py")],
+                     env=env, capture_output=True, text=True, timeout=60)
+        report = json.loads(out.stdout)
+        ids = [x["id"] for x in report["reapable"]]
+        self.assertIn("dead", ids)
+        self.assertEqual([x for x in report["reapable"] if x["id"] == "dead"][0]["laneState"], "stalled")
+        # A live lane at the same status stays out of reach.
+        (self.runtime / "worker-leases" / "dead.json").write_text(json.dumps(
+            {"schemaVersion": 1, "sessionId": "dead", "parentSessionId": "parent",
+             "role": "worker", "workUnit": "unit", "state": "running"}))
+        out = sp.run(["python3", str(SCRIPTS / "scan-reapable-workers.py")],
+                     env=env, capture_output=True, text=True, timeout=60)
+        self.assertNotIn("dead", [x["id"] for x in json.loads(out.stdout)["reapable"]])
+
     def test_live_coordinator_blocks_reap_of_archived_worker_sharing_cwd(self):
         code = (
             "import importlib.util,tempfile,pathlib;"

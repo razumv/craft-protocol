@@ -1,4 +1,4 @@
-# Protocol v3.4.33 defaults
+# Protocol v3.4.34 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -117,48 +117,50 @@ GitHub sync (3.4.18):          material stage without githubSync, or naming an o
 Own dead lane (3.4.19):        lane dispatched this generation in stalled/error with no active worker → dead-lane-unreplaced
 Exhausted correction (3.4.19): failed story with no plan, lane or open gate → exhausted-correction-without-escalation
 Predecessor archive (3.4.19):  live predecessor 900s after an accepted handoff → predecessor-unarchived incident + wake
-Correction extension (3.4.33): one self-granted bounded extension per story; the second → correction-budget-extension-reused
-Gate scope (3.4.33):           gates only for external effects; investigation/root-cause/audit is self-authorized
-Complete idle (3.4.33):        complete standing 1800s with no next action or gate → complete-without-next-increment (CRAFT_STATUS_COMPLETE_IDLE_SECONDS)
-Vanished coordinator (3.4.33): verify-session-absent then respawn-from-handoff-snapshot before owner escalation
-Orphaned lane (3.4.33):        dead lane >86400s whose dispatcher owns no project → orphaned-dead-lane (CRAFT_ORPHANED_LANE_SECONDS)
-Increment cards (3.4.33):      one subtask per story; status follows story state; --reset-cards rebuilds cards + subtasks
-Kill switch re-arm (3.4.33):   install.sh restores the pre-install self-healing state after tests pass
-Kill switch visibility (3.4.33): detect/report expose killSwitch.staleWithOpenConditions past 1800s (CRAFT_KILL_SWITCH_STALE_SECONDS)
-Story acceptance (3.4.33):     accepted story needs observed acceptanceRef + workUnit → story-accepted-without-evidence / -ref-not-observed
-Delivery verification (3.4.33): story mergeSha must be ancestor of origin/<origin/HEAD branch>; merge commit only, never candidate
-Delivered stages (3.4.33):     deploying/demonstrating/complete require a merge commit per accepted story → unmerged-delivery
-Pull request duty (3.4.33):    actionable PR parked >3600s → pull-request-unfinished; check older than 21600s → pull-request-check-stale
-Lease registration (3.4.33):   lease-less child of a live coordinator >600s → unregistered-child-lane (CRAFT_UNREGISTERED_CHILD_SECONDS)
-Standing merge authority (3.4.33): per project + exact branch, direct-owner only, risk ceiling, TTL default 604800s (max CRAFT_STANDING_AUTHORITY_MAX_TTL_SECONDS 2592000)
-Standing merge refusals (3.4.33): invalid certificate, candidate absent or already in branch, unauthorised branch, risk above ceiling, project HOLD or work-unit gate
-Standing merge receipt (3.4.33): written by `use` before the merge; absence next to a delivered story is detectable
-Named merge authority (3.4.33): story mergeAuthorityRef must be a resolved gate id or a standing-merge work unit → merge-without-named-authority
-Blocked story binding (3.4.33): blocked story with satisfied deps needs blockedByRef naming an open gate/wait/blockerRef
-Handoff deadline (3.4.33):     handoff-ready lane older than 600s → handoff-unconsumed (CRAFT_STATUS_HANDOFF_GRACE_SECONDS)
-Merge publication (3.4.33):    standing-merge receipt without a declared mergeSha → merge-receipt-unpublished
-Idle-ready scope (3.4.33):     a story with a handoff-ready lane is not idle; consumption has its own deadline
-Ledger drain order (3.4.33): safety, pipeline blockers, lane recovery, housekeeping (quota CRAFT_DRAIN_HOUSEKEEPING_QUOTA=1, limit CRAFT_DRAIN_LIMIT=3)
-Controller scope (3.4.33):     a valid lease works the open backlog; the admission envelope is a wake reason, not the work list
-Plan executors (3.4.33):       nextActions[].executor required in flight-free turns; owner-gate actions need an open gateRef
-Preparation duty (3.4.33):     gate-blocked idle with no agent-executed action → idle-without-preparation
-Probe deferral (3.4.33):       unobservable safety fact defers the cycle; durable block after 3 consecutive failures (CRAFT_ADMISSION_MAX_PROBE_FAILURES)
-Detection independence (3.4.33): the admission cron runs detect --apply every tick; perception never waits for a controller turn
-Controller silence (3.4.33):   blocking backlog + no controller turn within 1800s + no kill switch → drain reports controller.silent (CRAFT_CONTROLLER_SILENT_SECONDS)
-Transport health (3.4.33):     admission tick records channel success/failure; drain reports transport.lost after 900s without success (CRAFT_TRANSPORT_LOST_SECONDS)
-Drain ranks (3.4.33):          safety, idle executors, bookkeeping, lane recovery, housekeeping (quota)
-Required sources (3.4.33):     story requiredSources must be reachable by its live lane → lane-missing-required-sources
-Host saturation (3.4.33):      load1/cores > 2.5 → transport.hostStarved instead of transport.lost (CRAFT_HOST_SATURATION_RATIO)
-Kill switch provenance (3.4.33): install.sh stamps armed-by/rearm-expected; installer-armed switch older than 600s → killSwitch.stranded (CRAFT_KILL_SWITCH_STRANDED_SECONDS)
-Silence behind a switch (3.4.33): only a deliberate pause excuses controller silence; a stranded switch does not
-Gate choice separators (3.4.33): create accepts , and | and normalizes/dedupes, so a gate is always answerable
-Merge authorization (3.4.33): pre-merge proof only (PASS on candidate, green required CI, head unchanged, no open gates); readback stays a post-merge duty recorded as readbackOwed
-Gate external effect (3.4.33): create requires --external-effect from the owner-only list; self-authorized values are refused with the remedy
-Correction budget (3.4.33):    extensions bounded by distinct proven rootCauseRef, not by count; repeated cause returns to the owner
-Coordinator name (3.4.33):     exactly [<project>] Coordinator v<version> → coordinator-name-nonconforming / -project-mismatch
-Stale coordinators (3.4.33):   every live coordinator session that is not the current one → stale-coordinator-session
-Plan dispatchability (3.4.33): worker/auditor action with no ready or executing story and no lane → worker-action-without-dispatchable-story
-Plan story refs (3.4.33):      nextActions[].storyRef must name a story the increment contains
+Correction extension (3.4.34): one self-granted bounded extension per story; the second → correction-budget-extension-reused
+Gate scope (3.4.34):           gates only for external effects; investigation/root-cause/audit is self-authorized
+Complete idle (3.4.34):        complete standing 1800s with no next action or gate → complete-without-next-increment (CRAFT_STATUS_COMPLETE_IDLE_SECONDS)
+Vanished coordinator (3.4.34): verify-session-absent then respawn-from-handoff-snapshot before owner escalation
+Orphaned lane (3.4.34):        dead lane >86400s whose dispatcher owns no project → orphaned-dead-lane (CRAFT_ORPHANED_LANE_SECONDS)
+Increment cards (3.4.34):      one subtask per story; status follows story state; --reset-cards rebuilds cards + subtasks
+Kill switch re-arm (3.4.34):   install.sh restores the pre-install self-healing state after tests pass
+Kill switch visibility (3.4.34): detect/report expose killSwitch.staleWithOpenConditions past 1800s (CRAFT_KILL_SWITCH_STALE_SECONDS)
+Story acceptance (3.4.34):     accepted story needs observed acceptanceRef + workUnit → story-accepted-without-evidence / -ref-not-observed
+Delivery verification (3.4.34): story mergeSha must be ancestor of origin/<origin/HEAD branch>; merge commit only, never candidate
+Delivered stages (3.4.34):     deploying/demonstrating/complete require a merge commit per accepted story → unmerged-delivery
+Pull request duty (3.4.34):    actionable PR parked >3600s → pull-request-unfinished; check older than 21600s → pull-request-check-stale
+Lease registration (3.4.34):   lease-less child of a live coordinator >600s → unregistered-child-lane (CRAFT_UNREGISTERED_CHILD_SECONDS)
+Standing merge authority (3.4.34): per project + exact branch, direct-owner only, risk ceiling, TTL default 604800s (max CRAFT_STANDING_AUTHORITY_MAX_TTL_SECONDS 2592000)
+Standing merge refusals (3.4.34): invalid certificate, candidate absent or already in branch, unauthorised branch, risk above ceiling, project HOLD or work-unit gate
+Standing merge receipt (3.4.34): written by `use` before the merge; absence next to a delivered story is detectable
+Named merge authority (3.4.34): story mergeAuthorityRef must be a resolved gate id or a standing-merge work unit → merge-without-named-authority
+Blocked story binding (3.4.34): blocked story with satisfied deps needs blockedByRef naming an open gate/wait/blockerRef
+Handoff deadline (3.4.34):     handoff-ready lane older than 600s → handoff-unconsumed (CRAFT_STATUS_HANDOFF_GRACE_SECONDS)
+Merge publication (3.4.34):    standing-merge receipt without a declared mergeSha → merge-receipt-unpublished
+Idle-ready scope (3.4.34):     a story with a handoff-ready lane is not idle; consumption has its own deadline
+Ledger drain order (3.4.34): safety, pipeline blockers, lane recovery, housekeeping (quota CRAFT_DRAIN_HOUSEKEEPING_QUOTA=1, limit CRAFT_DRAIN_LIMIT=3)
+Controller scope (3.4.34):     a valid lease works the open backlog; the admission envelope is a wake reason, not the work list
+Plan executors (3.4.34):       nextActions[].executor required in flight-free turns; owner-gate actions need an open gateRef
+Preparation duty (3.4.34):     gate-blocked idle with no agent-executed action → idle-without-preparation
+Probe deferral (3.4.34):       unobservable safety fact defers the cycle; durable block after 3 consecutive failures (CRAFT_ADMISSION_MAX_PROBE_FAILURES)
+Detection independence (3.4.34): the admission cron runs detect --apply every tick; perception never waits for a controller turn
+Controller silence (3.4.34):   blocking backlog + no controller turn within 1800s + no kill switch → drain reports controller.silent (CRAFT_CONTROLLER_SILENT_SECONDS)
+Transport health (3.4.34):     admission tick records channel success/failure; drain reports transport.lost after 900s without success (CRAFT_TRANSPORT_LOST_SECONDS)
+Drain ranks (3.4.34):          safety, idle executors, bookkeeping, lane recovery, housekeeping (quota)
+Required sources (3.4.34):     story requiredSources must be reachable by its live lane → lane-missing-required-sources
+Host saturation (3.4.34):      load1/cores > 2.5 → transport.hostStarved instead of transport.lost (CRAFT_HOST_SATURATION_RATIO)
+Kill switch provenance (3.4.34): install.sh stamps armed-by/rearm-expected; installer-armed switch older than 600s → killSwitch.stranded (CRAFT_KILL_SWITCH_STRANDED_SECONDS)
+Silence behind a switch (3.4.34): only a deliberate pause excuses controller silence; a stranded switch does not
+Gate choice separators (3.4.34): create accepts , and | and normalizes/dedupes, so a gate is always answerable
+Merge authorization (3.4.34): pre-merge proof only (PASS on candidate, green required CI, head unchanged, no open gates); readback stays a post-merge duty recorded as readbackOwed
+Gate external effect (3.4.34): create requires --external-effect from the owner-only list; self-authorized values are refused with the remedy
+Correction budget (3.4.34):    extensions bounded by distinct proven rootCauseRef, not by count; repeated cause returns to the owner
+Coordinator name (3.4.34):     exactly [<project>] Coordinator v<version> → coordinator-name-nonconforming / -project-mismatch
+Stale coordinators (3.4.34):   every live coordinator session that is not the current one → stale-coordinator-session
+Plan dispatchability (3.4.34): worker/auditor action with no ready or executing story and no lane → worker-action-without-dispatchable-story
+Plan story refs (3.4.34):      nextActions[].storyRef must name a story the increment contains
+Dead lane reaping (3.4.34):    lease state stalled/error qualifies for reaping; preservation still gates it; board no longer marks dead lanes todo
+Reaper configuration (3.4.34): honours CRAFT_WORKSPACE/CRAFT_SESSIONS/CRAFT_PID_DIR/CRAFT_RUNTIME/CRAFT_REAP_IDLE_MINUTES
 Rotation adoption (3.4.3):     lease parent rebinds to registry successor via activeChildren; labels stay historical
 Evidence adoption (3.4.7):     inbox adopt re-addresses predecessor events, immutable bindings survive; waits rebind on reconcile
 Block supersede (3.4.3):       durable block of a superseded target identity yields to the new generation's cycle
@@ -205,7 +207,7 @@ Ack evidence:                  same token/generation + published status revision
 Status storage:                ~/.craft-agent/runtime/coordinator-status/<project>.json
 Status customer fields:        demonstrableNow, remainingOutcome, etaRange, confidence, realBlocker
 Status Product Increment:      ID, stage, risk tier, real-workflow criterion, non-goals, 1..8 acyclic stories
-GitHub sync (3.4.33):          githubSync {issue, commentRef, projectField, syncedStage, syncedAt}; material stage without it → github-sync-missing/stale
+GitHub sync (3.4.34):          githubSync {issue, commentRef, projectField, syncedStage, syncedAt}; material stage without it → github-sync-missing/stale
 Status next actions:           up to 3 ordered; each needs trigger + required evidence + success/failure branch
 Status classifications:        verified, executing, waiting-observed, blocked, stale, contradictory
 Commitment storage:            ~/.craft-agent/runtime/coordinator-commitments/<project>/<id>.json
