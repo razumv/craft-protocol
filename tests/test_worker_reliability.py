@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -288,7 +289,7 @@ class ReliabilityToolsTest(unittest.TestCase):
              "role": "worker", "workUnit": "unit", "state": "stalled"}))
         env = {**self.env, "CRAFT_WORKER_LEASES": str(self.runtime / "worker-leases"),
                "CRAFT_REAP_IDLE_MINUTES": "0", "CRAFT_WORKSPACE": str(self.root)}
-        out = sp.run(["python3", str(SCRIPTS / "scan-reapable-workers.py")],
+        out = sp.run([sys.executable, str(SCRIPTS / "scan-reapable-workers.py")],
                      env=env, capture_output=True, text=True, timeout=60)
         report = json.loads(out.stdout)
         ids = [x["id"] for x in report["reapable"]]
@@ -298,7 +299,7 @@ class ReliabilityToolsTest(unittest.TestCase):
         (self.runtime / "worker-leases" / "dead.json").write_text(json.dumps(
             {"schemaVersion": 1, "sessionId": "dead", "parentSessionId": "parent",
              "role": "worker", "workUnit": "unit", "state": "running"}))
-        out = sp.run(["python3", str(SCRIPTS / "scan-reapable-workers.py")],
+        out = sp.run([sys.executable, str(SCRIPTS / "scan-reapable-workers.py")],
                      env=env, capture_output=True, text=True, timeout=60)
         self.assertNotIn("dead", [x["id"] for x in json.loads(out.stdout)["reapable"]])
 
