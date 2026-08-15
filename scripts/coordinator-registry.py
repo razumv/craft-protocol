@@ -205,10 +205,8 @@ def cmd_reconcile_activity(args: argparse.Namespace) -> int:
 
 def validate_successor_manifest(manifest: dict[str, Any], project: str, record: dict[str, Any]) -> None:
     labels = set(manifest.get("labels") or [])
-    # Existing v3.4.34 records remain transferable; every v3.4.35 successor
-    # receives the complete canonical identity admission below.
-    if "protocol-version::3.4.35" not in labels:
-        return
+    # Existing authoritative v3.4.34 coordinators remain live, but every new
+    # transfer successor is admitted as the current canonical v3.4.35 identity.
     expected_name = f"[{project}] Coordinator v3.4.35"
     if (manifest.get("name") != expected_name or "coordinators" not in labels
             or "agent-role::coordinator" not in labels or f"project::{project}" not in labels

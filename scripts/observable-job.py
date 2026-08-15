@@ -8,6 +8,7 @@ import contextlib
 import fcntl
 import json
 import os
+import importlib.util
 from pathlib import Path
 import subprocess
 import sys
@@ -30,14 +31,18 @@ def require_admitted_v3435(session_id: str, cwd: str) -> None:
     except Exception:
         raise SystemExit("session manifest required for observable job")
     if "protocol-version::3.4.35" not in set(manifest.get("labels") or []):
-        return
+        return  # Existing v3.4.34 observable jobs remain readable/runnable.
+    matches = []
     for record_path in (RUNTIME / "lane-admissions").glob("*.json"):
         record = read_json_file(record_path) or {}
         if record.get("state") == "admitted" and record.get("sessionId") == session_id:
-            identity = record.get("identity") or {}
-            if identity.get("worktree") == str(Path(cwd).expanduser().resolve()):
-                return
-    raise SystemExit("v3.4.35 observable job requires matching admitted lane")
+            matches.append(record)
+    if len(matches) != 1 or (matches[0].get("identity") or {}).get("worktree") != str(Path(cwd).expanduser().resolve()):
+        raise SystemExit("observable job requires matching admitted lane")
+    # Re-run shared confirmation so post-confirm manifest/registry drift refuses.
+    spec = importlib.util.spec_from_file_location("lane_admission", Path(__file__).with_name("lane-admission.py"))
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)  # type: ignore
+    module.cmd_confirm(argparse.Namespace(token=matches[0]["token"], session=session_id))
 
 
 def now_ms() -> int:

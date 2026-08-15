@@ -189,7 +189,7 @@ Spawn labels:
 - `work-unit::<id>`
 - `attempt::<N>`
 - Issue URL
-- `protocol-version::3.4.34`
+- `protocol-version::3.4.35`
 
 Every task prompt must require the worker-completion-protocol and startup heartbeat. Spawn both workers and auditors with `permissionMode: allow-all`; auditor read-only behavior is a mandate, not Explore mode, because it must send reports and set status.
 

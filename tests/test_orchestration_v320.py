@@ -19,10 +19,10 @@ class OrchestrationV320Test(unittest.TestCase):
     def manifest(self, sid, project="demo", model="pi/gpt-5.6-sol", connection="chatgpt-plus", archived=False,
                  labels=None, messages=1, tokens=1, name=None):
         d = self.sessions / sid; d.mkdir(exist_ok=True)
-        value = {"id": sid, "name": name or f"[{project}] Coordinator v3.4.32", "createdAt": int(time.time()*1000), "isArchived": archived,
-            "sessionStatus": "todo", "workingDirectory": str(self.root/f"wt-{sid}"), "projectId": f"pid-{project}",
+        value = {"id": sid, "name": name or f"[{project}] Coordinator v3.4.35", "createdAt": int(time.time()*1000), "isArchived": archived,
+            "sessionStatus": "todo", "workingDirectory": str(self.root/f"wt-{sid}"), "projectId": f"pid-{project}", "permissionMode": "allow-all",
             "model": model, "llmConnection": connection, "messageCount": messages, "tokenUsage": {"totalTokens": tokens},
-            "labels": labels or ["coordinators", "agent-role::coordinator", f"project::{project}", "protocol-version::3"]}
+            "labels": labels or ["coordinators", "agent-role::coordinator", f"project::{project}", "protocol-version::3.4.35"]}
         (d/"session.jsonl").write_text(json.dumps(value)+"\n"); return value
     def exec_tool(self, script, *args, ok=True):
         p = subprocess.run([str(SCRIPTS/script), *args], env=self.env, text=True, capture_output=True, timeout=20)

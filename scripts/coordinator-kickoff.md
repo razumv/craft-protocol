@@ -2,7 +2,7 @@
 
 Use this for every new project coordinator. Replace `<PROJECT>`, `<PROJECT-SLUG>`, `<REPO>`, and `<GITHUB>`.
 
-Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonical name `[<project>] Coordinator v3.4.35`, and labels `coordinators`, `agent-role::coordinator`, `project::<PROJECT-SLUG>`, `protocol-version::3.4.34`. Workers/auditors: `chatgpt-plus`, `pi/gpt-5.6-terra`, medium. If the connection fails, preserve a handoff and re-spawn; a live session’s connection cannot change. A non-Codex fallback must record a reason, expires after 60 minutes by default, and must repatriate to one Codex successor when available.
+Spawn coordinator: `chatgpt-plus`, `pi/gpt-5.6-sol`, medium, allow-all, canonical name `[<project>] Coordinator v3.4.35`, and labels `coordinators`, `agent-role::coordinator`, `project::<PROJECT-SLUG>`, `protocol-version::3.4.35`. Workers/auditors: `chatgpt-plus`, `pi/gpt-5.6-terra`, medium. If the connection fails, preserve a handoff and re-spawn; a live session’s connection cannot change. A non-Codex fallback must record a reason, expires after 60 minutes by default, and must repatriate to one Codex successor when available.
 
 ---
 

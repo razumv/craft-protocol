@@ -12,6 +12,7 @@ import argparse
 import contextlib
 import fcntl
 import glob
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -405,16 +406,24 @@ def refuse_role_drift_create(session_id: str, value: dict[str, Any]) -> None:
                 raise SystemExit(f"refusing lease: worktree already leased by live session {path.stem}: {worktree}")
 
 
-def require_admission(token: str | None, session_id: str) -> None:
-    manifest = read_manifest(session_id) or {}
-    strict = "protocol-version::3.4.35" in set(manifest.get("labels") or [])
-    if strict and not token:
-        raise SystemExit("v3.4.35 lane requires confirmed two-phase admission token")
-    if token is None:
-        return  # Legacy runtime records remain compatible.
-    row = read_json(RUNTIME / "lane-admissions" / f"{token}.json")
-    if not row or row.get("state") != "admitted" or row.get("sessionId") != session_id:
-        raise SystemExit("refusing lease without confirmed two-phase admission")
+def require_admission(token: str | None, session_id: str, args: argparse.Namespace) -> None:
+    if not token:
+        raise SystemExit("explicit lease create requires confirmed admission token")
+    # Reuse the exact admission validator at every mutable boundary rather than
+    # trusting a confirmation that may predate manifest/registry drift.
+    spec = importlib.util.spec_from_file_location("lane_admission", Path(__file__).with_name("lane-admission.py"))
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)  # type: ignore
+    module.cmd_confirm(argparse.Namespace(token=token, session=session_id))
+    row = read_json(RUNTIME / "lane-admissions" / f"{token}.json") or {}
+    identity = row.get("identity") or {}
+    for key, arg in (("parentSessionId", "parent"), ("workUnit", "work_unit"), ("attempt", "attempt"), ("worktree", "worktree")):
+        supplied = getattr(args, arg, None)
+        if supplied is not None:
+            actual = expand(supplied) if key == "worktree" else str(supplied)
+            if actual != str(identity.get(key) or ""):
+                raise SystemExit(f"lease override differs from immutable admission {key}")
+    if args.state != "starting":
+        raise SystemExit("lease create state must be starting; use heartbeat after admission")
 
 
 def cmd_create(args: argparse.Namespace) -> int:
@@ -426,7 +435,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             raise SystemExit(f"refusing lease for archived session: {args.session}")
         if role_of(manifest) not in ROLES:
             raise SystemExit(f"refusing lease for role={role_of(manifest)}")
-        require_admission(args.admission_token, args.session)
+        require_admission(args.admission_token, args.session, args)
         value = read_json(lease_path(args.session)) or lease_from_manifest(manifest)
         for key, arg in (
             ("parentSessionId", "parent"), ("workUnit", "work_unit"),
