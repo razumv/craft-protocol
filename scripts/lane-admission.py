@@ -1,13 +1,13 @@
 #!/opt/homebrew/bin/python3
 # SPDX-License-Identifier: Apache-2.0
-"""Strict two-phase admission for v3.4.35 worker/auditor lanes; legacy records pass unchanged."""
+"""Strict two-phase admission for v3.4.35/v3.4.36 worker/auditor lanes; legacy records pass unchanged."""
 from __future__ import annotations
 import argparse, hashlib, importlib.util, json, re
 from pathlib import Path
 import os
 HERE=Path(__file__).resolve().parent
 spec=importlib.util.spec_from_file_location('common',HERE/'orchestration-common.py');common=importlib.util.module_from_spec(spec);spec.loader.exec_module(common) # type: ignore
-ROOT=common.RUNTIME/'lane-admissions'; LOCK=common.RUNTIME/'lane-admissions.lock'; ROLES={'worker','auditor'}; VERSION='3.4.35'
+ROOT=common.RUNTIME/'lane-admissions'; LOCK=common.RUNTIME/'lane-admissions.lock'; ROLES={'worker','auditor'}; VERSIONS={'3.4.35','3.4.36'}
 def clean(x):
  x=re.sub(r'[^A-Za-z0-9._-]+','-',x.strip()).strip('-')
  if not x: raise SystemExit('invalid identifier')
@@ -22,7 +22,10 @@ def role(m): return common.role_of(m)
 def canon(raw): return common.canonical_path(raw)
 def wd(m): return canon(m.get('workingDirectory') or m.get('sdkCwd') or '')
 def fp(v): return hashlib.sha256(json.dumps(v,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-def strict(m): return f'protocol-version::{VERSION}' in set(m.get('labels') or [])
+def lane_version(m):
+ labels=[x for x in m.get('labels') or [] if isinstance(x,str) and x.startswith('protocol-version::')]
+ return labels[0].split('::',1)[1] if len(labels)==1 and labels[0].split('::',1)[1] in VERSIONS else None
+def strict(m): return lane_version(m) is not None
 def parent_truth(parent, project):
  m=live(parent)
  if role(m)!='coordinator' or lab(m,'project::')!=project: raise SystemExit('parent coordinator project label mismatch')
@@ -60,9 +63,10 @@ def cmd_confirm(a):
   if not v: raise SystemExit('admission reservation not found')
   i=v.get('identity') or {}; m=live(a.session); r,_=parent_truth(i.get('parentSessionId',''),i.get('project',''))
   actual={'parentSessionId':lab(m,'parent-session::') or m.get('parentSessionId'),'role':role(m),'project':lab(m,'project::'),'projectId':m.get('projectId'),'generation':r.get('generation'),'workUnit':lab(m,'work-unit::'),'attempt':lab(m,'attempt::'),'worktree':wd(m),'token':i.get('token')}
-  required={f'agent-role::{i.get("role")}',f'parent-session::{i.get("parentSessionId")}',f'project::{i.get("project")}',f'work-unit::{i.get("workUnit")}',f'attempt::{i.get("attempt")}',f'protocol-version::{VERSION}'}
-  if not strict(m) or not required.issubset(set(m.get('labels') or [])): raise SystemExit('v3.4.35 canonical lane labels required')
-  if m.get('llmConnection')!='chatgpt-plus' or m.get('model')!='pi/gpt-5.6-terra' or m.get('permissionMode') not in {'allow-all','execute'}: raise SystemExit('v3.4.35 worker/auditor runtime identity mismatch')
+  version=lane_version(m)
+  required={f'agent-role::{i.get("role")}',f'parent-session::{i.get("parentSessionId")}',f'project::{i.get("project")}',f'work-unit::{i.get("workUnit")}',f'attempt::{i.get("attempt")}',f'protocol-version::{version}'}
+  if not strict(m) or not required.issubset(set(m.get('labels') or [])): raise SystemExit('v3.4.35/v3.4.36 canonical lane labels required')
+  if m.get('llmConnection')!='chatgpt-plus' or m.get('model')!='pi/gpt-5.6-terra' or m.get('permissionMode') not in {'allow-all','execute'}: raise SystemExit('v3.4.35/v3.4.36 worker/auditor runtime identity mismatch')
   if actual!=i: raise SystemExit('admission manifest/registry identity mismatch')
   if actual['worktree'] in {wd(live(i['parentSessionId'])),str(Path.cwd().resolve())}: raise SystemExit('lane worktree cannot be parent or repository root')
   collisions(i,a.session)

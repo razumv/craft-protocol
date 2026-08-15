@@ -4,6 +4,16 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.36] — 2026-08-16
+
+### Product delivery pressure and safe coordinator rollout
+
+- Stories now declare a bounded `deliverableClass` (`product`, `contract`, `acceptance`, or `housekeeping`); omitted legacy values normalize to `product`. Every Product Increment must carry at least one product deliverable. Ready product work emits delivery-pressure metrics and fails closed when no-code lanes occupy capacity or a contract/acceptance PASS does not dispatch the ready product lane in the same cycle.
+- Contract-only correction remains bounded to one no-code correction. Exact unchanged candidate/test-environment evidence can be declared and reused rather than rerunning acceptance for report freshness.
+- A resolved protected-merge gate must issue its merge and readback observer in the same status cycle. Explicit HOLD still permits truthful status publication/reconciliation, but blocks new implementation jobs and standing-authority merges.
+- Coordinator CWD rollout accepts trusted `~/` manifest syntax and stores its canonical absolute path; all other relative paths remain refused. v3.4.35 strict lane admission remains compatible while v3.4.36 labels receive the same checks.
+- Recovery emits delivery-pressure and direct-owner/complexity-rotation incidents; rotation pressure is routed ahead of routine no-rotation ticks. Housekeeping remains quota-bounded. `coordinator-reconcile.py apply` replaces the advisory rename route with an authenticated runtime rename receipt and never rewrites session JSONL.
+
 ## [3.4.35] — 2026-08-15
 
 ### Admission, transfer identity, and durable owner memory
@@ -470,7 +480,8 @@ Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's 
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.35...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.36...HEAD
+[3.4.36]: https://github.com/razumv/craft-protocol/compare/v3.4.35...v3.4.36
 [3.4.34]: https://github.com/razumv/craft-protocol/compare/v3.4.33...v3.4.35
 [3.4.33]: https://github.com/razumv/craft-protocol/compare/v3.4.32...v3.4.33
 [3.4.32]: https://github.com/razumv/craft-protocol/compare/v3.4.31...v3.4.32

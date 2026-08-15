@@ -38,6 +38,7 @@ SAFETY_KINDS = {"ambiguous-coordinator-owner", "project-mapping-conflict"}
 # An executor idle right now outranks a bookkeeping mismatch. Measured live: with a
 # three-action turn budget, status contradictions and overdue commitments consumed
 # every turn while two finished workers waited 25 and 30 minutes to be collected.
+ROTATION_KINDS = {"coordinator-complexity-threshold", "direct-owner-rotation"}
 IDLE_EXECUTOR_KINDS = {"terminal-handoff-unconsumed", "coordinator-not-live", "coordinator-lease-stale",
                        "coordinator-session-error", "coordinator-pi-sigterm", "transfer-stuck",
                        "coordinator-worker-terminal-status", "unregistered-child-lane",
@@ -70,6 +71,9 @@ ACTION_MATRIX = {
     "coordinator-session-error": ["wake-coordinator", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
     "coordinator-pi-sigterm": ["wake-coordinator", "renew-request", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
     "coordinator-worker-terminal-status": ["wake-coordinator", "preserve-snapshot", "bridge-rotation-on-attempt-3"],
+    "coordinator-complexity-threshold": ["preserve-snapshot", "begin-transfer", "accept-transfer"],
+    "direct-owner-rotation": ["preserve-snapshot", "begin-transfer", "accept-transfer"],
+    "coordinator-delivery-pressure": ["wake-coordinator", "dispatch-ready-product-story"],
     "predecessor-unarchived": ["wake-coordinator", "verify-preservation", "archive-reap-if-proven"],
     "stale-coordinator-session": ["wake-coordinator", "verify-preservation", "archive-reap-if-proven"],
     "orphaned-dead-lane": ["verify-worktree-clean", "archive-reap-if-clean", "owner-escalation-if-dirty"],
@@ -298,6 +302,26 @@ def collect_observations():
         if terminal_error:
             out.append(observation("coordinator-session-error", "high", project, sid,
                 {**terminal_error, "generation": record.get("generation")}))
+        # Rotation pressure is an operational issue, not a routine tick. A direct
+        # owner request and an exhausted context must reach the complex rotation
+        # path before a no-rotation heartbeat instruction can consume the cycle.
+        reasons: list[str] = []
+        if record.get("rotationAuthority") == "direct-owner":
+            reasons.append("direct-owner")
+        max_messages = int(os.environ.get("CRAFT_COORDINATOR_MAX_MESSAGES", "500"))
+        max_tokens = int(os.environ.get("CRAFT_COORDINATOR_MAX_TOKENS", "200000"))
+        messages = (manifest or {}).get("messageCount")
+        tokens = ((manifest or {}).get("tokenUsage") or {}).get("totalTokens") if isinstance((manifest or {}).get("tokenUsage"), dict) else None
+        if isinstance(messages, int) and messages >= max_messages:
+            reasons.append("message-threshold")
+        if isinstance(tokens, int) and tokens >= max_tokens:
+            reasons.append("token-threshold")
+        if reasons and record.get("state") in {"authoritative", "rotating"}:
+            kind = "direct-owner-rotation" if "direct-owner" in reasons else "coordinator-complexity-threshold"
+            stable = {"generation": record.get("generation"), "reasons": reasons}
+            out.append(observation(kind, "high", project, sid,
+                {**stable, "messageCount": messages, "tokenCount": tokens},
+                fingerprint_evidence=stable, coordinatorGeneration=record.get("generation")))
         sigterms = unresolved_pi_sigterms(sid, record.get("lastHeartbeatAt") or record.get("claimedAt") or 0)
         if sigterms:
             out.append(observation("coordinator-pi-sigterm", "high", project, sid,
@@ -488,6 +512,8 @@ def drain_rank(row: dict[str, Any]) -> int:
     kind = str(row.get("kind") or "")
     if kind in SAFETY_KINDS:
         return 0
+    if kind in ROTATION_KINDS:
+        return 1
     if kind in IDLE_EXECUTOR_KINDS:
         return 1
     if kind in BOOKKEEPING_KINDS:

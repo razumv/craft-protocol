@@ -1,4 +1,4 @@
-# Protocol v3.4.35 defaults
+# Protocol v3.4.36 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -48,6 +48,7 @@ Stalled evidence threshold:    1800 seconds
 Progress CPU source (3.4.4):   whole descendant process tree of the observable job, not the direct child only
 Infrastructure detour:         1 safe attempt or 20 minutes
 Correction cycles:             1
+No-code contract corrections:  1 per contract story
 Second acceptance failure:     exact escalation; no automatic attempt N+1
 ```
 
@@ -102,6 +103,12 @@ Lane admission (3.4.35):       reserve immutable worker/auditor identity, then m
 Transfer admission (3.4.35):   successor manifest identity is bound at begin-transfer and rechecked at accept
 Owner reporting (3.4.35):      durable pull-only policy; transcript detection is best-effort because interception is unavailable
 Owner-memory (3.4.35):         canonical exact decision/preference fingerprint suppresses duplicate gates
+Product-bearing increment (3.4.36): at least one `product` deliverableClass; contract/acceptance/housekeeping cannot starve ready product work
+Evidence reuse (3.4.36):       exact candidate SHA + test-environment fingerprint; no freshness rerun
+Merge authority (3.4.36):      resolved protected-merge authority issues merge + readback in the same cycle
+Coordinator CWD (3.4.36):      absolute or trusted ~/ syntax canonicalized; other relatives refused
+Coordinator identity (3.4.36): coordinator-reconcile.py apply requires authenticated RPC rename receipt; never edits session JSONL
+Rotation priority (3.4.36):    direct-owner/complexity rotation precedes a routine no-rotation tick
 Admission interval:            300 seconds; report-only under kill switch
 Production admission:          capability-v2 delivery/inspect/recover on exact runtime identity
 Direct capability:             available=true, version=2; deliver + inspect + recover channels

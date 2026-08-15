@@ -48,6 +48,7 @@ RUNTIME = common.RUNTIME
 ROOT = RUNTIME / "standing-authorities"
 RECEIPTS = RUNTIME / "standing-merges"
 GATES = RUNTIME / "owner-gates"
+COORDINATORS = RUNTIME / "coordinators"
 LOCK = RUNTIME / "standing-authorities.lock"
 SCHEMA = 1
 KINDS = {"protected-merge"}
@@ -149,6 +150,9 @@ def refusals(authority: dict[str, Any] | None, certificate: dict[str, Any] | Non
         # wherever squash merges hid the cycle.
         for error in cert_tool.pre_merge_errors(certificate):
             out.append(f"certificate:{error}")
+    registry = common.read_json(COORDINATORS / f"{project}.json")
+    if registry and registry.get("state") == "hold":
+        out.append("project-hold")
     gates = blocking_gates(project, work_unit)
     if gates:
         out.append("gate-blocks:" + ",".join(gates[:4]))

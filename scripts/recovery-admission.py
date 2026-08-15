@@ -36,7 +36,7 @@ STATE = Path(os.environ.get("CRAFT_ADMISSION_STATE", RUNTIME / "self-healing/adm
 TICK_STATES = Path(os.environ.get("CRAFT_COORDINATOR_TICK_STATES", RUNTIME / "self-healing/coordinator-ticks")).expanduser()
 LOCK = Path(os.environ.get("CRAFT_ADMISSION_LOCK", RUNTIME / "self-healing/admission.lock")).expanduser()
 DISABLED = Path(os.environ.get("CRAFT_SELF_HEALING_DISABLED", RUNTIME / "self-healing.disabled")).expanduser()
-PROTOCOL_VERSION = "v3.4.35"
+PROTOCOL_VERSION = "v3.4.36"
 AUTOMATION_ID = os.environ.get("CRAFT_RECOVERY_NOTIFIER_AUTOMATION_ID", "a322-admission")
 LEGACY_AUTOMATION_IDS = {"a321-notifier", "a31101", "a31102"}
 CONTROLLER_ACTION_ID = "a322-controller-recovery"
@@ -70,8 +70,11 @@ RECOVER_STATUSES = {"recovered", "consumed", "busy"}
 BLOCKED_KINDS = {"owner-gate-blocked", "cwd-collision", "project-mapping-conflict", "ambiguous-coordinator-owner", "preservation-unknown"}
 # Protocol v3.3.0 coordinator inbox/status/commitment wakes ride the existing v3.2.2
 # admission lane. They are generation-fenced and never grant merge/rotation authority.
-COORDINATOR_V33_WAKE_KINDS = {"coordinator-inbox-ready", "coordinator-status-missing", "coordinator-status-stale", "coordinator-plan-unexecutable", "coordinator-commitment-overdue", "coordinator-status-contradiction"}
-WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "coordinator-worker-terminal-status", "predecessor-unarchived", "job-exit-unreported", "heavy-lock-wait", "terminal-handoff-unconsumed", "external-wait-terminal", "external-wait-unobserved", "external-wait-deadline"} | COORDINATOR_V33_WAKE_KINDS
+COORDINATOR_V33_WAKE_KINDS = {"coordinator-inbox-ready", "coordinator-status-missing", "coordinator-status-stale", "coordinator-plan-unexecutable", "coordinator-commitment-overdue", "coordinator-status-contradiction", "coordinator-delivery-pressure"}
+# These must use the complex controller path. A routine tick explicitly says not
+# to rotate, so consuming it first would strand a direct owner/complexity request.
+ROTATION_WAKE_KINDS = {"coordinator-complexity-threshold", "direct-owner-rotation"}
+WAKE_KINDS = {"coordinator-lease-stale", "coordinator-session-error", "coordinator-pi-sigterm", "coordinator-worker-terminal-status", "predecessor-unarchived", "job-exit-unreported", "heavy-lock-wait", "terminal-handoff-unconsumed", "external-wait-terminal", "external-wait-unobserved", "external-wait-deadline"} | COORDINATOR_V33_WAKE_KINDS | ROTATION_WAKE_KINDS
 ROUTINE_KINDS = {"coordinator-tick-due", "coordinator-lease-stale", "terminal-handoff-unconsumed", "external-wait-terminal"} | COORDINATOR_V33_WAKE_KINDS
 
 
@@ -398,9 +401,15 @@ def admission_batches(controller_session: str) -> list[dict[str, Any]]:
     validate_fencing_inputs()
     direct: dict[tuple[str, str, str], dict[str, Any]] = {}
     complex_rows: list[dict[str, Any]] = []
+    rows = [*actionable_incidents(), *scheduled_tick_rows(NOW_MS())]
+    rotation_projects = {str(row.get("project")) for row in rows
+                         if row.get("kind") in ROTATION_WAKE_KINDS and row.get("project")}
     # Concrete incidents consume the bounded batch first; a due heartbeat tick
-    # joins the same envelope only when capacity remains.
-    for row in [*actionable_incidents(), *scheduled_tick_rows(NOW_MS())]:
+    # joins the same envelope only when capacity remains. Rotation pressure wins
+    # over its routine no-rotation instruction for the same project.
+    for row in rows:
+        if row.get("kind") == "coordinator-tick-due" and str(row.get("project")) in rotation_projects:
+            continue
         target = direct_target(row)
         if target and direct_lane_exhausted(target["project"], target):
             # The direct lane for this project is durably blocked or has spent its
@@ -415,14 +424,16 @@ def admission_batches(controller_session: str) -> list[dict[str, Any]]:
         else:
             complex_rows.append(row)
     batches = []
-    for key in sorted(direct):
-        batch = direct[key]
-        batch["rows"] = batch["rows"][:MAX_INCIDENTS]
-        batches.append(batch)
+    # Complex rotation is intentionally emitted first. The controller preserves
+    # and transfers; it is not a direct coordinator tick that forbids rotation.
     if complex_rows:
         batches.append({"targetType": "recovery-controller", "targetKind": "controller",
                         "targetSessionId": controller_session, "targetGeneration": f"session:{controller_session}",
                         "rows": complex_rows[:MAX_INCIDENTS]})
+    for key in sorted(direct):
+        batch = direct[key]
+        batch["rows"] = batch["rows"][:MAX_INCIDENTS]
+        batches.append(batch)
     return batches
 
 

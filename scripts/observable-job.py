@@ -40,7 +40,7 @@ def require_admitted_v3435(session_id: str, cwd: str) -> None:
         manifest = json.loads((SESSIONS / session_id / "session.jsonl").open(encoding="utf-8").readline())
     except Exception:
         raise SystemExit("session manifest required for observable job")
-    if "protocol-version::3.4.35" not in set(manifest.get("labels") or []):
+    if not ({"protocol-version::3.4.35", "protocol-version::3.4.36"} & set(manifest.get("labels") or [])):
         return  # Existing v3.4.34 observable jobs remain readable/runnable.
     matches = []
     for record_path in (RUNTIME / "lane-admissions").glob("*.json"):
@@ -49,6 +49,11 @@ def require_admitted_v3435(session_id: str, cwd: str) -> None:
             matches.append(record)
     if len(matches) != 1 or (matches[0].get("identity") or {}).get("worktree") != COMMON.canonical_path(cwd):
         raise SystemExit("observable job requires matching admitted lane")
+    identity = matches[0].get("identity") or {}
+    project = str(identity.get("project") or "")
+    registry = read_json_file(RUNTIME / "coordinators" / f"{project}.json") if project else None
+    if not registry or registry.get("state") != "authoritative" or registry.get("coordinatorSessionId") != identity.get("parentSessionId"):
+        raise SystemExit("project HOLD or non-authoritative coordinator blocks new implementation jobs")
     # Re-run shared confirmation so post-confirm manifest/registry drift refuses.
     spec = importlib.util.spec_from_file_location("lane_admission", Path(__file__).with_name("lane-admission.py"))
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)  # type: ignore

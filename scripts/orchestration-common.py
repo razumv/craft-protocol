@@ -126,5 +126,21 @@ def canonical_path(raw: str | Path | None) -> str | None:
     return os.path.normcase(os.path.realpath(os.path.abspath(os.path.expanduser(str(raw))))) if raw else None
 
 
+def coordinator_cwd(raw: object) -> str | None:
+    """Canonicalize a coordinator CWD without silently accepting relatives.
+
+    Craft manifests historically persisted both absolute paths and ``~/`` paths.
+    The latter is trusted user-home syntax and is normalized to the same absolute
+    filesystem identity.  Other relatives depend on the caller's process CWD and
+    therefore cannot safely establish coordinator authority.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    value = raw.strip()
+    if not (os.path.isabs(value) or value == "~" or value.startswith("~/")):
+        return None
+    return canonical_path(value)
+
+
 def expand_path(raw: str | None) -> str | None:
     return canonical_path(raw)

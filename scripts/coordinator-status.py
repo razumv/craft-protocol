@@ -63,6 +63,11 @@ INCREMENT_STAGES = {"discovery", "building", "integrating", "accepting", "deploy
 RISK_TIERS = {"low", "medium", "high"}
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
 STORY_STATES = {"planned", "ready", "executing", "integrated", "accepted", "blocked", "failed", "deferred"}
+# A Product Increment may contain enabling work, but it must remain a product
+# delivery vehicle.  Missing values intentionally normalize to ``product`` so
+# v3.4.35 snapshots remain readable during rollout.
+DELIVERABLE_CLASSES = {"product", "contract", "acceptance", "housekeeping"}
+NON_PRODUCT_DELIVERABLE_CLASSES = DELIVERABLE_CLASSES - {"product"}
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 SOURCE_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 # Delivery is verified against the clone's own remote-tracking branch, so a claim
@@ -285,6 +290,31 @@ def latest_evidence(coordinator: str, project: str, generation: int | None) -> d
 
 # ------------------------------------------------------------------- synthesis
 
+def delivery_pressure(increment: dict[str, Any], synth: dict[str, Any]) -> dict[str, Any]:
+    """Expose product throughput separately from enabling work.
+
+    Contract, acceptance, and housekeeping lanes are valid only while they do not
+    displace a dependency-ready product story.  This is a metric as well as a
+    contradiction input so reports describe the delivery pressure rather than
+    merely the number of busy lanes.
+    """
+    stories = [s for s in increment.get("stories") or [] if isinstance(s, dict)]
+    ready_product = [str(s.get("id")) for s in stories
+                     if s.get("deliverableClass") == "product" and s.get("state") in {"ready", "executing"}]
+    active_units = {str(w.get("workUnit") or "") for w in synth.get("activeWorkers") or []}
+    product_units = {str(s.get("workUnit") or s.get("id")) for s in stories
+                     if s.get("deliverableClass") == "product"}
+    active_product = sorted(active_units & product_units)
+    non_product_units = {str(s.get("workUnit") or s.get("id")) for s in stories
+                         if s.get("deliverableClass") in NON_PRODUCT_DELIVERABLE_CLASSES}
+    active_non_product = sorted(active_units & non_product_units)
+    return {"readyProductStories": ready_product[:LIST_LIMIT], "readyProductCount": len(ready_product),
+            "activeProductWorkUnits": active_product[:LIST_LIMIT], "activeProductCount": len(active_product),
+            "activeNonProductWorkUnits": active_non_product[:LIST_LIMIT],
+            "activeNonProductCount": len(active_non_product),
+            "productWorkStarved": bool(ready_product and active_non_product and not active_product)}
+
+
 def synthesize(project: str, now: int) -> dict[str, Any]:
     reg = registry(project)
     coordinator = str(reg.get("coordinatorSessionId") or "") if reg else ""
@@ -355,6 +385,8 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
                          for l in active_workers if l.get("workUnit")},
         "_overdueHandoffs": [str(l.get("workUnit") or l.get("sessionId")) for l in terminal_workers
                              if now - exact_int(l.get("lastHeartbeatAt"), now) > HANDOFF_GRACE_MS],
+        "_waitUnits": {str(w.get("workUnit") or "") for w in waits if w.get("workUnit")},
+        "_resolvedGates": [g for g in gates if g.get("state") == "resolved"],
     }
 
 
@@ -402,6 +434,17 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
     if (idle_ready and not synth["activeWorkers"] and not synth["observedWaitCount"]
             and not synth["workObserverCommitmentCount"]):
         issues.append("idle-ready-work:" + ",".join(idle_ready[:8]))
+    pressure = delivery_pressure(increment, synth)
+    if pressure["productWorkStarved"]:
+        issues.append("delivery-pressure-product-starved:" + ",".join(pressure["readyProductStories"][:4]))
+    # A no-code PASS is a hand-off, not a destination: once a contract or focused
+    # acceptance has passed and code is dependency-ready, a product lane must be
+    # issued in that same coordinator cycle.
+    passed_non_product = any(story.get("deliverableClass") in {"contract", "acceptance"}
+                             and story.get("state") in {"integrated", "accepted"}
+                             for story in increment.get("stories") or [] if isinstance(story, dict))
+    if passed_non_product and pressure["readyProductCount"] and not pressure["activeProductCount"]:
+        issues.append("same-cycle-product-dispatch-missing:" + ",".join(pressure["readyProductStories"][:4]))
     # A lane whose contract names sources it cannot reach will return prose instead
     # of evidence, and nothing downstream can tell the difference.
     lane_sources_map = synth.get("_laneSources") or {}
@@ -505,6 +548,12 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
                     if len(causes) != len(set(causes)))
     if reused:
         issues.append("correction-budget-extension-reused:" + ",".join(reused[:4]))
+    story_classes = {str(story.get("id")): str(story.get("deliverableClass") or "product")
+                     for story in increment.get("stories") or [] if isinstance(story, dict)}
+    exhausted_contract_budget = sorted(story_id for story_id, count in extension_counts.items()
+                                       if story_classes.get(story_id) == "contract" and count > 1)
+    if exhausted_contract_budget:
+        issues.append("no-code-contract-correction-budget-exhausted:" + ",".join(exhausted_contract_budget[:4]))
     # A story retrying under its single self-granted extension is escalated in the
     # sanctioned way; without one, a failed story needs a plan, a lane or a gate.
     unescalated = [sid for sid in failed_stories
@@ -554,6 +603,25 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
                               and str(story.get("workUnit") or "") not in admissible_authority)
         if unauthorized:
             issues.append("merge-without-named-authority:" + ",".join(unauthorized[:4]))
+    # A resolved per-merge authority is a narrow one-shot decision. It must issue
+    # the merge and its readback observer now; parking it recreates an owner gate
+    # as passive backlog and can let a later unrelated candidate inherit authority.
+    resolved_merge_gates = {str(g.get("gateId")): g for g in synth.get("_resolvedGates") or []
+                            if g.get("externalEffect") == "merge-protected-branch"}
+    readback_actions = [a for a in actions if a.get("executor") == "external-observer"]
+    for story in stories:
+        if not isinstance(story, dict):
+            continue
+        authority_ref = str(story.get("mergeAuthorityRef") or "")
+        if authority_ref not in resolved_merge_gates:
+            continue
+        story_id = str(story.get("id"))
+        unit = str(story.get("workUnit") or story_id)
+        if not story.get("mergeSha"):
+            issues.append(f"resolved-merge-authority-without-same-cycle-merge:{story_id}")
+        elif (unit not in set(synth.get("_waitUnits") or [])
+              and not any(str(action.get("storyRef") or "") == story_id for action in readback_actions)):
+            issues.append(f"resolved-merge-authority-without-same-cycle-readback:{story_id}")
     # A pull request the coordinator opened is where work reaches customers, so
     # leaving it open is not neutral. Observed live: a green, conflict-free PR sat
     # unmerged for three days while the project reported itself deploying.
@@ -734,6 +802,11 @@ def health_observations(now: int) -> list[dict[str, Any]]:
             if verdict["contradictions"]:
                 out.append({**base, "kind": "coordinator-status-contradiction",
                             "evidence": {"generation": generation, "contradictions": sorted(verdict["contradictions"])}})
+                pressure = sorted(issue for issue in verdict["contradictions"]
+                                  if issue.startswith("delivery-pressure-") or issue.startswith("same-cycle-product-dispatch-"))
+                if pressure:
+                    out.append({**base, "kind": "coordinator-delivery-pressure",
+                                "evidence": {"generation": generation, "issues": pressure}})
             if verdict["planUnexecutable"]:
                 out.append({**base, "kind": "coordinator-plan-unexecutable",
                             "evidence": {"generation": generation, "phase": declared.get("phase") if declared else None}})
@@ -777,6 +850,9 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
         if declared.get("phase") == "complete" and not verification_grade:
             fail(f"completed outcome evidence is not verification-grade: {ref}")
     increment = declared.get("productIncrement") or {}
+    reuse = increment.get("evidenceReuse")
+    if reuse and str(reuse.get("acceptanceRef") or "") not in inbox_items:
+        fail("productIncrement.evidenceReuse.acceptanceRef is not observed in this generation")
     completion = increment.get("completionEvidence") or {}
     if increment.get("stage") == "complete":
         bound: dict[str, dict[str, Any]] = {}
@@ -868,6 +944,9 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
         risk = story.get("riskContribution", "low")
         if risk not in RISK_TIERS:
             fail(f"productIncrement story riskContribution must be one of {sorted(RISK_TIERS)}")
+        deliverable_class = story.get("deliverableClass", "product")
+        if deliverable_class not in DELIVERABLE_CLASSES:
+            fail(f"productIncrement story deliverableClass must be one of {sorted(DELIVERABLE_CLASSES)}")
         raw_dependencies = story.get("dependsOn")
         dependencies = [] if raw_dependencies is None else raw_dependencies
         if (not isinstance(dependencies, list) or len(dependencies) > MAX_INCREMENT_STORIES
@@ -893,10 +972,13 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
         if merge_sha is not None and not COMMIT_SHA.fullmatch(merge_sha):
             fail("productIncrement story mergeSha must be a full 40-character commit sha")
         normalized.append({"id": story_id, "title": title, "state": state,
-                           "dependsOn": dependencies, "riskContribution": risk,
-                           "acceptanceRef": acceptance_ref, "workUnit": work_unit,
-                           "mergeSha": merge_sha, "mergeAuthorityRef": merge_authority_ref,
-                           "blockedByRef": blocked_by_ref, "requiredSources": required_sources})
+                           "deliverableClass": deliverable_class, "dependsOn": dependencies,
+                           "riskContribution": risk, "acceptanceRef": acceptance_ref,
+                           "workUnit": work_unit, "mergeSha": merge_sha,
+                           "mergeAuthorityRef": merge_authority_ref, "blockedByRef": blocked_by_ref,
+                           "requiredSources": required_sources})
+    if not any(story["deliverableClass"] == "product" for story in normalized):
+        fail("Product Increment requires at least one product deliverable story")
     graph = {story["id"]: story["dependsOn"] for story in normalized}
     for story_id, dependencies in graph.items():
         for dep in dependencies:
@@ -921,6 +1003,24 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
     max_story_risk = max((RISK_ORDER[story["riskContribution"]] for story in normalized), default=0)
     if RISK_ORDER[risk_tier] < max_story_risk:
         fail("productIncrement.riskTier may not understate story riskContribution")
+    # Exact candidate + test-environment identity makes a prior immutable PASS
+    # reusable. Freshness alone is never a reason to rerun acceptance.
+    raw_reuse = value.get("evidenceReuse")
+    evidence_reuse: dict[str, Any] | None = None
+    if raw_reuse is not None:
+        if not isinstance(raw_reuse, dict) or set(raw_reuse) != {"candidateSha", "testEnvironmentFingerprint", "acceptanceRef"}:
+            fail("productIncrement.evidenceReuse must bind candidateSha, testEnvironmentFingerprint, and acceptanceRef")
+        candidate_sha = raw_reuse.get("candidateSha")
+        environment_fingerprint = raw_reuse.get("testEnvironmentFingerprint")
+        acceptance_ref = raw_reuse.get("acceptanceRef")
+        if not isinstance(candidate_sha, str) or not COMMIT_SHA.fullmatch(candidate_sha):
+            fail("productIncrement.evidenceReuse.candidateSha must be a full 40-character commit sha")
+        if not isinstance(environment_fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", environment_fingerprint):
+            fail("productIncrement.evidenceReuse.testEnvironmentFingerprint must be SHA-256 hex")
+        if not isinstance(acceptance_ref, str) or not acceptance_ref.strip() or len(acceptance_ref) > 128:
+            fail("productIncrement.evidenceReuse.acceptanceRef must be bounded text")
+        evidence_reuse = {"candidateSha": candidate_sha, "testEnvironmentFingerprint": environment_fingerprint,
+                          "acceptanceRef": acceptance_ref}
     raw_completion = value.get("completionEvidence")
     completion: dict[str, dict[str, Any]] | None = None
     if raw_completion is not None:
@@ -954,7 +1054,7 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
         fail("productIncrement.completionEvidence is allowed only at stage complete")
     return {"id": increment_id, "stage": stage, "riskTier": risk_tier,
             "demonstrationCriterion": demo, "nonGoals": non_goals, "stories": normalized,
-            "completionEvidence": completion}
+            "evidenceReuse": evidence_reuse, "completionEvidence": completion}
 
 
 ISSUE_REF = re.compile(r"^[A-Za-z0-9._/-]{1,120}#\d{1,9}$")
@@ -1209,7 +1309,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
     payload = load_payload(args)
     with common.file_lock(LOCK):
         reg = registry(project)
-        if not reg or reg.get("state") != "authoritative":
+        if not reg or reg.get("state") not in {"authoritative", "hold"}:
             fail("no authoritative coordinator for project")
         if reg.get("coordinatorSessionId") != args.session:
             fail("coordinator session mismatch")
@@ -1303,6 +1403,7 @@ def build_report(project: str, now: int) -> dict[str, Any]:
     if malformed:
         issues.append("stored-status-malformed")
     public_synth = {key: value for key, value in synth.items() if not key.startswith("_")}
+    public_synth["deliveryPressure"] = delivery_pressure((declared or {}).get("productIncrement") or {}, synth)
     return {"project": project, "declared": declared,
             "revision": status.get("revision") if status else None,
             "publishedAt": status.get("publishedAt") if status else None,
@@ -1352,6 +1453,8 @@ def markdown_report(reports: list[dict[str, Any]], now: int) -> str:
             accepted = sum(1 for story in stories if story.get("state") in {"accepted", "integrated"})
             lines.append(f"- **Product Increment:** {increment.get('id')} — {increment.get('stage')} — {accepted}/{len(stories)} integrated or accepted — risk `{increment.get('riskTier')}`")
             lines.append(f"- **Real-workflow demonstration:** {increment.get('demonstrationCriterion')}")
+            pressure = synth.get("deliveryPressure") or {}
+            lines.append(f"- **Delivery pressure:** {pressure.get('readyProductCount', 0)} ready product / {pressure.get('activeProductCount', 0)} active product / {pressure.get('activeNonProductCount', 0)} active enabling")
         else:
             lines.append("- **Product Increment:** _not published (legacy v3.3 snapshot)_")
         lines.append(f"- **Current phase / technical focus:** {declared.get('phase') or 'unknown'} — {declared.get('currentFocus') or 'n/a'}")

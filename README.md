@@ -1,4 +1,4 @@
-# Craft Agents Multi-Agent Orchestration Protocol v3.4.35 — Complete Standalone Guide
+# Craft Agents Multi-Agent Orchestration Protocol v3.4.36 — Complete Standalone Guide
 
 [![Protocol tests](https://github.com/razumv/craft-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/razumv/craft-protocol/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -93,6 +93,14 @@ Chat claims, silence, status names, and repeated CI polling are not authoritativ
 20. When the owner asks for status, lead with customer outcome, demonstrable workflow, remaining work, ETA/confidence and one blocker; PR/SHA/CI/session/audit details are secondary evidence only.
 
 ---
+
+## v3.4.36 product-pressure controls
+
+- Every Product Increment contains at least one `product` story. Enabling stories declare `deliverableClass` as `contract`, `acceptance`, or `housekeeping`; omitted legacy values mean `product`. A ready product story cannot be starved by no-code work, and a contract/acceptance PASS dispatches ready product code in the same cycle.
+- Contract-only correction has one bounded no-code budget. Exact unchanged candidate/test-environment identity permits evidence reuse; report freshness never requires a redundant acceptance run.
+- Resolved protected-merge authority immediately owes both merge issuance and a readback observer. HOLD still permits truthful publication/reconciliation but blocks spawning, implementation, and merge.
+- Trusted coordinator CWD syntax is an absolute path or `~/…`, stored canonically. Other relative syntax remains refused. v3.4.35 strict lane admission stays valid during the v3.4.36 rollout.
+- `coordinator-reconcile.py apply` uses an explicitly configured authenticated Craft RPC rename and validates its receipt; it never rewrites a live session file. Rotation pressure from a direct owner request or complexity threshold outranks routine no-rotation ticks; housekeeping remains quota-bounded.
 
 ## v3.4.35 admission and owner-memory controls
 

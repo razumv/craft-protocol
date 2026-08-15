@@ -21,7 +21,7 @@ One active project has one primary increment by default. Its durable status decl
 
 Normally an increment groups 3–8 coherent stories or roughly 4–16 hours of related work. This is a batching heuristic, not a quota. A single-story increment is correct when that story alone produces a complete demonstrable outcome. Padding is prohibited.
 
-The story graph must be bounded and acyclic. Duplicate IDs, duplicate edges, unknown dependencies and self-dependencies fail closed. The protocol records the DAG in the existing status; it does not add a scheduler or database.
+The story graph must be bounded and acyclic. Duplicate IDs, duplicate edges, unknown dependencies and self-dependencies fail closed. Each story declares `deliverableClass`: `product`, `contract`, `acceptance`, or `housekeeping`; omitted legacy values normalize to `product`. Every increment must carry at least one `product` story, so enabling work cannot replace the customer outcome. The protocol records the DAG in the existing status; it does not add a scheduler or database.
 
 ## Integration train
 
@@ -35,7 +35,9 @@ The story graph must be bounded and acyclic. Duplicate IDs, duplicate edges, unk
 8. Merge once, deploy/read back once and execute the named real user workflow.
 9. Reuse exact unchanged evidence; do not rerun acceptance for report freshness.
 10. `stage=complete` is fail-closed: every story must be `accepted`, coordinator phase must also be `complete`, and `completionEvidence` must bind four distinct current-generation inbox events by exact `eventKey + revision + fingerprint`. Medium/High acceptance must bind an auditor-authored `audit-verdict`; release readback must bind `observer-terminal` from the exact terminal external-wait watcher; demonstration evidence must contain the exact case-sensitive named demonstration criterion.
-11. Advance automatically across the DAG. PASS, CI completion, focused acceptance, merge, ordinary authorized deploy/readback, real-workflow evidence collection, and the next dependency-ready finite wave never require a fresh owner message merely because a stage boundary was crossed.
+11. Advance automatically across the DAG. PASS, CI completion, focused acceptance, merge, ordinary authorized deploy/readback, real-workflow evidence collection, and the next dependency-ready finite wave never require a fresh owner message merely because a stage boundary was crossed. A `contract` or `acceptance` PASS issues dependency-ready `product` code in the same coordinator cycle; non-product lanes may not occupy capacity while product work is ready.
+12. Exact unchanged candidate SHA plus test-environment fingerprint may reuse immutable acceptance evidence; report freshness never requires a rerun.
+13. A resolved protected-merge authority issues its merge and readback observer in the same cycle. HOLD permits publication/reconciliation only, never a new spawn, implementation job, merge, or close.
 
 One global heavyweight lane remains the default. A bounded exception requires explicit resource-aware authority and practical memory/CPU guards. Integration remains serialized around one candidate.
 
@@ -70,7 +72,7 @@ Accounting rules:
 
 - admission/environment failure preserves evidence and retries/replaces; it does not spend product correction budget;
 - implementation defects permit bounded coordinator-owned correction;
-- first product-acceptance failure automatically executes one exact reversible root-cause correction and one final acceptance without creating an owner gate;
+- first product-acceptance failure automatically executes one exact reversible root-cause correction and one final acceptance without creating an owner gate; no-code `contract` correction has one bounded budget;
 - second acceptance failure or repeated same-root failure escalates the exact blocker;
 - irreversible/high-risk failure stops immediately under existing owner-gate rules;
 - infrastructure repair remains bounded to one safe attempt or 20 minutes and cannot replace product work.
