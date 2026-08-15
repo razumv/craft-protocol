@@ -118,7 +118,9 @@ def role_of(manifest: dict[str, Any]) -> str:
 
 
 def expand(path: str | None) -> str | None:
-    return str(Path(path).expanduser().resolve()) if path else None
+    # One canonical path representation for manifests, CLI values, leases and
+    # collision scans: resolve symlinks (/var -> /private/var on macOS) first.
+    return os.path.normcase(os.path.realpath(os.path.expanduser(path))) if path else None
 
 
 def last_event(session_id: str) -> tuple[int, str | None, str | None]:
@@ -406,6 +408,17 @@ def refuse_role_drift_create(session_id: str, value: dict[str, Any]) -> None:
                 raise SystemExit(f"refusing lease: worktree already leased by live session {path.stem}: {worktree}")
 
 
+def validate_existing_admission(session_id: str) -> None:
+    manifest = read_manifest(session_id) or {}
+    if "protocol-version::3.4.35" not in set(manifest.get("labels") or []): return
+    matches = [read_json(p) for p in (RUNTIME / "lane-admissions").glob("*.json")]
+    matches = [x for x in matches if x and x.get("state") == "admitted" and x.get("sessionId") == session_id]
+    if len(matches) != 1: raise SystemExit("v3.4.35 lane has no unique admitted record")
+    spec = importlib.util.spec_from_file_location("lane_admission", Path(__file__).with_name("lane-admission.py"))
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)  # type: ignore
+    module.cmd_confirm(argparse.Namespace(token=matches[0]["token"], session=session_id))
+
+
 def require_admission(token: str | None, session_id: str, args: argparse.Namespace) -> None:
     if not token:
         raise SystemExit("explicit lease create requires confirmed admission token")
@@ -553,6 +566,11 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
                         lease_path(sid).unlink()
                 continue
             old = lease.get("state")
+            try:
+                validate_existing_admission(sid)
+            except SystemExit as exc:
+                actions.append({"action": "admission-refused", "sessionId": sid, "reason": str(exc)})
+                continue
             new = classify(lease, manifest, now_ms())
             lease["state"] = new
             lease["parentSessionId"] = (registry_adopted_parent(sid) or label_value(manifest, "parent-session::")
@@ -568,6 +586,11 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
                 save_lease(lease)
         for sid, manifest in manifests.items():
             if manifest.get("isArchived") or role_of(manifest) not in ROLES or sid in leases:
+                continue
+            try:
+                validate_existing_admission(sid)
+            except SystemExit as exc:
+                actions.append({"action": "admission-refused", "sessionId": sid, "reason": str(exc)})
                 continue
             value = lease_from_manifest(manifest)
             value["state"] = classify(value, manifest, now_ms())

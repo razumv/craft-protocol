@@ -37,7 +37,7 @@ def require_admitted_v3435(session_id: str, cwd: str) -> None:
         record = read_json_file(record_path) or {}
         if record.get("state") == "admitted" and record.get("sessionId") == session_id:
             matches.append(record)
-    if len(matches) != 1 or (matches[0].get("identity") or {}).get("worktree") != str(Path(cwd).expanduser().resolve()):
+    if len(matches) != 1 or (matches[0].get("identity") or {}).get("worktree") != os.path.normcase(os.path.realpath(os.path.expanduser(cwd))):
         raise SystemExit("observable job requires matching admitted lane")
     # Re-run shared confirmation so post-confirm manifest/registry drift refuses.
     spec = importlib.util.spec_from_file_location("lane_admission", Path(__file__).with_name("lane-admission.py"))

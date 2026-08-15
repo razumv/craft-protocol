@@ -93,7 +93,7 @@ class OrchestrationV320Test(unittest.TestCase):
     def test_04_interrupted_transfer_blocks_second(self):
         self.manifest("c1"); self.manifest("c2"); self.manifest("c3"); self.claim(); self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c2","--reason","x"); p=self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c3","--reason","y",ok=False); self.assertNotEqual(p.returncode,0)
     def test_05_fallback_ttl_detected(self):
-        self.manifest("c1",model="claude",connection="claude"); self.claim(); r=json.loads((self.runtime/"coordinators/demo.json").read_text())
+        self.manifest("c1",model="claude",connection="claude",labels=["coordinators","agent-role::coordinator","project::demo","protocol-version::3"]); self.claim(); r=json.loads((self.runtime/"coordinators/demo.json").read_text())
         self.assertEqual(r["fallbackExpiresAt"]-r["fallbackSince"],1000)
         r["fallbackExpiresAt"]=0; (self.runtime/"coordinators/demo.json").write_text(json.dumps(r)); p=self.exec_tool("coordinator-registry.py","inspect","--project","demo",ok=False); self.assertIn("fallback-ttl-expired",p.stdout)
     def test_06_archived_owner_detected(self):
@@ -167,7 +167,7 @@ class OrchestrationV320Test(unittest.TestCase):
         # Lifecycle Protocol" — so the owner's coordinator list stopped saying which
         # project or protocol version a row belonged to, while superseded sessions
         # piled up beside the live one.
-        self.manifest("coord", name="Coordinator Handoff")
+        self.manifest("coord", name="Coordinator Handoff", labels=["coordinators","agent-role::coordinator","project::demo","protocol-version::3"])
         self.exec_tool("coordinator-registry.py", "claim", "--project", "demo",
                        "--session", "coord", "--ttl", "3600")
         p = self.exec_tool("coordinator-registry.py", "inspect", "--project", "demo", ok=False)
@@ -222,7 +222,7 @@ class OrchestrationV320Test(unittest.TestCase):
         self.assertEqual(alpha["projectMappingConflicts"][0]["childLabelProject"],"beta")
         self.assertIn("project-mapping:worker",alpha["unknowns"])
     def test_20_duplicate_coordinator_session_is_global_hard_refusal(self):
-        self.manifest("shared",project="alpha"); self.claim("shared","alpha")
+        self.manifest("shared",project="alpha",labels=["coordinators","agent-role::coordinator","project::alpha","protocol-version::3"]); self.claim("shared","alpha")
         rejected=self.exec_tool("coordinator-registry.py","claim","--project","beta","--session","shared","--project-id","pid-beta",ok=False)
         self.assertEqual(rejected.returncode,3); self.assertIn("cross-project-owner-refused",rejected.stdout)
         alpha=json.loads((self.runtime/"coordinators/alpha.json").read_text())

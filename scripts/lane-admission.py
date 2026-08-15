@@ -4,6 +4,7 @@
 from __future__ import annotations
 import argparse, hashlib, importlib.util, json, re
 from pathlib import Path
+import os
 HERE=Path(__file__).resolve().parent
 spec=importlib.util.spec_from_file_location('common',HERE/'orchestration-common.py');common=importlib.util.module_from_spec(spec);spec.loader.exec_module(common) # type: ignore
 ROOT=common.RUNTIME/'lane-admissions'; LOCK=common.RUNTIME/'lane-admissions.lock'; ROLES={'worker','auditor'}; VERSION='3.4.35'
@@ -18,7 +19,8 @@ def live(s):
  if not m or m.get('id')!=s or not common.session_live(m): raise SystemExit('live session manifest required')
  return m
 def role(m): return common.role_of(m)
-def wd(m): return str(Path(str(m.get('workingDirectory') or m.get('sdkCwd') or '')).expanduser().resolve())
+def canon(raw): return os.path.normcase(os.path.realpath(os.path.expanduser(str(raw))))
+def wd(m): return canon(m.get('workingDirectory') or m.get('sdkCwd') or '')
 def fp(v): return hashlib.sha256(json.dumps(v,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 def strict(m): return f'protocol-version::{VERSION}' in set(m.get('labels') or [])
 def parent_truth(parent, project):
@@ -40,7 +42,7 @@ def collisions(identity,session=None):
 def cmd_reserve(a):
  parent=live(a.parent); project=lab(parent,'project::')
  if not project: raise SystemExit('parent project label required')
- r,_=parent_truth(a.parent,project); worktree=str(Path(a.worktree).expanduser().resolve())
+ r,_=parent_truth(a.parent,project); worktree=canon(a.worktree)
  if worktree in {wd(parent),str(Path.cwd().resolve())}: raise SystemExit('lane worktree cannot be parent or repository root')
  i={'parentSessionId':a.parent,'role':a.role,'project':project,'projectId':r.get('projectId'),'generation':r.get('generation'),'workUnit':a.work_unit,'attempt':str(a.attempt),'worktree':worktree}
  t=clean(a.token or fp(i)[:24]);i['token']=t

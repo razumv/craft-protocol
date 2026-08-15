@@ -116,6 +116,9 @@ def provider_fields(manifest: dict[str, Any]) -> dict[str, Any]:
 def cmd_claim(args: argparse.Namespace) -> int:
     project = clean_project(args.project)
     manifest = manifest_or_die(args.session)
+    if "protocol-version::3.4.35" in set(manifest.get("labels") or []):
+        validate_successor_manifest(manifest, project, {"projectId": args.project_id or manifest.get("projectId")})
+        reporting_policy(True)
     with common.file_lock(LOCK):
         refuse_cross_project(args.session, project, include_pending=True)
         current = load(project)
