@@ -134,7 +134,8 @@ def cmd_hold(args: argparse.Namespace) -> int:
         gate_id = f"project-hold-{common.now_ms()}"
     ns = argparse.Namespace(project=args.project, gate=gate_id, work_unit=None,
         question=f"Project HOLD: {args.reason}", choices="RESUME", scope="project",
-        safe_default="HOLD", evidence=args.evidence, owner_only_category="explicit-hold",
+        # A resolved HOLD is history, never reusable preference policy.
+        decision_key=f"hold:{common.now_ms()}", safe_default="HOLD", evidence=args.evidence, owner_only_category="explicit-hold",
         # A hold is the owner directing the project; the effect is their decision itself.
         external_effect="product-direction-decision")
     return cmd_create(ns)

@@ -406,8 +406,12 @@ def refuse_role_drift_create(session_id: str, value: dict[str, Any]) -> None:
 
 
 def require_admission(token: str | None, session_id: str) -> None:
+    manifest = read_manifest(session_id) or {}
+    strict = "protocol-version::3.4.35" in set(manifest.get("labels") or [])
+    if strict and not token:
+        raise SystemExit("v3.4.35 lane requires confirmed two-phase admission token")
     if token is None:
-        return  # Legacy records remain valid; v3.4.35 dispatches must provide one.
+        return  # Legacy runtime records remain compatible.
     row = read_json(RUNTIME / "lane-admissions" / f"{token}.json")
     if not row or row.get("state") != "admitted" or row.get("sessionId") != session_id:
         raise SystemExit("refusing lease without confirmed two-phase admission")

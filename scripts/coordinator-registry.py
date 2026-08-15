@@ -203,6 +203,27 @@ def cmd_reconcile_activity(args: argparse.Namespace) -> int:
     return 0
 
 
+def validate_successor_manifest(manifest: dict[str, Any], project: str, record: dict[str, Any]) -> None:
+    labels = set(manifest.get("labels") or [])
+    # Existing v3.4.34 records remain transferable; every v3.4.35 successor
+    # receives the complete canonical identity admission below.
+    if "protocol-version::3.4.35" not in labels:
+        return
+    expected_name = f"[{project}] Coordinator v3.4.35"
+    if (manifest.get("name") != expected_name or "coordinators" not in labels
+            or "agent-role::coordinator" not in labels or f"project::{project}" not in labels
+            or "protocol-version::3.4.35" not in labels):
+        raise SystemExit("successor canonical coordinator identity mismatch")
+    if (manifest.get("projectId") != record.get("projectId")
+            or manifest.get("llmConnection") != PREFERRED_CONNECTION
+            or manifest.get("model") != PREFERRED_MODEL
+            or manifest.get("permissionMode") not in {"allow-all", "execute"}):
+        raise SystemExit("successor project/provider identity mismatch")
+    cwd = manifest.get("workingDirectory") or manifest.get("sdkCwd")
+    if not cwd or Path(str(cwd)).expanduser().name in {"", ".", ".."}:
+        raise SystemExit("successor working directory is invalid")
+
+
 def transfer_identity(manifest: dict[str, Any]) -> dict[str, Any]:
     """Immutable fields that prove the exact successor selected at transfer start."""
     return {"id": manifest.get("id"), "workspaceRootPath": manifest.get("workspaceRootPath"),
@@ -213,6 +234,7 @@ def transfer_identity(manifest: dict[str, Any]) -> dict[str, Any]:
 def cmd_begin_transfer(args: argparse.Namespace) -> int:
     project = clean_project(args.project); successor = manifest_or_die(args.successor)
     identity = transfer_identity(successor)
+    validate_successor_manifest(successor, project, load(project) or {})
     # A coordinator is project-bound.  Do not defer this proof until after the
     # predecessor has entered rotating state.
     if successor.get("projectId") != (load(project) or {}).get("projectId"):
@@ -242,6 +264,7 @@ def cmd_accept_transfer(args: argparse.Namespace) -> int:
             raise SystemExit("no matching open transfer")
         if args.expected_generation is not None and int(value.get("generation") or 0) != args.expected_generation:
             raise SystemExit("generation mismatch")
+        validate_successor_manifest(manifest, project, value)
         expected_identity = value.get("successorIdentity")
         if not isinstance(expected_identity, dict):
             raise SystemExit("transfer identity admission missing; begin a new transfer")

@@ -21,6 +21,23 @@ JOBS = RUNTIME / "worker-jobs"
 HEAVY_LOCK = RUNTIME / "heavy-job.lock"
 HEAVY_OWNER = RUNTIME / "heavy-job-owner.json"
 LEASE_TOOL = Path(__file__).with_name("worker-lease.py")
+SESSIONS = Path(os.environ.get("CRAFT_SESSIONS", Path(os.environ.get("CRAFT_WORKSPACE", HOME / ".craft-agent/workspaces/general")) / "sessions")).expanduser()
+
+
+def require_admitted_v3435(session_id: str, cwd: str) -> None:
+    try:
+        manifest = json.loads((SESSIONS / session_id / "session.jsonl").open(encoding="utf-8").readline())
+    except Exception:
+        raise SystemExit("session manifest required for observable job")
+    if "protocol-version::3.4.35" not in set(manifest.get("labels") or []):
+        return
+    for record_path in (RUNTIME / "lane-admissions").glob("*.json"):
+        record = read_json_file(record_path) or {}
+        if record.get("state") == "admitted" and record.get("sessionId") == session_id:
+            identity = record.get("identity") or {}
+            if identity.get("worktree") == str(Path(cwd).expanduser().resolve()):
+                return
+    raise SystemExit("v3.4.35 observable job requires matching admitted lane")
 
 
 def now_ms() -> int:
@@ -135,6 +152,7 @@ def supervise(args: argparse.Namespace) -> int:
 
 
 def cmd_start(args: argparse.Namespace) -> int:
+    require_admitted_v3435(args.session, args.cwd)
     if not args.command:
         raise SystemExit("command required after --")
     if read_job(args.session) and not args.replace:
