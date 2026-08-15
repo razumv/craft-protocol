@@ -580,7 +580,9 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             try:
                 validate_existing_admission(sid)
             except SystemExit as exc:
-                actions.append({"action": "admission-refused", "sessionId": sid, "reason": str(exc)})
+                reason = str(exc); lease.update({"state": "error", "phase": "admission-fail-closed", "lastError": reason})
+                actions.append({"action": "admission-refused", "sessionId": sid, "reason": reason})
+                if args.apply: save_lease(lease)
                 continue
             new = classify(lease, manifest, now_ms())
             lease["state"] = new

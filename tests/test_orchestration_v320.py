@@ -15,11 +15,12 @@ class OrchestrationV320Test(unittest.TestCase):
         self.sessions = self.root / "sessions"; self.runtime = self.root / "runtime"; self.sessions.mkdir()
         self.env = os.environ.copy(); self.env.update({"CRAFT_WORKSPACE": str(self.root), "CRAFT_SESSIONS": str(self.sessions),
             "CRAFT_RUNTIME": str(self.runtime), "CRAFT_COORDINATOR_TTL_SECONDS": "1", "CRAFT_FALLBACK_TTL_SECONDS": "1"})
-        self.runtime.mkdir(exist_ok=True); (self.runtime / "reporting-policy.json").write_text(json.dumps({"mode":"pull-only","ownerFacingSessionId":"owner","configuredAt":1}))
+        self.runtime.mkdir(exist_ok=True); (self.runtime / "reporting-policy.json").write_text(json.dumps({"schemaVersion":1,"mode":"pull-only","ownerFacingSessionId":"owner","configuredAt":1,"interception":"unavailable","detection":"best-effort-session-transcript"}))
     def tearDown(self): self.temp.cleanup()
     def manifest(self, sid, project="demo", model="pi/gpt-5.6-sol", connection="chatgpt-plus", archived=False,
                  labels=None, messages=1, tokens=1, name=None):
         d = self.sessions / sid; d.mkdir(exist_ok=True)
+        (self.root / f"wt-{sid}").mkdir(exist_ok=True)
         value = {"id": sid, "name": name or f"[{project}] Coordinator v3.4.35", "createdAt": int(time.time()*1000), "isArchived": archived,
             "sessionStatus": "todo", "workingDirectory": str(self.root/f"wt-{sid}"), "projectId": f"pid-{project}", "permissionMode": "allow-all",
             "model": model, "llmConnection": connection, "messageCount": messages, "tokenUsage": {"totalTokens": tokens},
@@ -89,9 +90,12 @@ class OrchestrationV320Test(unittest.TestCase):
     def test_02_split_brain_refused(self):
         self.manifest("c1"); self.manifest("c2"); self.claim(); p=self.exec_tool("coordinator-registry.py","claim","--project","demo","--session","c2",ok=False); self.assertEqual(p.returncode,3)
     def test_03_two_phase_transfer(self):
-        self.manifest("c1"); self.manifest("c2"); self.claim(); self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c2","--reason","rotation"); self.exec_tool("coordinator-registry.py","accept-transfer","--project","demo","--session","c2","--expected-generation","1"); r=json.loads((self.runtime/"coordinators/demo.json").read_text()); self.assertEqual(r["coordinatorSessionId"],"c2")
+        self.manifest("c1"); self.manifest("c2"); c2=self.sessions/"c2"/"session.jsonl"; row=json.loads(c2.read_text()); row["workingDirectory"]=str(self.root/"wt-c1"); c2.write_text(json.dumps(row)+"\n"); self.claim(); self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c2","--reason","rotation"); self.exec_tool("coordinator-registry.py","accept-transfer","--project","demo","--session","c2","--expected-generation","1"); r=json.loads((self.runtime/"coordinators/demo.json").read_text()); self.assertEqual(r["coordinatorSessionId"],"c2")
     def test_04_interrupted_transfer_blocks_second(self):
-        self.manifest("c1"); self.manifest("c2"); self.manifest("c3"); self.claim(); self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c2","--reason","x"); p=self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c3","--reason","y",ok=False); self.assertNotEqual(p.returncode,0)
+        self.manifest("c1"); self.manifest("c2"); self.manifest("c3");
+        for sid in ("c2","c3"):
+            p=self.sessions/sid/"session.jsonl"; r=json.loads(p.read_text()); r["workingDirectory"]=str(self.root/"wt-c1"); p.write_text(json.dumps(r)+"\n")
+        self.claim(); self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c2","--reason","x"); p=self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c3","--reason","y",ok=False); self.assertNotEqual(p.returncode,0)
     def test_05_fallback_ttl_detected(self):
         self.manifest("c1",model="claude",connection="claude",labels=["coordinators","agent-role::coordinator","project::demo","protocol-version::3"])
         p=self.exec_tool("coordinator-registry.py","claim","--project","demo","--session","c1",ok=False); self.assertIn("canonical coordinator identity mismatch",p.stderr)
@@ -113,7 +117,7 @@ class OrchestrationV320Test(unittest.TestCase):
         self.assertNotIn("coordinator-worker-terminal-status",p.stdout)
 
     def test_06d_unarchived_predecessor_is_flagged(self):
-        self.manifest("c1"); self.manifest("c2"); self.claim()
+        self.manifest("c1"); self.manifest("c2"); p=self.sessions/"c2"/"session.jsonl"; r=json.loads(p.read_text()); r["workingDirectory"]=str(self.root/"wt-c1"); p.write_text(json.dumps(r)+"\n"); self.claim()
         self.exec_tool("coordinator-registry.py","begin-transfer","--project","demo","--session","c1","--successor","c2","--reason","rotation")
         self.exec_tool("coordinator-registry.py","accept-transfer","--project","demo","--session","c2","--expected-generation","1")
         p=self.exec_tool("coordinator-registry.py","inspect","--project","demo",ok=False)

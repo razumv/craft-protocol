@@ -94,8 +94,14 @@ def manifest_or_die(sid: str) -> dict[str, Any]:
 
 def reporting_policy(required: bool = False) -> dict[str, Any]:
     row = common.read_json(REPORTING_POLICY)
-    if not row or row.get("mode") != "pull-only":
-        if required: raise SystemExit("v3.4.35 requires configured pull-only reporting policy")
+    now = common.now_ms()
+    valid = bool(isinstance(row, dict) and row.get("schemaVersion") == 1 and row.get("mode") == "pull-only"
+                 and isinstance(row.get("ownerFacingSessionId"), str) and row["ownerFacingSessionId"].strip()
+                 and isinstance(row.get("configuredAt"), int) and 0 < row["configuredAt"] <= now
+                 and row.get("interception") == "unavailable"
+                 and row.get("detection") == "best-effort-session-transcript")
+    if not valid:
+        if required: raise SystemExit("v3.4.35 requires valid configured pull-only reporting policy")
         return {}
     fingerprint = __import__("hashlib").sha256(json.dumps({"mode": row.get("mode"), "ownerFacingSessionId": row.get("ownerFacingSessionId"), "configuredAt": row.get("configuredAt")}, sort_keys=True).encode()).hexdigest()
     return {"reportingMode": "pull-only", "reportingPolicyRevision": row.get("configuredAt"), "reportingPolicyFingerprint": fingerprint}
@@ -135,6 +141,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
         value = {
             "schemaVersion": SCHEMA, "project": project,
             "projectId": args.project_id or manifest.get("projectId"),
+            "coordinatorCwd": common.canonical_path(manifest.get("workingDirectory") or manifest.get("sdkCwd")),
             "coordinatorSessionId": args.session, "generation": generation,
             "state": "authoritative", "predecessorSessionId": args.predecessor,
             "successorSessionId": None, "claimedAt": now, "lastHeartbeatAt": now,
@@ -223,8 +230,10 @@ def validate_successor_manifest(manifest: dict[str, Any], project: str, record: 
     # Existing authoritative v3.4.34 coordinators remain live, but every new
     # transfer successor is admitted as the current canonical v3.4.35 identity.
     expected_name = f"[{project}] Coordinator v3.4.35"
+    roles = [x for x in labels if x.startswith("agent-role::")]
+    projects = [x for x in labels if x.startswith("project::")]
     if (manifest.get("name") != expected_name or "coordinators" not in labels
-            or "agent-role::coordinator" not in labels or f"project::{project}" not in labels
+            or roles != ["agent-role::coordinator"] or projects != [f"project::{project}"]
             or "protocol-version::3.4.35" not in labels):
         raise SystemExit("successor canonical coordinator identity mismatch")
     if (manifest.get("projectId") != record.get("projectId")
@@ -233,8 +242,11 @@ def validate_successor_manifest(manifest: dict[str, Any], project: str, record: 
             or manifest.get("permissionMode") not in {"allow-all", "execute"}):
         raise SystemExit("successor project/provider identity mismatch")
     cwd = manifest.get("workingDirectory") or manifest.get("sdkCwd")
-    if not cwd or Path(str(cwd)).expanduser().name in {"", ".", ".."}:
+    if not isinstance(cwd, str) or not os.path.isabs(cwd) or not os.path.isdir(common.canonical_path(cwd) or ""):
         raise SystemExit("successor working directory is invalid")
+    expected_cwd = record.get("coordinatorCwd")
+    if expected_cwd and common.canonical_path(cwd) != expected_cwd:
+        raise SystemExit("successor working directory differs from authoritative repository")
 
 
 def transfer_identity(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -286,7 +298,7 @@ def cmd_accept_transfer(args: argparse.Namespace) -> int:
         if transfer_identity(manifest) != expected_identity:
             raise SystemExit("successor transfer identity mismatch")
         predecessor = value.get("coordinatorSessionId"); now = common.now_ms()
-        value.update({"coordinatorSessionId": args.session, "predecessorSessionId": predecessor,
+        value.update({"coordinatorSessionId": args.session, "coordinatorCwd": common.canonical_path(manifest.get("workingDirectory") or manifest.get("sdkCwd")), "predecessorSessionId": predecessor,
                       "successorSessionId": None, "generation": int(value.get("generation") or 0) + 1,
                       "state": "authoritative", "claimedAt": now, "lastHeartbeatAt": now,
                       "leaseExpiresAt": now + int(args.ttl) * 1000, "transferAcceptedAt": now,
