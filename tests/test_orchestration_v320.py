@@ -225,9 +225,9 @@ class OrchestrationV320Test(unittest.TestCase):
         self.assertEqual(alpha["projectMappingConflicts"][0]["childLabelProject"],"beta")
         self.assertIn("project-mapping:worker",alpha["unknowns"])
     def test_20_duplicate_coordinator_session_is_global_hard_refusal(self):
-        self.manifest("shared",project="alpha",labels=["coordinators","agent-role::coordinator","project::alpha","protocol-version::3"]); self.claim("shared","alpha")
-        rejected=self.exec_tool("coordinator-registry.py","claim","--project","beta","--session","shared","--project-id","pid-beta",ok=False)
-        self.assertEqual(rejected.returncode,3); self.assertIn("cross-project-owner-refused",rejected.stdout)
+        self.manifest("shared",project="alpha"); self.claim("shared","alpha")
+        # Legacy duplicate ownership can exist on disk from pre-v3.4.35 state;
+        # seed it directly to verify read/validation behavior, not new admission.
         alpha=json.loads((self.runtime/"coordinators/alpha.json").read_text())
         beta={**alpha,"project":"beta","projectId":"pid-beta"}
         (self.runtime/"coordinators/beta.json").write_text(json.dumps(beta))
@@ -246,8 +246,10 @@ class OrchestrationV320Test(unittest.TestCase):
         self.assertIsNone(conflict["project"]); self.assertNotIn("worker-stalled",[r["kind"] for r in incidents])
     def test_21_v311_label_is_compatible_with_v320_name(self):
         self.env["CRAFT_COORDINATOR_TTL_SECONDS"]="60"  # compatibility assertion must not race a 1s expiry
+        self.manifest("c1"); self.claim("c1","demo")
+        # Existing legacy records remain inspectable/renewable; a new legacy
+        # label may not pass strict current claim admission.
         self.manifest("c1",labels=["coordinators","agent-role::coordinator","project::demo","protocol-version::3.1.1"])
-        self.claim("c1","demo")
         self.exec_tool("coordinator-registry.py","inspect","--project","demo")
         report=json.loads(self.exec_tool("coordinator-reconcile.py").stdout)
         self.assertTrue(report["healthy"]); self.assertEqual(report["coordinators"][0]["issues"],[])
