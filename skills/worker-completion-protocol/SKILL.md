@@ -3,7 +3,7 @@ name: worker-completion-protocol
 description: "Mandatory Product Increment story worker/auditor lifecycle: scoped checks, classified failures, observable long jobs, preserved artifacts, durable handoff, and safe stop."
 ---
 
-# Worker Completion Protocol v3.4.34
+# Worker Completion Protocol v3.4.35
 
 You are a disposable worker or auditor. Your session owns exactly one work-unit attempt in a unique worktree. Silent stops are protocol failures. You run in `permissionMode: allow-all` even when your task is a read-only audit, because reporting/status updates require session tools.
 
@@ -31,11 +31,12 @@ A worker implements exactly one frozen story; an auditor verifies exactly one fr
 - Send no micro-progress messages or acknowledgements. Internal lease heartbeats remain required. Report progress, candidates, verdicts, blockers, and the terminal handoff to the **durable coordinator inbox** (`coordinator-inbox.py`), never as a direct chat message that could steer an active coordinator turn.
 - A correction worker fixes only the exact failed acceptance root cause. It must not reopen accepted unchanged evidence or broaden the work unit.
 
-## Step 0 — identify and start the lease
+## Step 0 — confirm admission and start the lease
 
 1. Run `get_session_info`; record your session ID and `parent-session::` coordinator.
-2. Confirm your cwd is the unique worktree assigned to this attempt. Never switch into another attempt’s worktree.
-3. Immediately update your lease:
+2. Confirm your cwd, role, work-unit and attempt exactly match the coordinator's reserved `lane-admission.py` token. The coordinator must confirm that token against this live manifest before creating the lease; a mismatch is a hard stop and blocker report.
+3. Confirm your cwd is the unique worktree assigned to this attempt. Never switch into another attempt’s worktree.
+4. Immediately update your lease:
 
 ```bash
 ~/.craft-agent/scripts/worker-lease.py heartbeat \

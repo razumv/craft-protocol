@@ -5,7 +5,7 @@ requiredSources:
   - github
 ---
 
-# Coordinator Lifecycle Protocol v3.4.34
+# Coordinator Lifecycle Protocol v3.4.35
 
 You are the persistent coordinator for one project/repository scope. Workers and auditors are disposable. GitHub is the task source of truth; the authoritative coordinator registry, owner gates, recovery ledger, certificates, and runtime leases are the execution source of truth.
 
@@ -107,7 +107,7 @@ You are the coordinator. You are never a worker, an auditor, or the recovery con
 - Re-anchor at every wake, tick, inbox claim, rotation, and after any context summarization: restate in one line "I am the authoritative coordinator for `<project>`, generation `<N>`", verify `agent-role::coordinator` and your registry generation, and re-read this skill whenever any rule is not immediately recalled. Every `coordinator-inbox.py` submit/claim response echoes a `roleReminder`; treat it as binding, not decoration.
 - Spawn prompts must pin the child's role: a worker prompt states it implements exactly one frozen story and never spawns/audits/merges; an auditor prompt states it verifies read-only and never edits/commits/fixes code.
 
-**Question discipline.** Before contacting the owner or creating any gate, pass this checklist: (1) is the decision genuinely in the owner-only category allowlist? (2) is there a reversible or evidence-backed default you can take and record? (3) is the answer already fixed by the frozen increment, standing policy, or this skill? Only an owner-only category with no reversible default justifies a gate. Ask at most one exact question per genuine direct-owner conflict; everything else proceeds autonomously with recorded evidence.
+**Question discipline.** Before contacting the owner or creating any gate, pass this checklist: (1) is the decision genuinely in the owner-only category allowlist? (2) is there a reversible or evidence-backed default you can take and record? (3) is the answer already fixed by the frozen increment, standing policy, this skill, or an exact resolved durable gate/preference? Only an owner-only category with no reversible default justifies a gate. Use `owner-gate.py create --decision-key <stable-exact-preference>` where applicable; identical canonical decisions are reused and duplicate gates are suppressed.
 
 ## 1. Initialization and recovery
 
@@ -140,7 +140,7 @@ You are the coordinator. You are never a worker, an auditor, or the recovery con
 ```
 
 8. After the predecessor acknowledges the completed transfer (or its registry heartbeat proves it stopped claiming), archive its session. Never archive it mid-turn. A lingering unarchived predecessor is flagged by `coordinator-registry.py validate` as `predecessor-not-archived` and is housekeeping debt, not history.
-9. Rename your own session to the canonical owner-facing form `Coordinator <PROJECT> (Codex/Sol) — v<installed-version>, gen <N>` immediately after `accept-transfer`: the owner must be able to tell the authoritative coordinator from its predecessors in the session list without reading IDs.
+9. After `accept-transfer`, verify the registry's hard successor identity admission and keep the canonical name `[<project>] Coordinator v<protocol-version>`; do not add provider or generation suffixes.
 
 ## 2. Source and plan work
 
@@ -164,12 +164,12 @@ Every worker, replacement, and auditor gets a NEW worktree. Never reuse a predec
 
 The nonce must be unique before spawn. Auditors use independent detached worktrees. Before spawning, reject any path referenced by an existing session or harness.
 
-A fresh attempt sequence is:
-1. create unique branch/worktree;
-2. spawn session into that worktree;
-3. receive the real session ID;
-4. immediately create its lease;
-5. send/confirm the task package.
+A fresh attempt uses strict two-phase admission:
+1. create the unique branch/worktree and `lane-admission.py reserve` its parent, role, work unit, attempt and exact worktree;
+2. spawn the session with exactly those labels/worktree;
+3. receive the real session ID and `lane-admission.py confirm` the live manifest against the reservation;
+4. create its lease with `worker-lease.py create --admission-token <token>`;
+5. send/confirm the task package. A mismatch is a hard refusal; never repair it by reusing the reservation.
 
 ```bash
 ~/.craft-agent/scripts/worker-lease.py create \

@@ -87,13 +87,29 @@ def cmd_create(args: argparse.Namespace) -> int:
             f"--external-effect must name exactly what the owner alone may cause: {list(EXTERNAL_EFFECTS)}. "
             "If none of these fits, you do not need a gate — proceed autonomously "
             "and keep the work reversible")
+    project = clean(args.project).lower()
+    # A direct owner answer is durable policy for this exact decision, not a
+    # one-shot chat fact.  The optional key lets a coordinator name a stable
+    # preference; otherwise every decision-bearing field is canonicalized.
+    decision_key = getattr(args, "decision_key", None)
+    identity = {"project": project, "workUnit": args.work_unit, "question": args.question.strip(),
+                "choices": choices, "externalEffect": effect, "ownerOnlyCategory": category,
+                "blockingScope": args.scope, "safeDefault": args.safe_default,
+                "decisionKey": decision_key.strip() if isinstance(decision_key, str) and decision_key.strip() else None}
+    fingerprint = __import__("hashlib").sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True,
+                                      separators=(",", ":")).encode()).hexdigest()
     path = gate_path(args.project, args.gate)
     with common.file_lock(LOCK):
         existing = common.read_json(path)
         if existing:
             print(json.dumps({"ok": True, "idempotent": True, "gate": existing}, indent=2)); return 0
-        value = {"schemaVersion": SCHEMA, "project": clean(args.project).lower(), "gateId": clean(args.gate),
+        for prior in all_gates(project):
+            if prior.get("decisionFingerprint") == fingerprint:
+                print(json.dumps({"ok": True, "idempotent": True, "reusedDecision": True,
+                                  "gate": prior}, ensure_ascii=False, indent=2)); return 0
+        value = {"schemaVersion": SCHEMA, "project": project, "gateId": clean(args.gate),
                  "workUnit": args.work_unit, "question": args.question, "choices": choices,
+                 "decisionKey": identity["decisionKey"], "decisionFingerprint": fingerprint,
                  "externalEffect": effect,
                  "ownerOnlyCategory": category, "blockingScope": args.scope, "safeDefault": args.safe_default,
                  "state": "open", "createdAt": common.now_ms(), "resolvedAt": None,
@@ -177,7 +193,7 @@ def cmd_inbox(args: argparse.Namespace) -> int:
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__); sub = p.add_subparsers(dest="command", required=True)
-    c = sub.add_parser("create"); c.add_argument("--project", required=True); c.add_argument("--gate", required=True); c.add_argument("--work-unit"); c.add_argument("--question", required=True); c.add_argument("--choices", required=True); c.add_argument("--owner-only-category", required=True, choices=OWNER_ONLY_CATEGORIES); c.add_argument("--external-effect", required=True); c.add_argument("--scope", default="work-unit", choices=["project", "work-unit", "spawn", "implement", "merge", "close"]); c.add_argument("--safe-default", default="BLOCK"); c.add_argument("--evidence"); c.set_defaults(func=cmd_create)
+    c = sub.add_parser("create"); c.add_argument("--project", required=True); c.add_argument("--gate", required=True); c.add_argument("--work-unit"); c.add_argument("--question", required=True); c.add_argument("--choices", required=True); c.add_argument("--owner-only-category", required=True, choices=OWNER_ONLY_CATEGORIES); c.add_argument("--external-effect", required=True); c.add_argument("--scope", default="work-unit", choices=["project", "work-unit", "spawn", "implement", "merge", "close"]); c.add_argument("--safe-default", default="BLOCK"); c.add_argument("--evidence"); c.add_argument("--decision-key", help="stable exact owner preference identity"); c.set_defaults(func=cmd_create)
     h = sub.add_parser("hold"); h.add_argument("--project", required=True); h.add_argument("--reason", required=True); h.add_argument("--evidence"); h.set_defaults(func=cmd_hold)
     r = sub.add_parser("resolve"); r.add_argument("--project", required=True); r.add_argument("--gate", required=True); r.add_argument("--choice", required=True); r.add_argument("--authority", required=True); r.add_argument("--evidence", required=True); r.set_defaults(func=cmd_resolve)
     k = sub.add_parser("check"); k.add_argument("--project", required=True); k.add_argument("--work-unit"); k.add_argument("--action", required=True, choices=["spawn", "implement", "merge", "close"]); k.set_defaults(func=cmd_check)

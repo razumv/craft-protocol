@@ -4,6 +4,16 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.35] — 2026-08-15
+
+### Admission, transfer identity, and durable owner memory
+
+- Added `lane-admission.py`: workers and auditors reserve immutable lane identity before spawn and confirm the returned live manifest before lease creation; legacy lease records remain compatible.
+- Coordinator transfers now bind and recheck successor manifest identity, including project binding, role, workspace, connection, and model.
+- Owner gates canonicalize exact decision/preference identities (`--decision-key`) and reuse matching open or resolved records rather than creating duplicate gates.
+- Added a durable pull-only owner-facing reporting policy with explicitly best-effort transcript detection where runtime interception is unavailable; corrected the conflicting coordinator name instruction.
+
+
 ## [3.4.34] — 2026-08-15
 
 ### Dead lanes finally have a way out
@@ -460,8 +470,8 @@ Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's 
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.34...HEAD
-[3.4.34]: https://github.com/razumv/craft-protocol/compare/v3.4.33...v3.4.34
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.35...HEAD
+[3.4.34]: https://github.com/razumv/craft-protocol/compare/v3.4.33...v3.4.35
 [3.4.33]: https://github.com/razumv/craft-protocol/compare/v3.4.32...v3.4.33
 [3.4.32]: https://github.com/razumv/craft-protocol/compare/v3.4.31...v3.4.32
 [3.4.31]: https://github.com/razumv/craft-protocol/compare/v3.4.30...v3.4.31

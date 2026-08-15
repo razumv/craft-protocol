@@ -1,4 +1,4 @@
-# Craft Agents Multi-Agent Orchestration Protocol v3.4.34 — Complete Standalone Guide
+# Craft Agents Multi-Agent Orchestration Protocol v3.4.35 — Complete Standalone Guide
 
 [![Protocol tests](https://github.com/razumv/craft-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/razumv/craft-protocol/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -93,6 +93,13 @@ Chat claims, silence, status names, and repeated CI polling are not authoritativ
 20. When the owner asks for status, lead with customer outcome, demonstrable workflow, remaining work, ETA/confidence and one blocker; PR/SHA/CI/session/audit details are secondary evidence only.
 
 ---
+
+## v3.4.35 admission and owner-memory controls
+
+- Worker and auditor dispatch is strict two-phase: reserve immutable lane identity before spawning, then confirm the returned live manifest before lease creation. Legacy lease records remain readable; new dispatches use `lane-admission.py`.
+- Coordinator transfer accepts only the exact live successor identity reserved by `begin-transfer`; session-ID-only handoffs fail closed.
+- Owner gates canonicalize an exact decision/preference and reuse a matching durable resolved or open record rather than opening duplicate gates.
+- Owner-facing reporting is configured as pull-only through `reporting-policy.py`. Runtime outbound-message interception is unavailable, so transcript checking is explicitly best-effort and never proves silence.
 
 ## 3. Current default settings
 
@@ -338,7 +345,7 @@ parent-session::<predecessor-id> or equivalent predecessor metadata
 Canonical new name:
 
 ```text
-Coordinator <Project> (Codex/Sol) — v3
+[<project>] Coordinator v<protocol-version>
 ```
 
 ### Worker/auditor

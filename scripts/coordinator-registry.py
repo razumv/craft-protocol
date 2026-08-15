@@ -203,8 +203,20 @@ def cmd_reconcile_activity(args: argparse.Namespace) -> int:
     return 0
 
 
+def transfer_identity(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Immutable fields that prove the exact successor selected at transfer start."""
+    return {"id": manifest.get("id"), "workspaceRootPath": manifest.get("workspaceRootPath"),
+            "projectId": manifest.get("projectId"), "role": common.role_of(manifest),
+            "connection": manifest.get("llmConnection"), "model": manifest.get("model")}
+
+
 def cmd_begin_transfer(args: argparse.Namespace) -> int:
-    project = clean_project(args.project); manifest_or_die(args.successor)
+    project = clean_project(args.project); successor = manifest_or_die(args.successor)
+    identity = transfer_identity(successor)
+    # A coordinator is project-bound.  Do not defer this proof until after the
+    # predecessor has entered rotating state.
+    if successor.get("projectId") != (load(project) or {}).get("projectId"):
+        raise SystemExit("successor native project binding mismatch")
     with common.file_lock(LOCK):
         refuse_cross_project(args.successor, project, include_pending=True)
         value = require_owner(project, args.session)
@@ -216,6 +228,7 @@ def cmd_begin_transfer(args: argparse.Namespace) -> int:
             raise SystemExit("project HOLD blocks transfer")
         value["state"] = "rotating"; value["successorSessionId"] = args.successor
         value["transferStartedAt"] = common.now_ms(); value["transferReason"] = args.reason
+        value["successorIdentity"] = identity
         save(value)
     print(json.dumps({"ok": True, "record": value}, indent=2)); return 0
 
@@ -229,12 +242,18 @@ def cmd_accept_transfer(args: argparse.Namespace) -> int:
             raise SystemExit("no matching open transfer")
         if args.expected_generation is not None and int(value.get("generation") or 0) != args.expected_generation:
             raise SystemExit("generation mismatch")
+        expected_identity = value.get("successorIdentity")
+        if not isinstance(expected_identity, dict):
+            raise SystemExit("transfer identity admission missing; begin a new transfer")
+        if transfer_identity(manifest) != expected_identity:
+            raise SystemExit("successor transfer identity mismatch")
         predecessor = value.get("coordinatorSessionId"); now = common.now_ms()
         value.update({"coordinatorSessionId": args.session, "predecessorSessionId": predecessor,
                       "successorSessionId": None, "generation": int(value.get("generation") or 0) + 1,
                       "state": "authoritative", "claimedAt": now, "lastHeartbeatAt": now,
                       "leaseExpiresAt": now + int(args.ttl) * 1000, "transferAcceptedAt": now,
-                      "transferStartedAt": None, "priorFallbackReason": value.get("fallbackReason"),
+                      "transferStartedAt": None, "transferIdentityAcceptedAt": now,
+                      "priorFallbackReason": value.get("fallbackReason"),
                       "fallbackReason": None, **provider_fields(manifest)})
         save(value)
     print(json.dumps({"ok": True, "record": value}, indent=2)); return 0

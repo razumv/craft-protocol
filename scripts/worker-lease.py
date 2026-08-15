@@ -405,6 +405,14 @@ def refuse_role_drift_create(session_id: str, value: dict[str, Any]) -> None:
                 raise SystemExit(f"refusing lease: worktree already leased by live session {path.stem}: {worktree}")
 
 
+def require_admission(token: str | None, session_id: str) -> None:
+    if token is None:
+        return  # Legacy records remain valid; v3.4.35 dispatches must provide one.
+    row = read_json(RUNTIME / "lane-admissions" / f"{token}.json")
+    if not row or row.get("state") != "admitted" or row.get("sessionId") != session_id:
+        raise SystemExit("refusing lease without confirmed two-phase admission")
+
+
 def cmd_create(args: argparse.Namespace) -> int:
     with locked():
         manifest = read_manifest(args.session)
@@ -414,6 +422,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             raise SystemExit(f"refusing lease for archived session: {args.session}")
         if role_of(manifest) not in ROLES:
             raise SystemExit(f"refusing lease for role={role_of(manifest)}")
+        require_admission(args.admission_token, args.session)
         value = read_json(lease_path(args.session)) or lease_from_manifest(manifest)
         for key, arg in (
             ("parentSessionId", "parent"), ("workUnit", "work_unit"),
@@ -599,6 +608,7 @@ def parser() -> argparse.ArgumentParser:
     c.add_argument("--worktree")
     c.add_argument("--phase", default="spawned")
     c.add_argument("--state", default="starting", choices=["starting", "running"])
+    c.add_argument("--admission-token", help="confirmed v3.4.35 lane-admission token")
     c.set_defaults(func=cmd_create)
     h = sub.add_parser("heartbeat")
     h.add_argument("--session", required=True)

@@ -1,4 +1,4 @@
-# Protocol v3.4.34 defaults
+# Protocol v3.4.35 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -98,6 +98,10 @@ Python default:                /opt/homebrew/bin/python3
 Public automation templates:   disabled by default
 Legacy recurring prompts:      permanently disabled
 Admission supervisor:          deterministic, before any LLM session
+Lane admission (3.4.35):       reserve immutable worker/auditor identity, then manifest-confirm before lease
+Transfer admission (3.4.35):   successor manifest identity is bound at begin-transfer and rechecked at accept
+Owner reporting (3.4.35):      durable pull-only policy; transcript detection is best-effort because interception is unavailable
+Owner-memory (3.4.35):         canonical exact decision/preference fingerprint suppresses duplicate gates
 Admission interval:            300 seconds; report-only under kill switch
 Production admission:          capability-v2 delivery/inspect/recover on exact runtime identity
 Direct capability:             available=true, version=2; deliver + inspect + recover channels

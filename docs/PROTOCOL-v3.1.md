@@ -724,7 +724,7 @@ Simple merge/closure authority requires a valid machine-readable certificate con
 
 ## Metadata and rotation
 
-New coordinator name: `Coordinator <Project> (Codex/Sol) — v3`. Required labels: `coordinators`, `agent-role::coordinator`, `project::<slug>`, `protocol-version::3`, plus predecessor/replacement metadata. Metadata drift is detected read-only; live session JSONL is never rewritten. Rotation is recommended at provider/context failure, about 200k tokens, 500 messages, three active lanes, eight gates, or equivalent complexity, with cooldown against loops.
+New coordinator name: `[<project>] Coordinator v<protocol-version>`. Required labels: `coordinators`, `agent-role::coordinator`, `project::<slug>`, `protocol-version::3`, plus predecessor/replacement metadata. Metadata drift is detected read-only; live session JSONL is never rewritten. Rotation is recommended at provider/context failure, about 200k tokens, 500 messages, three active lanes, eight gates, or equivalent complexity, with cooldown against loops.
 
 ## Deterministic watchdog
 

@@ -1,6 +1,6 @@
 #!/bin/zsh
 # SPDX-License-Identifier: Apache-2.0
-# Safe installer for Craft Agents orchestration protocol v3.4.34.
+# Safe installer for Craft Agents orchestration protocol v3.4.35.
 # Dry-run by default. Use --apply only after reviewing README.md.
 set -eu
 
@@ -23,7 +23,7 @@ SKILLS="$WORKSPACE/skills"
 RUNTIME="$CRAFT/runtime"
 LOGS="$CRAFT/logs"
 STAMP=$(date '+%Y%m%d-%H%M%S')
-BACKUP="$CRAFT/backups/orchestration-v3.4.34-$STAMP"
+BACKUP="$CRAFT/backups/orchestration-v3.4.35-$STAMP"
 PYTHON="${CRAFT_PYTHON:-/opt/homebrew/bin/python3}"
 [[ -x "$PYTHON" ]] || PYTHON=$(command -v python3)
 PLIST_NAME="com.craft-protocol.worker-watchdog.plist"
@@ -35,7 +35,7 @@ files=(
   worker-lease.py observable-job.py external-wait.py worker-watchdog.py post-archive-reaper.py
   controller-harness.py recovery-admission.py
   coordinator-inbox.py coordinator-status.py coordinator-commitment.py owner-gate-board.py increment-board.py standing-authority.py
-  scan-reapable-workers.py watchdog-cron.sh recovery-admission-cron.sh coordinator-kickoff.md
+  scan-reapable-workers.py watchdog-cron.sh recovery-admission-cron.sh coordinator-kickoff.md lane-admission.py reporting-policy.py
 )
 
 echo "Mode: $([[ $APPLY == 1 ]] && echo APPLY || echo DRY-RUN)"
