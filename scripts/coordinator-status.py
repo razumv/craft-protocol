@@ -995,9 +995,12 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
             fail("audit-verdict acceptanceRef must be authored by an auditor")
         if acceptance_kind not in {"audit-verdict", "terminal-handoff"}:
             fail("acceptanceRef must reference a verification-grade acceptance report")
+        candidate_unit = str(bound["integratedCandidateRef"].get("workUnit") or "")
+        acceptance_unit = str(bound["acceptanceRef"].get("workUnit") or "")
         if strict_v3437 and (candidate_sha not in evidence_values(bound["acceptanceRef"], "candidateSha")
-                             or "PASS" not in evidence_values(bound["acceptanceRef"], "verdict")):
-            fail("acceptanceRef must consume the exact candidateSha with verdict:PASS")
+                             or "PASS" not in evidence_values(bound["acceptanceRef"], "verdict")
+                             or not candidate_unit or acceptance_unit != candidate_unit):
+            fail("acceptanceRef must consume exact candidateSha/verdict/workUnit")
         release = bound["releaseReadbackRef"]
         if release.get("kind") != "observer-terminal":
             fail("releaseReadbackRef must reference an observer-terminal receipt")
@@ -1033,8 +1036,10 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
                     fail("merge-authorized completion requires observed resolved gate or standing receipt for exact workUnit")
                 if f"merged-main:{story.get('mergeSha')}" not in release_evidence:
                     fail("merge-authorized completion requires merged-main readback evidence for exact mergeSha")
-                if strict_v3437 and candidate_sha not in evidence_values(release, "candidateSha"):
-                    fail("releaseReadbackRef must bind the exact integrated candidateSha")
+                if strict_v3437 and (candidate_sha not in evidence_values(release, "candidateSha")
+                                     or str(release.get("workUnit") or "") != unit
+                                     or candidate_unit != unit):
+                    fail("releaseReadbackRef must bind exact candidateSha and workUnit")
         demonstration = bound["demonstrationRef"]
         if demonstration.get("kind") not in {"terminal-handoff", "observer-terminal"}:
             fail("demonstrationRef must reference a terminal real-workflow report")

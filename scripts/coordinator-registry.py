@@ -305,7 +305,7 @@ def rotation_metric(record: dict[str, Any], manifest: dict[str, Any], now: int) 
     max_messages = int(os.environ.get("CRAFT_COORDINATOR_MAX_MESSAGES", "500"))
     max_tokens = int(os.environ.get("CRAFT_COORDINATOR_MAX_TOKENS", "200000"))
     error_text = " ".join(str(manifest.get(k) or "") for k in ("error", "lastError", "sessionError", "contextError")).lower()
-    context_error = any(marker in error_text for marker in ("context", "request buffer", "token limit", "maximum tokens"))
+    context_error = any(marker in error_text for marker in ("context", "request buffer", "token limit", "maximum tokens", "provider", "connection", "identity mismatch", "sigterm"))
     prior_active = bool(metric.get("pressureActive")) and same_session
     message_pressure = isinstance(messages, int) and messages >= (ROTATION_MESSAGE_HYSTERESIS if prior_active else max_messages)
     token_pressure = isinstance(tokens, int) and tokens >= (ROTATION_TOKEN_HYSTERESIS if prior_active else max_tokens)
@@ -335,14 +335,35 @@ def discover_transfer_children(predecessor: str, project: str, existing: list[An
     successor cannot manufacture or duplicate an adopted lane.
     """
     children = {str(value) for value in existing if isinstance(value, str) and value}
+    seen_attempts: set[tuple[str, str, str]] = set()
+    seen_cwds: dict[str, str] = {}
+    predecessor_manifest = common.read_manifest(predecessor) or {}
+    predecessor_cwd = common.coordinator_cwd(predecessor_manifest.get("workingDirectory") or predecessor_manifest.get("sdkCwd"))
     for session_id, manifest in common.all_manifests().items():
+        parent = common.label_value(manifest, "parent-session::") or manifest.get("parentSessionId")
+        if parent != predecessor:
+            continue
+        # Only a non-archived running/needs-review worker or auditor is adoptable;
+        # terminal, cancelled, and foreign records are never made successor work.
         if not common.session_live(manifest) or common.role_of(manifest) not in {"worker", "auditor"}:
             continue
-        if common.label_value(manifest, "parent-session::") != predecessor and manifest.get("parentSessionId") != predecessor:
-            continue
         labelled_project = common.label_value(manifest, "project::")
-        if labelled_project and clean_project(labelled_project) != project:
-            continue
+        if labelled_project != project:
+            raise SystemExit("transfer child project binding mismatch")
+        unit = common.label_value(manifest, "work-unit::")
+        attempt = common.label_value(manifest, "attempt::")
+        role = common.role_of(manifest)
+        if not unit or not attempt:
+            raise SystemExit("transfer child immutable work-unit/attempt binding missing")
+        identity = (role, unit, attempt)
+        if identity in seen_attempts:
+            raise SystemExit("duplicate live transfer child work-unit/attempt")
+        seen_attempts.add(identity)
+        cwd = common.canonical_path(manifest.get("workingDirectory") or manifest.get("sdkCwd"))
+        if cwd:
+            if cwd == predecessor_cwd or cwd in seen_cwds:
+                raise SystemExit("transfer child shared worktree refusal")
+            seen_cwds[cwd] = str(session_id)
         children.add(str(session_id))
     return sorted(children)
 

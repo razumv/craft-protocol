@@ -40,7 +40,7 @@ def require_admitted_v3435(session_id: str, cwd: str) -> None:
         manifest = json.loads((SESSIONS / session_id / "session.jsonl").open(encoding="utf-8").readline())
     except Exception:
         raise SystemExit("session manifest required for observable job")
-    if not ({"protocol-version::3.4.35", "protocol-version::3.4.36", "protocol-version::3.4.37"} & set(manifest.get("labels") or [])): 
+    if not ({"protocol-version::3.4.35", "protocol-version::3.4.36", "protocol-version::3.4.37"} & set(manifest.get("labels") or [])):
         return  # Existing v3.4.34 observable jobs remain readable/runnable.
     matches = []
     for record_path in (RUNTIME / "lane-admissions").glob("*.json"):

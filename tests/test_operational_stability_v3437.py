@@ -48,27 +48,27 @@ class Base(unittest.TestCase):
 
 
 class OwnerPlanReceiptTests(Base):
-    def test_magic_plan_receipt_is_exact_expiring_and_never_authorizes_external_effects(self):
-        digest = "a" * 64
-        _, approved = self.cli("owner-plan-receipt.py", "approve", "--project", "magicmarkets", "--receipt-id", "magic-plan-1",
-                               "--scope", "increment:magic-q3", "--plan-sha256", digest, "--effect", "test-only",
-                               "--authority", "direct-owner", "--ttl-seconds", "120")
+    def test_magic_plan_receipt_is_authenticated_byte_bound_and_never_authorizes_external_effects(self):
+        self.manifest("owner", "owner")
+        self.env["CRAFT_OWNER_SESSION_ID"] = "owner"
+        plan = self.root / "plan.md"; plan.write_text("test the reversible contract\n")
+        excluded = ["deploy", "irreversible-data-change", "merge-protected-branch", "physical-or-remote-access", "publish-release", "spend-money-or-entitlement", "use-credential"]
+        approve = ["approve", "--project", "magicmarkets", "--receipt-id", "magic-plan-1", "--owner-session", "owner", "--scope", "increment:magic-q3", "--plan-file", str(plan), "--effect", "test-only", "--ttl-seconds", "120"]
+        for effect in excluded: approve += ["--exclude", effect]
+        _, approved = self.cli("owner-plan-receipt.py", *approve)
         self.assertEqual(approved["receipt"]["effects"], ["test-only"])
-        _, checked = self.cli("owner-plan-receipt.py", "check", "--project", "magicmarkets", "--receipt-id", "magic-plan-1",
-                              "--scope", "increment:magic-q3", "--plan-sha256", digest, "--effect", "test-only")
+        _, checked = self.cli("owner-plan-receipt.py", "check", "--project", "magicmarkets", "--receipt-id", "magic-plan-1", "--scope", "increment:magic-q3", "--plan-file", str(plan), "--effect", "test-only")
         self.assertTrue(checked["authorized"])
-        denied, data = self.cli("owner-plan-receipt.py", "check", "--project", "magicmarkets", "--receipt-id", "magic-plan-1",
-                                "--scope", "work-unit:ship", "--plan-sha256", digest, "--effect", "test-only", ok=False)
-        self.assertEqual(denied.returncode, 4); self.assertIn("receipt-scope-mismatch", data["refusals"])
-        denied, data = self.cli("owner-plan-receipt.py", "approve", "--project", "magicmarkets", "--receipt-id", "bad",
-                                "--scope", "increment:magic-q3", "--plan-sha256", digest, "--effect", "deploy",
-                                "--authority", "direct-owner", ok=False)
-        self.assertIn("never authorize deploy", data["error"])
-        self.cli("owner-plan-receipt.py", "revoke", "--project", "magicmarkets", "--receipt-id", "magic-plan-1",
-                 "--authority", "direct-owner", "--reason", "scope changed")
-        denied, data = self.cli("owner-plan-receipt.py", "check", "--project", "magicmarkets", "--receipt-id", "magic-plan-1",
-                                "--scope", "increment:magic-q3", "--plan-sha256", digest, "--effect", "test-only", ok=False)
-        self.assertIn("receipt-revoked", data["refusals"])
+        _, boundary = self.cli("owner-gate.py", "check", "--project", "magicmarkets", "--action", "implement", "--plan-receipt", "magic-plan-1", "--plan-scope", "increment:magic-q3", "--plan-file", str(plan), "--plan-effect", "test-only")
+        self.assertTrue(boundary["allowed"])
+        plan.write_text("different bytes\n")
+        denied_boundary, boundary = self.cli("owner-gate.py", "check", "--project", "magicmarkets", "--action", "implement", "--plan-receipt", "magic-plan-1", "--plan-scope", "increment:magic-q3", "--plan-file", str(plan), "--plan-effect", "test-only", ok=False)
+        self.assertIn("receipt-plan-bytes-mismatch", boundary["planReceiptRefusals"])
+        denied, data = self.cli("owner-plan-receipt.py", "check", "--project", "magicmarkets", "--receipt-id", "magic-plan-1", "--scope", "increment:magic-q3", "--plan-file", str(plan), "--effect", "test-only", ok=False)
+        self.assertIn("receipt-plan-bytes-mismatch", data["refusals"])
+        denied, data = self.cli("owner-plan-receipt.py", "approve",  "--project", "magicmarkets", "--receipt-id", "bad", "--owner-session", "owner", "--scope", "increment:magic-q3", "--plan-file", str(plan), "--effect", "deploy", ok=False)
+        self.assertIn("dangerous", data["error"])
+        self.cli("owner-plan-receipt.py", "revoke", "--project", "magicmarkets", "--receipt-id", "magic-plan-1", "--owner-session", "owner", "--reason", "scope changed")
 
 
 class RotationTests(unittest.TestCase):
@@ -133,7 +133,7 @@ class TransferAndEvidenceTests(Base):
                                                      "evidence": evidence, "coordinatorGeneration": 1, **more}
         inbox = self.runtime / "coordinator-inbox" / "client"
         self.put(inbox / "candidate.json", item("candidate", "terminal-handoff", [f"candidateSha:{candidate}"], sender="worker", workUnit="ship"))
-        self.put(inbox / "accept.json", item("accept", "audit-verdict", [f"candidateSha:{candidate}", "verdict:PASS"], senderRole="auditor"))
+        self.put(inbox / "accept.json", item("accept", "audit-verdict", [f"candidateSha:{candidate}", "verdict:PASS"], senderRole="auditor", workUnit="ship"))
         self.put(inbox / "release.json", item("release", "observer-terminal", [f"candidateSha:{candidate}", f"merged-main:{merge}"], sender="watch", workUnit="ship"))
         self.put(inbox / "demo.json", item("demo", "terminal-handoff", [criterion], sender="worker", workUnit="ship"))
         self.put(self.runtime / "external-waits" / "readback.json", {"waitId": "readback", "project": "client", "coordinatorSessionId": "coord", "watcherSessionId": "watch", "workUnit": "ship", "state": "terminal"})
@@ -146,7 +146,7 @@ class TransferAndEvidenceTests(Base):
             "completionEvidence": {"integratedCandidateRef": bind("candidate"), "acceptanceRef": bind("accept"), "releaseReadbackRef": bind("release"), "demonstrationRef": bind("demo")}}}
         _, published = self.cli("coordinator-status.py", "publish", "--project", "client", "--session", "coord", "--generation", "1", "--json", json.dumps(payload), "--apply")
         self.assertEqual(published["record"]["protocolVersion"], "3.4.37")
-        bad = json.loads(json.dumps(payload)); self.put(inbox / "accept.json", item("accept", "audit-verdict", ["candidateSha:" + "b" * 40, "verdict:PASS"], senderRole="auditor"))
+        bad = json.loads(json.dumps(payload)); self.put(inbox / "accept.json", item("accept", "audit-verdict", ["candidateSha:" + "b" * 40, "verdict:PASS"], senderRole="auditor", workUnit="ship"))
         proc, _ = self.cli("coordinator-status.py", "publish", "--project", "client", "--session", "coord", "--generation", "1", "--json", json.dumps(bad), "--apply", ok=False)
         self.assertIn("exact candidateSha", proc.stderr)
 
@@ -171,11 +171,15 @@ class ReleaseClosureTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls): cls.release = load("release-closure")
 
-    def test_v3436_missing_github_release_can_never_close_as_latest(self):
-        self.assertIn("github-release-evidence-missing", self.release.github_errors(None, "v3.4.36", "a" * 40))
-        stale = {"source": "github-api", "tagName": "v3.4.36", "targetCommit": "a" * 40, "isDraft": False,
-                 "isPrerelease": False, "isLatest": False, "publishedAt": "2026-08-16T00:00:00Z", "htmlUrl": "https://github.com/razumv/craft-protocol/releases/tag/v3.4.36"}
-        self.assertIn("github-release-not-latest", self.release.github_errors(stale, "v3.4.36", "a" * 40))
+    def test_v3436_missing_authenticated_github_release_can_never_close_as_latest(self):
+        old = os.environ.pop("CRAFT_GH_CLI", None)
+        try:
+            result = self.release.verify(ROOT, "3.4.36")
+        finally:
+            if old is not None: os.environ["CRAFT_GH_CLI"] = old
+        self.assertFalse(result["closed"])
+        self.assertIn("github-auth-cli-unavailable", result["errors"])
+        self.assertIn("github-release-uncheckable-without-auth", result["errors"])
 
 
 if __name__ == "__main__": unittest.main()

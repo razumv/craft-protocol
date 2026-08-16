@@ -175,8 +175,23 @@ def blockers(project: str, work_unit: str | None, action: str) -> list[dict[str,
 
 def cmd_check(args: argparse.Namespace) -> int:
     rows = blockers(args.project, args.work_unit, args.action)
-    result = {"allowed": not rows, "project": args.project, "workUnit": args.work_unit, "action": args.action, "blockers": rows}
-    print(json.dumps(result, ensure_ascii=False, indent=2)); return 0 if not rows else 4
+    receipt_refusal: list[str] = []
+    # When a coordinator presents a plan receipt at an execution boundary, verify
+    # its durable byte/scope/effect binding here rather than trusting prompt text.
+    if args.plan_receipt or args.plan_file or args.plan_scope or args.plan_effect:
+        if not (args.plan_receipt and args.plan_file and args.plan_scope and args.plan_effect):
+            receipt_refusal = ["plan-receipt-binding-incomplete"]
+        else:
+            spec = importlib.util.spec_from_file_location("owner_plan_receipt", HERE / "owner-plan-receipt.py")
+            tool = importlib.util.module_from_spec(spec); spec.loader.exec_module(tool)  # type: ignore
+            try:
+                receipt_refusal = tool.reasons(clean(args.project), args.plan_receipt, args.plan_scope,
+                                               args.plan_file, args.plan_effect)
+            except SystemExit:
+                receipt_refusal = ["plan-receipt-invalid"]
+    result = {"allowed": not rows and not receipt_refusal, "project": args.project, "workUnit": args.work_unit,
+              "action": args.action, "blockers": rows, "planReceiptRefusals": receipt_refusal}
+    print(json.dumps(result, ensure_ascii=False, indent=2)); return 0 if result["allowed"] else 4
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -197,7 +212,7 @@ def parser() -> argparse.ArgumentParser:
     c = sub.add_parser("create"); c.add_argument("--project", required=True); c.add_argument("--gate", required=True); c.add_argument("--work-unit"); c.add_argument("--question", required=True); c.add_argument("--choices", required=True); c.add_argument("--owner-only-category", required=True, choices=OWNER_ONLY_CATEGORIES); c.add_argument("--external-effect", required=True); c.add_argument("--scope", default="work-unit", choices=["project", "work-unit", "spawn", "implement", "merge", "close"]); c.add_argument("--safe-default", default="BLOCK"); c.add_argument("--evidence"); c.add_argument("--decision-key", help="stable exact owner preference identity"); c.set_defaults(func=cmd_create)
     h = sub.add_parser("hold"); h.add_argument("--project", required=True); h.add_argument("--reason", required=True); h.add_argument("--evidence"); h.set_defaults(func=cmd_hold)
     r = sub.add_parser("resolve"); r.add_argument("--project", required=True); r.add_argument("--gate", required=True); r.add_argument("--choice", required=True); r.add_argument("--authority", required=True); r.add_argument("--evidence", required=True); r.set_defaults(func=cmd_resolve)
-    k = sub.add_parser("check"); k.add_argument("--project", required=True); k.add_argument("--work-unit"); k.add_argument("--action", required=True, choices=["spawn", "implement", "merge", "close"]); k.set_defaults(func=cmd_check)
+    k = sub.add_parser("check"); k.add_argument("--project", required=True); k.add_argument("--work-unit"); k.add_argument("--action", required=True, choices=["spawn", "implement", "merge", "close"]); k.add_argument("--plan-receipt"); k.add_argument("--plan-file"); k.add_argument("--plan-scope"); k.add_argument("--plan-effect", action="append", default=[]); k.set_defaults(func=cmd_check)
     l = sub.add_parser("list"); l.add_argument("--project"); l.set_defaults(func=cmd_list)
     i = sub.add_parser("inbox"); i.add_argument("--project"); i.set_defaults(func=cmd_inbox)
     return p

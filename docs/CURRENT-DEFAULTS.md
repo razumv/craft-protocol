@@ -113,9 +113,9 @@ Rotation metric (3.4.37):      current coordinator session only; 900s claim/tran
 Context error (3.4.37):        request-buffer/context/token errors bypass rotation grace and hysteresis
 Exact completion (3.4.37):     v3.4.37 complete bindings require exact candidateSha, verdict:PASS, merge and readback markers
 Maintenance debt (3.4.37):     live predecessor after healthy handoff → healthy-with-maintenance-debt, archive still owed
-Plan receipt (3.4.37):         direct-owner SHA-256 plan + increment/work-unit scope + safe effect only; 60..604800s, revocable
-Release closure (3.4.37):      read-only main/tag/manifest/installer/GitHub Release Latest/version-adoption verifier
-Transfer discovery (3.4.37):   live/needs-review predecessor worker/auditor manifests are adopted even if their lease is absent/stale
+Plan receipt (3.4.37):         authenticated owner session + exact plan bytes/SHA-256 + scope/effects/all dangerous exclusions; 60..604800s, revocable
+Release closure (3.4.37):      authenticated gh API + annotated tag exactly at origin/main + Release/Latest/assets/fleet-adoption + manifest/installer verifier
+Transfer discovery (3.4.37):   only exact project-bound live/needs-review predecessor lanes; foreign, duplicate attempt, and shared-cwd children refuse transfer
 Admission interval:            300 seconds; report-only under kill switch
 Production admission:          capability-v2 delivery/inspect/recover on exact runtime identity
 Direct capability:             available=true, version=2; deliver + inspect + recover channels
