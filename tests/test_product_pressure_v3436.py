@@ -2,7 +2,10 @@
 """Fleet regressions for the bounded v3.4.36 delivery-pressure correction."""
 from __future__ import annotations
 import importlib.util
+import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -87,6 +90,11 @@ class ProductPressureV3436(unittest.TestCase):
         synth = self.synth(_resolvedGates=[{"gateId": "merge-gate", "state": "resolved", "externalEffect": "merge-protected-branch"}])
         issues = self.status.contradictions(declared, synth, now=1_000_000)
         self.assertIn("resolved-merge-authority-without-same-cycle-merge:ship", issues)
+        merged = self.increment([{"id": "ship", "title": "ship product", "state": "accepted", "deliverableClass": "product",
+                                  "workUnit": "ship", "mergeSha": "a" * 40, "mergeAuthorityRef": "merge-gate"}])
+        observer_only = self.declared(merged, nextActions=[{"executor": "external-observer", "storyRef": "ship"}])
+        self.assertIn("resolved-merge-authority-without-same-cycle-readback:ship",
+                      self.status.contradictions(observer_only, synth, now=1_000_000))
 
     def test_server_and_client_reuse_exact_candidate_environment_evidence(self):
         candidate = "a" * 40; environment = "b" * 64
@@ -121,6 +129,118 @@ class ProductPressureV3436(unittest.TestCase):
         self.assertEqual(legacy["stories"][0]["deliverableClass"], "product")
         with self.assertRaisesRegex(SystemExit, "at least one product deliverable"):
             self.increment([{"id": "only-contract", "title": "contract", "state": "ready", "deliverableClass": "contract"}])
+
+    def current_publish(self, root, payload):
+        sessions, runtime = root / "sessions", root / "runtime"
+        sessions.mkdir(parents=True, exist_ok=True)
+        (sessions / "coord").mkdir(exist_ok=True)
+        (sessions / "coord" / "session.jsonl").write_text(json.dumps({
+            "id": "coord", "isArchived": False, "sessionStatus": "in_progress",
+            "labels": ["agent-role::coordinator", "protocol-version::3.4.36"]}) + "\n")
+        (runtime / "coordinators").mkdir(parents=True, exist_ok=True)
+        (runtime / "coordinators" / "demo.json").write_text(json.dumps({
+            "project": "demo", "state": "authoritative", "coordinatorSessionId": "coord", "generation": 1}) + "\n")
+        env = {**os.environ, "CRAFT_WORKSPACE": str(root), "CRAFT_SESSIONS": str(sessions),
+               "CRAFT_RUNTIME": str(runtime), "CRAFT_TEST_NOW_MS": "1000000"}
+        return subprocess.run([sys.executable, str(ROOT / "scripts" / "coordinator-status.py"), "publish",
+                               "--project", "demo", "--session", "coord", "--generation", "1",
+                               "--json", json.dumps(payload), "--apply"], env=env, text=True, capture_output=True)
+
+    def test_current_null_increment_requires_observed_direct_owner_planning_gate_but_legacy_is_readable(self):
+        payload = {"objective": "Plan the next outcome", "phase": "executing", "nextReviewInSeconds": 3600}
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            denied = self.current_publish(root, payload)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("requires a Product Increment", denied.stderr)
+            (root / "runtime" / "owner-gates" / "demo").mkdir(parents=True)
+            (root / "runtime" / "owner-gates" / "demo" / "planning.json").write_text(json.dumps({
+                "gateId": "planning", "state": "resolved", "authority": "direct-owner",
+                "externalEffect": "product-direction-decision", "decisionKey": "planning-only:next-outcome"}) + "\n")
+            allowed = self.current_publish(root, {**payload, "planningOnlyAuthorityRef": "planning"})
+            self.assertEqual(allowed.returncode, 0, allowed.stderr)
+            stored = json.loads((root / "runtime" / "coordinator-status" / "demo.json").read_text())
+            self.assertEqual(stored["protocolVersion"], "3.4.36")
+            stored.pop("protocolVersion")
+            stored["declared"].pop("planningOnlyAuthorityRef", None)
+            (root / "runtime" / "coordinator-status" / "demo.json").write_text(json.dumps(stored) + "\n")
+            shown = subprocess.run([sys.executable, str(ROOT / "scripts" / "coordinator-status.py"), "show", "--project", "demo"],
+                                   env={**os.environ, "CRAFT_WORKSPACE": str(root), "CRAFT_SESSIONS": str(root / "sessions"),
+                                        "CRAFT_RUNTIME": str(root / "runtime"), "CRAFT_TEST_NOW_MS": "1000000"}, text=True, capture_output=True)
+            self.assertEqual(shown.returncode, 0)
+            self.assertNotIn("v3.4.36-status-missing-product-outcome", json.loads(shown.stdout)["issues"])
+
+    def test_unknown_or_outside_root_lane_is_housekeeping_and_cannot_mask_product(self):
+        inc = self.increment([{"id": "ship", "title": "Ship", "state": "ready", "deliverableClass": "product", "workUnit": "ship"}])
+        declared = self.declared(inc, delivery={"repoPath": "/delivery", "worktreeRoots": ["/delivery/.worktrees"]})
+        for worker in ({"sessionId": "unknown", "workUnit": "untracked", "worktree": "/delivery/.worktrees/x", "state": "running"},
+                       {"sessionId": "outside", "workUnit": "ship", "worktree": "/other/x", "state": "running"}):
+            with self.subTest(worker=worker["sessionId"]):
+                issues = self.status.contradictions(declared, self.synth(activeWorkers=[worker]), now=1_000_000)
+                self.assertIn("idle-ready-work:ship", issues)
+                self.assertIn("product-work-starved:ship", issues)
+                self.assertTrue(any(issue.startswith("housekeeping-starves-product:") for issue in issues))
+
+    def test_arbitrary_merge_sha_cannot_complete_under_authority_without_verified_delivery(self):
+        criterion = "customer completes checkout"; sha = "a" * 40
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); inbox = root / "runtime" / "coordinator-inbox" / "demo"; inbox.mkdir(parents=True)
+            items = {
+                "candidate": {"eventKey": "candidate", "revision": 1, "fingerprint": "1" * 64, "kind": "terminal-handoff", "evidence": ["candidate"], "coordinatorGeneration": 1},
+                "accept": {"eventKey": "accept", "revision": 1, "fingerprint": "2" * 64, "kind": "audit-verdict", "senderRole": "auditor", "evidence": ["pass"], "coordinatorGeneration": 1},
+                "release": {"eventKey": "release", "revision": 1, "fingerprint": "3" * 64, "kind": "observer-terminal", "sender": "watcher", "workUnit": "ship", "evidence": [f"merged-main:{sha}"], "coordinatorGeneration": 1},
+                "demo": {"eventKey": "demo", "revision": 1, "fingerprint": "4" * 64, "kind": "terminal-handoff", "evidence": [criterion], "coordinatorGeneration": 1},
+            }
+            for key, item in items.items(): (inbox / f"{key}.json").write_text(json.dumps(item) + "\n")
+            waits = root / "runtime" / "external-waits"; waits.mkdir(parents=True)
+            (waits / "readback.json").write_text(json.dumps({"project": "demo", "coordinatorSessionId": "coord", "watcherSessionId": "watcher", "workUnit": "ship", "state": "terminal"}) + "\n")
+            gates = root / "runtime" / "owner-gates" / "demo"; gates.mkdir(parents=True)
+            (gates / "merge.json").write_text(json.dumps({"gateId": "merge", "state": "resolved", "authority": "direct-owner", "externalEffect": "merge-protected-branch", "workUnit": "ship"}) + "\n")
+            binding = lambda key: {field: items[key][field] for field in ("eventKey", "revision", "fingerprint")}
+            payload = {"objective": "Ship", "phase": "complete", "nextActions": [], "completedOutcomes": [{"summary": "done", "evidenceRef": "candidate"}],
+                "productIncrement": {"id": "i", "stage": "complete", "riskTier": "low", "demonstrationCriterion": criterion,
+                "stories": [{"id": "ship", "title": "Ship", "state": "accepted", "deliverableClass": "product", "workUnit": "ship", "acceptanceRef": "accept", "mergeSha": sha, "mergeAuthorityRef": "merge"}],
+                "completionEvidence": {"integratedCandidateRef": binding("candidate"), "acceptanceRef": binding("accept"), "releaseReadbackRef": binding("release"), "demonstrationRef": binding("demo")}}}
+            result = self.current_publish(root, payload)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("requires delivery.repoPath", result.stderr)
+            # The exact gate, merged-main readback, and ancestor proof form a valid
+            # completion only after a real remote-tracking target is available.
+            repo = root / "repo"; repo.mkdir()
+            for command in (("git", "init"), ("git", "config", "user.email", "tests@example.invalid"),
+                            ("git", "config", "user.name", "Tests")):
+                subprocess.run(command, cwd=repo, check=True, capture_output=True)
+            (repo / "file").write_text("delivered")
+            subprocess.run(("git", "add", "file"), cwd=repo, check=True, capture_output=True)
+            subprocess.run(("git", "commit", "-m", "delivery"), cwd=repo, check=True, capture_output=True)
+            merged = subprocess.run(("git", "rev-parse", "HEAD"), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+            subprocess.run(("git", "update-ref", "refs/remotes/origin/main", merged), cwd=repo, check=True, capture_output=True)
+            payload["delivery"] = {"repoPath": str(repo), "targetBranch": "main", "protectedBranches": ["main"]}
+            payload["productIncrement"]["stories"][0]["mergeSha"] = merged
+            items["release"]["evidence"] = [f"merged-main:{merged}"]
+            (inbox / "release.json").write_text(json.dumps(items["release"]) + "\n")
+            valid = self.current_publish(root, payload)
+            self.assertEqual(valid.returncode, 0, valid.stderr)
+
+    def test_evidence_reuse_needs_observed_candidate_and_environment_identity(self):
+        candidate, environment = "a" * 40, "b" * 64
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "runtime" / "coordinator-inbox" / "demo").mkdir(parents=True)
+            (root / "runtime" / "coordinator-inbox" / "demo" / "audit.json").write_text(json.dumps({
+                "eventKey": "audit", "coordinatorGeneration": 1,
+                "evidence": [f"candidateSha:{candidate}", f"testEnvironmentFingerprint:{environment}"]}) + "\n")
+            payload = {"objective": "Ship", "phase": "executing", "nextReviewInSeconds": 3600,
+                       "productIncrement": {"id": "i", "stage": "building", "riskTier": "low",
+                       "demonstrationCriterion": "customer completes checkout",
+                       "stories": [{"id": "ship", "title": "Ship", "state": "ready", "deliverableClass": "product"}],
+                       "evidenceReuse": {"candidateSha": candidate, "testEnvironmentFingerprint": environment, "acceptanceRef": "audit"}}}
+            valid = self.current_publish(root, payload)
+            self.assertEqual(valid.returncode, 0, valid.stderr)
+            payload["productIncrement"]["evidenceReuse"]["testEnvironmentFingerprint"] = "c" * 64
+            invalid = self.current_publish(root, payload)
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn("must bind observed candidate SHA", invalid.stderr)
 
 
 if __name__ == "__main__":

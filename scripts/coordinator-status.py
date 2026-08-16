@@ -188,6 +188,44 @@ def project_commitments(project: str) -> list[dict[str, Any]]:
             if (c := object_or_none(common.read_json(path)))]
 
 
+def planning_only_authority_observed(project: str, ref: str | None) -> bool:
+    """A current null increment is only a direct-owner planning interval."""
+    if not ref:
+        return False
+    for gate in project_gates(project):
+        if (gate.get("gateId") == ref and gate.get("state") == "resolved"
+                and gate.get("authority") == "direct-owner"
+                and gate.get("externalEffect") == "product-direction-decision"
+                and str(gate.get("decisionKey") or "").startswith("planning-only:")):
+            return True
+    return False
+
+
+def reusable_evidence_identity(project: str, generation: int, ref: str,
+                                candidate_sha: str, environment_fingerprint: str) -> bool:
+    """Prove reuse against a durable inbox event or certificate, never schema text."""
+    candidate_markers = {f"candidateSha:{candidate_sha}", f"candidate-sha:{candidate_sha}"}
+    environment_markers = {f"testEnvironmentFingerprint:{environment_fingerprint}",
+                           f"environmentFingerprint:{environment_fingerprint}",
+                           f"inputFingerprint:{environment_fingerprint}"}
+    for path in sorted((INBOX / project).glob("*.json")):
+        item = object_or_none(common.read_json(path))
+        if not item or item.get("eventKey") != ref or exact_generation(item.get("coordinatorGeneration")) != generation:
+            continue
+        evidence = {str(value) for value in item.get("evidence") or []}
+        if candidate_markers & evidence and environment_markers & evidence:
+            return True
+    for path in sorted((RUNTIME / "completion-certificates" / project).glob("*.json")):
+        certificate = object_or_none(common.read_json(path))
+        if not certificate or (path.stem != ref and str(certificate.get("workUnit") or "") != ref):
+            continue
+        if (certificate.get("candidateSha") == candidate_sha
+                and str(certificate.get("testEnvironmentFingerprint") or certificate.get("environmentFingerprint")
+                        or certificate.get("inputFingerprint") or "") == environment_fingerprint):
+            return True
+    return False
+
+
 def inbox_pressure(project: str, generation: int | None, now: int) -> dict[str, Any]:
     pending = claimed = waking = 0
     for path in sorted((INBOX / project).glob("*.json")):
@@ -258,18 +296,15 @@ def resolved_gate_ids(project: str) -> list[str]:
     return out
 
 
-def standing_merge_units(project: str) -> list[str]:
-    """Work units whose merge was performed under a recorded standing authority.
+def standing_merge_receipts(project: str) -> list[dict[str, Any]]:
+    """Read the immutable pre-merge standing-authority receipts exactly."""
+    return [row for path in sorted((RUNTIME / "standing-merges" / project).glob("*.json"))
+            if (row := object_or_none(common.read_json(path)))]
 
-    The receipt is written before the merge, so its absence next to a delivered
-    story means the merge happened without either an owner gate or the standing
-    authority the owner granted."""
-    out: list[str] = []
-    for path in sorted((RUNTIME / "standing-merges" / project).glob("*.json")):
-        row = object_or_none(common.read_json(path))
-        if row and row.get("workUnit"):
-            out.append(str(row["workUnit"]))
-    return out
+
+def standing_merge_units(project: str) -> list[str]:
+    """Work units whose merge was performed under a recorded standing authority."""
+    return [str(row["workUnit"]) for row in standing_merge_receipts(project) if row.get("workUnit")]
 
 
 def latest_evidence(coordinator: str, project: str, generation: int | None) -> dict[str, Any] | None:
@@ -290,28 +325,53 @@ def latest_evidence(coordinator: str, project: str, generation: int | None) -> d
 
 # ------------------------------------------------------------------- synthesis
 
-def delivery_pressure(increment: dict[str, Any], synth: dict[str, Any]) -> dict[str, Any]:
-    """Expose product throughput separately from enabling work.
+def delivery_pressure(increment: dict[str, Any], synth: dict[str, Any],
+                      delivery: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Expose product throughput separately from unrelated active lanes.
 
-    Contract, acceptance, and housekeeping lanes are valid only while they do not
-    displace a dependency-ready product story.  This is a metric as well as a
-    contradiction input so reports describe the delivery pressure rather than
-    merely the number of busy lanes.
+    A live lease is product work only when it names a current product story and
+    its canonical worktree sits below the declared delivery repository or an
+    explicit delivery worktree root.  Everything else is active non-product work
+    and cannot make a ready product story look occupied.
     """
     stories = [s for s in increment.get("stories") or [] if isinstance(s, dict)]
     ready_product = [str(s.get("id")) for s in stories
                      if s.get("deliverableClass") == "product" and s.get("state") in {"ready", "executing"}]
-    active_units = {str(w.get("workUnit") or "") for w in synth.get("activeWorkers") or []}
-    product_units = {str(s.get("workUnit") or s.get("id")) for s in stories
-                     if s.get("deliverableClass") == "product"}
-    active_product = sorted(active_units & product_units)
-    non_product_units = {str(s.get("workUnit") or s.get("id")) for s in stories
-                         if s.get("deliverableClass") in NON_PRODUCT_DELIVERABLE_CLASSES}
-    active_non_product = sorted(active_units & non_product_units)
+    strict_lane_binding = any(bool(s.get("deliverableClassExplicit")) for s in stories)
+    classes = {str(s.get("workUnit") or s.get("id")): str(s.get("deliverableClass") or "product") for s in stories}
+    raw_roots = ([str((delivery or {}).get("repoPath"))] if (delivery or {}).get("repoPath") else []) + list((delivery or {}).get("worktreeRoots") or [])
+    roots = [common.canonical_path(path) for path in raw_roots]
+    def inside_roots(worktree: object) -> bool:
+        if not roots:
+            return True
+        candidate = common.canonical_path(str(worktree)) if worktree else None
+        if not candidate:
+            return False
+        try:
+            return any(Path(candidate).is_relative_to(Path(root)) for root in roots if root)
+        except AttributeError:  # pragma: no cover - Python <3.9 compatibility
+            return any(str(candidate).startswith(str(root).rstrip(os.sep) + os.sep) or candidate == root for root in roots if root)
+    active_product: list[str] = []
+    active_non_product: list[str] = []
+    outside_roots: list[str] = []
+    unknown_units: list[str] = []
+    for worker in synth.get("activeWorkers") or []:
+        unit = str(worker.get("workUnit") or "")
+        if not strict_lane_binding or (classes.get(unit) == "product" and inside_roots(worker.get("worktree"))):
+            active_product.append(unit)
+        else:
+            active_non_product.append(unit or str(worker.get("sessionId") or "unknown"))
+            if unit not in classes:
+                unknown_units.append(unit or str(worker.get("sessionId") or "unknown"))
+            elif not inside_roots(worker.get("worktree")):
+                outside_roots.append(unit)
     return {"readyProductStories": ready_product[:LIST_LIMIT], "readyProductCount": len(ready_product),
-            "activeProductWorkUnits": active_product[:LIST_LIMIT], "activeProductCount": len(active_product),
-            "activeNonProductWorkUnits": active_non_product[:LIST_LIMIT],
-            "activeNonProductCount": len(active_non_product),
+            "activeProductWorkUnits": sorted(set(active_product))[:LIST_LIMIT], "activeProductCount": len(set(active_product)),
+            "activeNonProductWorkUnits": sorted(set(active_non_product))[:LIST_LIMIT],
+            "activeNonProductCount": len(set(active_non_product)),
+            "unknownWorkUnits": sorted(set(unknown_units))[:LIST_LIMIT],
+            "outsideDeliveryRoots": sorted(set(outside_roots))[:LIST_LIMIT],
+            "strictLaneBinding": strict_lane_binding,
             "productWorkStarved": bool(ready_product and active_non_product and not active_product)}
 
 
@@ -347,7 +407,8 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
         "leaseExpiresAt": lease_expiry or None,
         "leaseStale": bool(reg and reg.get("state") != "hold" and lease_expiry and now > lease_expiry),
         "activeWorkers": [{"sessionId": l.get("sessionId"), "workUnit": l.get("workUnit"),
-                           "attempt": l.get("attempt"), "state": l.get("state")} for l in active_workers[:LIST_LIMIT]],
+                           "worktree": l.get("worktree"), "attempt": l.get("attempt"),
+                           "state": l.get("state")} for l in active_workers[:LIST_LIMIT]],
         "activeWorkerCount": len(active_workers), "activeWorkersTruncated": len(active_workers) > LIST_LIMIT,
         "terminalWorkers": [{"sessionId": l.get("sessionId"), "workUnit": l.get("workUnit"),
                              "state": l.get("state")} for l in terminal_workers[:LIST_LIMIT]],
@@ -386,7 +447,9 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
         "_overdueHandoffs": [str(l.get("workUnit") or l.get("sessionId")) for l in terminal_workers
                              if now - exact_int(l.get("lastHeartbeatAt"), now) > HANDOFF_GRACE_MS],
         "_waitUnits": {str(w.get("workUnit") or "") for w in waits if w.get("workUnit")},
+        "_observedWaitUnits": {str(w.get("workUnit") or "") for w in observed_waits if w.get("workUnit")},
         "_resolvedGates": [g for g in gates if g.get("state") == "resolved"],
+        "_standingMergeReceipts": standing_merge_receipts(project),
     }
 
 
@@ -431,12 +494,22 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
                    for story in increment.get("stories") or [] if isinstance(story, dict)}
     idle_ready = [sid for sid in idle_ready
                   if story_units.get(sid, sid) not in handed_off and sid not in handed_off]
-    if (idle_ready and not synth["activeWorkers"] and not synth["observedWaitCount"]
-            and not synth["workObserverCommitmentCount"]):
+    delivery = declared.get("delivery") or {}
+    pressure = delivery_pressure(increment, synth, delivery)
+    # Unrelated active lanes and observers do not occupy a product story. A ready
+    # product unit is idle until its own canonical lane (or terminal handoff) is
+    # visible, even when bookkeeping elsewhere remains busy.
+    ready_product_idle = [story_id for story_id in pressure["readyProductStories"]
+                          if story_units.get(story_id, story_id) not in handed_off]
+    if (idle_ready and not synth["observedWaitCount"] and not synth["workObserverCommitmentCount"]
+            and not synth["activeWorkers"]):
         issues.append("idle-ready-work:" + ",".join(idle_ready[:8]))
-    pressure = delivery_pressure(increment, synth)
+    if pressure["strictLaneBinding"] and ready_product_idle and not pressure["activeProductCount"]:
+        issues.append("idle-ready-work:" + ",".join(ready_product_idle[:8]))
     if pressure["productWorkStarved"]:
         issues.append("delivery-pressure-product-starved:" + ",".join(pressure["readyProductStories"][:4]))
+        issues.append("product-work-starved:" + ",".join(pressure["readyProductStories"][:4]))
+        issues.append("housekeeping-starves-product:" + ",".join(pressure["activeNonProductWorkUnits"][:4]))
     # A no-code PASS is a hand-off, not a destination: once a contract or focused
     # acceptance has passed and code is dependency-ready, a product lane must be
     # issued in that same coordinator cycle.
@@ -585,7 +658,6 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
         issues.append("story-accepted-without-evidence:" + ",".join(sorted(unproven)[:4]))
     if unobserved:
         issues.append("story-acceptance-ref-not-observed:" + ",".join(sorted(unobserved)[:4]))
-    delivery = declared.get("delivery") or {}
     issues.extend(verify_delivery(delivery, [s for s in stories if isinstance(s, dict)], stage))
     # A merge into a branch the coordinator itself declares protected must name the
     # owner authority that permitted it — a resolved gate id, or the standing-merge
@@ -608,7 +680,6 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
     # as passive backlog and can let a later unrelated candidate inherit authority.
     resolved_merge_gates = {str(g.get("gateId")): g for g in synth.get("_resolvedGates") or []
                             if g.get("externalEffect") == "merge-protected-branch"}
-    readback_actions = [a for a in actions if a.get("executor") == "external-observer"]
     for story in stories:
         if not isinstance(story, dict):
             continue
@@ -619,8 +690,9 @@ def contradictions(declared: dict[str, Any], synth: dict[str, Any],
         unit = str(story.get("workUnit") or story_id)
         if not story.get("mergeSha"):
             issues.append(f"resolved-merge-authority-without-same-cycle-merge:{story_id}")
-        elif (unit not in set(synth.get("_waitUnits") or [])
-              and not any(str(action.get("storyRef") or "") == story_id for action in readback_actions)):
+        elif unit not in set(synth.get("_observedWaitUnits") or []):
+            # A nextAction only promises to create an observer; a durable,
+            # observing/terminal external wait is the same-cycle evidence.
             issues.append(f"resolved-merge-authority-without-same-cycle-readback:{story_id}")
     # A pull request the coordinator opened is where work reaches customers, so
     # leaving it open is not neutral. Observed live: a green, conflict-free PR sat
@@ -851,8 +923,10 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
             fail(f"completed outcome evidence is not verification-grade: {ref}")
     increment = declared.get("productIncrement") or {}
     reuse = increment.get("evidenceReuse")
-    if reuse and str(reuse.get("acceptanceRef") or "") not in inbox_items:
-        fail("productIncrement.evidenceReuse.acceptanceRef is not observed in this generation")
+    if reuse and not reusable_evidence_identity(project, generation, str(reuse.get("acceptanceRef") or ""),
+                                                str(reuse.get("candidateSha") or ""),
+                                                str(reuse.get("testEnvironmentFingerprint") or "")):
+        fail("productIncrement.evidenceReuse must bind observed candidate SHA and environment/input fingerprint")
     completion = increment.get("completionEvidence") or {}
     if increment.get("stage") == "complete":
         bound: dict[str, dict[str, Any]] = {}
@@ -885,6 +959,32 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
                          and wait.get("state") in {"terminal", "deadline", "cleared"}]
         if len(release_waits) != 1:
             fail("releaseReadbackRef must retain one exact terminal external-wait provenance binding")
+        merged_stories = [story for story in increment.get("stories") or []
+                          if isinstance(story, dict) and story.get("mergeSha")]
+        if merged_stories:
+            delivery = declared.get("delivery")
+            if not delivery or not delivery.get("repoPath") or not delivery.get("targetBranch"):
+                fail("merge-authorized completion requires delivery.repoPath and delivery.targetBranch")
+            delivery_errors = verify_delivery(delivery, merged_stories, increment.get("stage") or "")
+            if delivery_errors:
+                fail("merge-authorized completion delivery verification failed: " + ",".join(delivery_errors))
+            resolved_gates = {str(gate.get("gateId")): gate for gate in project_gates(project)
+                              if gate.get("state") == "resolved" and gate.get("externalEffect") == "merge-protected-branch"}
+            receipts = standing_merge_receipts(project)
+            release_evidence = {str(value) for value in release.get("evidence") or []}
+            for story in merged_stories:
+                unit = str(story.get("workUnit") or story.get("id"))
+                authority_ref = str(story.get("mergeAuthorityRef") or "")
+                gate = resolved_gates.get(authority_ref)
+                standing = [receipt for receipt in receipts
+                            if str(receipt.get("workUnit") or "") == unit
+                            and authority_ref in {unit, str(receipt.get("workUnit") or "")}]
+                if gate is not None and str(gate.get("workUnit") or "") != unit:
+                    fail("merge-authorized completion gate authority must bind the exact workUnit")
+                if gate is None and not standing:
+                    fail("merge-authorized completion requires observed resolved gate or standing receipt for exact workUnit")
+                if f"merged-main:{story.get('mergeSha')}" not in release_evidence:
+                    fail("merge-authorized completion requires merged-main readback evidence for exact mergeSha")
         demonstration = bound["demonstrationRef"]
         if demonstration.get("kind") not in {"terminal-handoff", "observer-terminal"}:
             fail("demonstrationRef must reference a terminal real-workflow report")
@@ -944,6 +1044,8 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
         risk = story.get("riskContribution", "low")
         if risk not in RISK_TIERS:
             fail(f"productIncrement story riskContribution must be one of {sorted(RISK_TIERS)}")
+        deliverable_class_explicit = (bool(story.get("deliverableClassExplicit"))
+                                    if "deliverableClassExplicit" in story else "deliverableClass" in story)
         deliverable_class = story.get("deliverableClass", "product")
         if deliverable_class not in DELIVERABLE_CLASSES:
             fail(f"productIncrement story deliverableClass must be one of {sorted(DELIVERABLE_CLASSES)}")
@@ -972,7 +1074,8 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
         if merge_sha is not None and not COMMIT_SHA.fullmatch(merge_sha):
             fail("productIncrement story mergeSha must be a full 40-character commit sha")
         normalized.append({"id": story_id, "title": title, "state": state,
-                           "deliverableClass": deliverable_class, "dependsOn": dependencies,
+                           "deliverableClass": deliverable_class, "deliverableClassExplicit": deliverable_class_explicit,
+                           "dependsOn": dependencies,
                            "riskContribution": risk, "acceptanceRef": acceptance_ref,
                            "workUnit": work_unit, "mergeSha": merge_sha,
                            "mergeAuthorityRef": merge_authority_ref, "blockedByRef": blocked_by_ref,
@@ -1127,6 +1230,12 @@ def normalize_delivery(value: Any) -> dict[str, Any] | None:
         fail("delivery must be an object or null")
     repo_path = req_text(value, "repoPath")
     target_branch = optional_text(value, "targetBranch")
+    raw_worktree_roots = value.get("worktreeRoots") or []
+    if not isinstance(raw_worktree_roots, list) or len(raw_worktree_roots) > LIST_LIMIT:
+        fail("delivery.worktreeRoots must be a bounded list")
+    if any(not isinstance(root, str) or not root.strip() or len(root) > TEXT_LIMIT for root in raw_worktree_roots):
+        fail("delivery.worktreeRoots entries must be bounded non-empty paths")
+    worktree_roots = [common.canonical_path(root) for root in raw_worktree_roots]
     raw_protected = value.get("protectedBranches") or []
     if not isinstance(raw_protected, list) or len(raw_protected) > LIST_LIMIT:
         fail("delivery.protectedBranches must be a bounded list")
@@ -1149,7 +1258,8 @@ def normalize_delivery(value: Any) -> dict[str, Any] | None:
             fail("delivery.openPullRequests[].checkedAt must be a millisecond timestamp")
         normalized_prs.append({"ref": ref, "state": state, "checkedAt": checked_at})
     return {"repoPath": repo_path, "targetBranch": target_branch,
-            "protectedBranches": protected, "openPullRequests": normalized_prs}
+            "worktreeRoots": worktree_roots, "protectedBranches": protected,
+            "openPullRequests": normalized_prs}
 
 
 def git(repo: Path, *args: str) -> tuple[int, str]:
@@ -1213,6 +1323,7 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
     if confidence is not None and confidence not in CONFIDENCE_LEVELS:
         fail(f"confidence must be one of {sorted(CONFIDENCE_LEVELS)} or null")
     product_increment = normalize_increment(payload.get("productIncrement"))
+    planning_only_authority_ref = optional_text(payload, "planningOnlyAuthorityRef")
     github_sync = normalize_github_sync(payload.get("githubSync"), now)
     budget_extensions = normalize_budget_extensions(payload.get("correctionBudgetExtensions"), now)
     delivery = normalize_delivery(payload.get("delivery"))
@@ -1283,8 +1394,8 @@ def normalize_declared(payload: dict[str, Any], now: int) -> dict[str, Any]:
         "objective": objective, "demonstrableNow": demonstrable_now,
         "remainingOutcome": remaining_outcome, "etaRange": eta_range,
         "confidence": confidence, "realBlocker": real_blocker,
-        "productIncrement": product_increment, "githubSync": github_sync,
-        "correctionBudgetExtensions": budget_extensions, "delivery": delivery,
+        "productIncrement": product_increment, "planningOnlyAuthorityRef": planning_only_authority_ref,
+        "githubSync": github_sync, "correctionBudgetExtensions": budget_extensions, "delivery": delivery,
         "phase": phase, "currentFocus": current_focus,
         "completedOutcomes": normalized_completed, "nextActions": norm_actions,
         "childRefs": normalized_refs["childRefs"], "waitRefs": normalized_refs["waitRefs"],
@@ -1319,6 +1430,13 @@ def cmd_publish(args: argparse.Namespace) -> int:
         if not common.session_live(manifest) or common.role_of(manifest) != "coordinator":
             fail("coordinator session is not live")
         declared = normalize_declared(payload, now)
+        current_v3436 = "protocol-version::3.4.36" in set((manifest or {}).get("labels") or [])
+        if (current_v3436 and declared["productIncrement"] is None
+                and not planning_only_authority_observed(project, declared["planningOnlyAuthorityRef"])):
+            fail("v3.4.36 status requires a Product Increment or observed direct-owner planning-only authority")
+        if current_v3436 and declared["productIncrement"] and any(
+                not story.get("deliverableClassExplicit") for story in declared["productIncrement"].get("stories") or []):
+            fail("v3.4.36 Product Increment stories require deliverableClass")
         validate_refs(project, args.session, declared)
         if declared["phase"] == "waiting":
             commitments = {c.get("commitmentId"): c for c in project_commitments(project)
@@ -1356,6 +1474,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
         revision = prior_revision + 1
         record = {"schemaVersion": SCHEMA, "project": project, "coordinatorSessionId": args.session,
                   "generation": args.generation, "revision": revision, "declared": declared,
+                  **({"protocolVersion": "3.4.36"} if current_v3436 else {}),
                   "publishedAt": now, "updatedAt": now}
         if args.apply:
             common.atomic_json(STATUS / f"{project}.json", record)
@@ -1400,14 +1519,20 @@ def build_report(project: str, now: int) -> dict[str, Any]:
     verdict = classify(declared, synth, now, status_generation=status_generation,
                        complete_age_ms=complete_age)
     issues = list(verdict["issues"])
+    current_null_increment = bool(status and status.get("protocolVersion") == "3.4.36"
+                                  and (not declared or declared.get("productIncrement") is None)
+                                  and not planning_only_authority_observed(project, (declared or {}).get("planningOnlyAuthorityRef")))
+    if current_null_increment:
+        issues.append("v3.4.36-status-missing-product-outcome")
     if malformed:
         issues.append("stored-status-malformed")
     public_synth = {key: value for key, value in synth.items() if not key.startswith("_")}
-    public_synth["deliveryPressure"] = delivery_pressure((declared or {}).get("productIncrement") or {}, synth)
+    public_synth["deliveryPressure"] = delivery_pressure((declared or {}).get("productIncrement") or {}, synth,
+                                                         (declared or {}).get("delivery"))
     return {"project": project, "declared": declared,
             "revision": status.get("revision") if status else None,
             "publishedAt": status.get("publishedAt") if status else None,
-            "synthesized": public_synth, "classification": ("contradictory" if malformed else verdict["classification"]),
+            "synthesized": public_synth, "classification": ("contradictory" if malformed or current_null_increment else verdict["classification"]),
             "issues": issues}
 
 
