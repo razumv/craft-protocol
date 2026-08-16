@@ -327,35 +327,40 @@ def rotation_metric(record: dict[str, Any], manifest: dict[str, Any], now: int) 
 
 
 def discover_transfer_children(predecessor: str, project: str, existing: list[Any]) -> list[str]:
-    """Adopt every non-archived worker/auditor labelled to the predecessor.
+    """Adopt only exact live predecessor lanes; registry IDs are never trusted.
 
-    A lease can be stale or absent while the session is still working or awaiting
-    review.  Manifest identity is therefore discovery evidence; registry children
-    and leases remain supplemental.  IDs, not work-unit guesses, are unioned so a
-    successor cannot manufacture or duplicate an adopted lane.
+    ``activeChildren`` is persisted coordinator state, not an authority to revive
+    an archived, foreign, terminal, colliding, or duplicate lane.  Every retained
+    ID is re-derived from its manifest and must pass the same immutable binding as
+    a newly discovered child.  A stale/missing lease is deliberately irrelevant.
     """
-    children = {str(value) for value in existing if isinstance(value, str) and value}
-    seen_attempts: set[tuple[str, str, str]] = set()
+    manifests = common.all_manifests()
+    requested = {str(value) for value in existing if isinstance(value, str) and value}
+    candidates = {sid for sid, manifest in manifests.items()
+                  if (common.label_value(manifest, "parent-session::") or manifest.get("parentSessionId")) == predecessor}
+    # A persisted ID not rediscovered as a precisely predecessor-bound manifest is
+    # corruption, not something a successor may silently adopt or discard.
+    stale = requested - candidates
+    if stale:
+        raise SystemExit("transfer activeChildren contain missing-or-foreign lane")
+    seen_attempts: set[tuple[str, str]] = set()
     seen_cwds: dict[str, str] = {}
     predecessor_manifest = common.read_manifest(predecessor) or {}
     predecessor_cwd = common.coordinator_cwd(predecessor_manifest.get("workingDirectory") or predecessor_manifest.get("sdkCwd"))
-    for session_id, manifest in common.all_manifests().items():
-        parent = common.label_value(manifest, "parent-session::") or manifest.get("parentSessionId")
-        if parent != predecessor:
-            continue
-        # Only a non-archived running/needs-review worker or auditor is adoptable;
-        # terminal, cancelled, and foreign records are never made successor work.
+    adopted: list[str] = []
+    for session_id in sorted(candidates):
+        manifest = manifests[session_id]
         if not common.session_live(manifest) or common.role_of(manifest) not in {"worker", "auditor"}:
+            if session_id in requested:
+                raise SystemExit("transfer activeChildren contain inactive-or-archived lane")
             continue
-        labelled_project = common.label_value(manifest, "project::")
-        if labelled_project != project:
+        if common.label_value(manifest, "project::") != project:
             raise SystemExit("transfer child project binding mismatch")
         unit = common.label_value(manifest, "work-unit::")
         attempt = common.label_value(manifest, "attempt::")
-        role = common.role_of(manifest)
         if not unit or not attempt:
             raise SystemExit("transfer child immutable work-unit/attempt binding missing")
-        identity = (role, unit, attempt)
+        identity = (unit, attempt)
         if identity in seen_attempts:
             raise SystemExit("duplicate live transfer child work-unit/attempt")
         seen_attempts.add(identity)
@@ -363,9 +368,9 @@ def discover_transfer_children(predecessor: str, project: str, existing: list[An
         if cwd:
             if cwd == predecessor_cwd or cwd in seen_cwds:
                 raise SystemExit("transfer child shared worktree refusal")
-            seen_cwds[cwd] = str(session_id)
-        children.add(str(session_id))
-    return sorted(children)
+            seen_cwds[cwd] = session_id
+        adopted.append(session_id)
+    return adopted
 
 
 def cmd_begin_transfer(args: argparse.Namespace) -> int:

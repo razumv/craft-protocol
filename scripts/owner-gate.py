@@ -173,12 +173,28 @@ def blockers(project: str, work_unit: str | None, action: str) -> list[dict[str,
     return blocked
 
 
+def direct_owner_effect_gate(project: str, work_unit: str | None, action: str, effect: str) -> bool:
+    """A resolved gate is direct authority only for its exact effect and lane."""
+    for gate in all_gates(project):
+        if (gate.get("state") != "resolved" or gate.get("authority") != "direct-owner"
+                or gate.get("externalEffect") != effect):
+            continue
+        scope = gate.get("blockingScope")
+        if scope == "project":
+            return True
+        if scope in {action, "work-unit"} and gate.get("workUnit") == work_unit:
+            return True
+    return False
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     rows = blockers(args.project, args.work_unit, args.action)
     receipt_refusal: list[str] = []
-    # When a coordinator presents a plan receipt at an execution boundary, verify
-    # its durable byte/scope/effect binding here rather than trusting prompt text.
-    if args.plan_receipt or args.plan_file or args.plan_scope or args.plan_effect:
+    plan_supplied = bool(args.plan_receipt or args.plan_file or args.plan_scope or args.plan_effect)
+    # A plan can prove that the owner accepted exact reversible plan bytes.  It is
+    # never itself authority for an external effect; that remains an exact direct
+    # gate (or the separately checked standing-authority command for a merge).
+    if plan_supplied:
         if not (args.plan_receipt and args.plan_file and args.plan_scope and args.plan_effect):
             receipt_refusal = ["plan-receipt-binding-incomplete"]
         else:
@@ -189,8 +205,20 @@ def cmd_check(args: argparse.Namespace) -> int:
                                                args.plan_file, args.plan_effect)
             except SystemExit:
                 receipt_refusal = ["plan-receipt-invalid"]
-    result = {"allowed": not rows and not receipt_refusal, "project": args.project, "workUnit": args.work_unit,
-              "action": args.action, "blockers": rows, "planReceiptRefusals": receipt_refusal}
+    authority_refusal: list[str] = []
+    effect = args.external_effect
+    if args.authority_source == "plan-derived" and not plan_supplied:
+        authority_refusal.append("plan-derived-dangerous-effect-without-plan-receipt")
+    if effect:
+        if effect not in EXTERNAL_EFFECTS:
+            authority_refusal.append("external-effect-invalid")
+        elif not direct_owner_effect_gate(args.project, args.work_unit, args.action, effect):
+            authority_refusal.append("exact-direct-owner-effect-gate-required")
+    result = {"allowed": not rows and not receipt_refusal and not authority_refusal,
+              "project": args.project, "workUnit": args.work_unit, "action": args.action,
+              "externalEffect": effect, "authoritySource": args.authority_source,
+              "blockers": rows, "planReceiptRefusals": receipt_refusal,
+              "authorityRefusals": authority_refusal}
     print(json.dumps(result, ensure_ascii=False, indent=2)); return 0 if result["allowed"] else 4
 
 
@@ -209,10 +237,10 @@ def cmd_inbox(args: argparse.Namespace) -> int:
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__); sub = p.add_subparsers(dest="command", required=True)
-    c = sub.add_parser("create"); c.add_argument("--project", required=True); c.add_argument("--gate", required=True); c.add_argument("--work-unit"); c.add_argument("--question", required=True); c.add_argument("--choices", required=True); c.add_argument("--owner-only-category", required=True, choices=OWNER_ONLY_CATEGORIES); c.add_argument("--external-effect", required=True); c.add_argument("--scope", default="work-unit", choices=["project", "work-unit", "spawn", "implement", "merge", "close"]); c.add_argument("--safe-default", default="BLOCK"); c.add_argument("--evidence"); c.add_argument("--decision-key", help="stable exact owner preference identity"); c.set_defaults(func=cmd_create)
+    c = sub.add_parser("create"); c.add_argument("--project", required=True); c.add_argument("--gate", required=True); c.add_argument("--work-unit"); c.add_argument("--question", required=True); c.add_argument("--choices", required=True); c.add_argument("--owner-only-category", required=True, choices=OWNER_ONLY_CATEGORIES); c.add_argument("--external-effect", required=True); c.add_argument("--scope", default="work-unit", choices=["project", "work-unit", "spawn", "implement", "merge", "close", "deploy", "credential", "spend", "irreversible"]); c.add_argument("--safe-default", default="BLOCK"); c.add_argument("--evidence"); c.add_argument("--decision-key", help="stable exact owner preference identity"); c.set_defaults(func=cmd_create)
     h = sub.add_parser("hold"); h.add_argument("--project", required=True); h.add_argument("--reason", required=True); h.add_argument("--evidence"); h.set_defaults(func=cmd_hold)
     r = sub.add_parser("resolve"); r.add_argument("--project", required=True); r.add_argument("--gate", required=True); r.add_argument("--choice", required=True); r.add_argument("--authority", required=True); r.add_argument("--evidence", required=True); r.set_defaults(func=cmd_resolve)
-    k = sub.add_parser("check"); k.add_argument("--project", required=True); k.add_argument("--work-unit"); k.add_argument("--action", required=True, choices=["spawn", "implement", "merge", "close"]); k.add_argument("--plan-receipt"); k.add_argument("--plan-file"); k.add_argument("--plan-scope"); k.add_argument("--plan-effect", action="append", default=[]); k.set_defaults(func=cmd_check)
+    k = sub.add_parser("check"); k.add_argument("--project", required=True); k.add_argument("--work-unit"); k.add_argument("--action", required=True, choices=["spawn", "implement", "merge", "close", "deploy", "credential", "spend", "irreversible"]); k.add_argument("--external-effect", choices=EXTERNAL_EFFECTS); k.add_argument("--authority-source", choices=["direct-owner", "plan-derived", "standing-authority"], default="direct-owner"); k.add_argument("--plan-receipt"); k.add_argument("--plan-file"); k.add_argument("--plan-scope"); k.add_argument("--plan-effect", action="append", default=[]); k.set_defaults(func=cmd_check)
     l = sub.add_parser("list"); l.add_argument("--project"); l.set_defaults(func=cmd_list)
     i = sub.add_parser("inbox"); i.add_argument("--project"); i.set_defaults(func=cmd_inbox)
     return p

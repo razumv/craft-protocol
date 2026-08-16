@@ -173,6 +173,28 @@ class ReliabilityToolsTest(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("worktree already", proc.stderr)
 
+    def test_fixed_clock_classification_has_inclusive_cutoffs_without_one_second_race(self):
+        # Healthy includes exactly HEALTHY_SECONDS; suspect includes exactly
+        # STALLED_SECONDS; stalled begins one millisecond after that boundary.
+        self.manifest("boundary")
+        self.env["CRAFT_TEST_NOW_MS"] = "100000"
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
+        path = self.runtime / "worker-leases/boundary.json"
+        lease = json.loads(path.read_text())
+        lease["lastHeartbeatAt"] = lease["lastEvidenceAt"] = 99000
+        path.write_text(json.dumps(lease))
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
+        self.assertEqual(json.loads(path.read_text())["state"], "running")
+        self.env["CRAFT_TEST_NOW_MS"] = "100001"
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
+        self.assertEqual(json.loads(path.read_text())["state"], "suspect")
+        self.env["CRAFT_TEST_NOW_MS"] = "101000"
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
+        self.assertEqual(json.loads(path.read_text())["state"], "suspect")
+        self.env["CRAFT_TEST_NOW_MS"] = "101001"
+        self.exec_tool("worker-lease.py", "reconcile", "--apply")
+        self.assertEqual(json.loads(path.read_text())["state"], "stalled")
+
     def test_observable_job_writes_exit_receipt(self):
         self.manifest("job")
         self.exec_tool("worker-lease.py", "reconcile", "--apply")
@@ -260,6 +282,7 @@ class ReliabilityToolsTest(unittest.TestCase):
             self.assertGreater(lease["childCpuSeconds"], 530)
         finally:
             proc.kill()
+            proc.wait(timeout=5)
 
     def test_a_dead_lane_is_reapable_even_though_its_status_never_turned_terminal(self):
         # v3.4.34: a lane that dies never reaches needs-review — it keeps whatever

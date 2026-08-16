@@ -139,6 +139,10 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         self.manifest("coord","coordinator")
 
     def tearDown(self): self.tmp.cleanup()
+    def reset_fixture(self):
+        # Subtests need independent runtime state.  unittest calls tearDown once,
+        # so release the previous TemporaryDirectory before rebuilding it here.
+        self.tmp.cleanup(); self.setUp()
     def put(self,path,value): path.parent.mkdir(parents=True,exist_ok=True); path.write_text(json.dumps(value)+"\n")
     def fake(self): return json.loads(self.fake_state.read_text())
     def mutate_fake(self,**changes): row=self.fake(); row.update(changes); self.put(self.fake_state,row)
@@ -338,7 +342,7 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
                                 "state": "alreadyExited"}]),
         ):
             with self.subTest(state=state):
-                self.setUp()
+                self.reset_fixture()
                 self.harness_report({"healthy": False, "rows": rows,
                                      "violations": ["stale exited controller harness receipt requires cleanup"]},
                                     exit_code=2)
@@ -360,7 +364,7 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
                 {"sessionId": "controller", "sessionRole": "recovery-controller", "state": "active"}]),
         ):
             with self.subTest(case=label):
-                self.setUp()
+                self.reset_fixture()
                 self.harness_report({"healthy": False, "rows": rows, "violations": ["x"]}, exit_code=2)
                 self.incident(kind="coordinator-session-error")
                 cp, _ = self.apply(ok=False)

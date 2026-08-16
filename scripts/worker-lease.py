@@ -40,7 +40,8 @@ ROLES = {"worker", "auditor"}
 
 
 def now_ms() -> int:
-    return int(time.time() * 1000)
+    """Use the shared injectable clock; tests never depend on a wall-clock second."""
+    return COMMON.now_ms()
 
 
 def ensure_dirs() -> None:
@@ -564,6 +565,10 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
 def cmd_reconcile(args: argparse.Namespace) -> int:
     with locked():
+        # Classify an entire locked reconciliation against one instant.  Sampling
+        # once prevents lanes either side of a one-second wall-clock rollover from
+        # receiving contradictory healthy/suspect/stalled results.
+        now = now_ms()
         manifests = all_manifests()
         active_by_cwd: dict[str, list[str]] = {}
         for candidate_id, candidate in manifests.items():
@@ -601,7 +606,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
                 actions.append({"action": "admission-refused", "sessionId": sid, "reason": reason})
                 if args.apply: quarantine_admission_failure(sid, reason, manifest)
                 continue
-            new = classify(lease, manifest, now_ms())
+            new = classify(lease, manifest, now)
             lease["state"] = new
             lease["parentSessionId"] = (registry_adopted_parent(sid) or label_value(manifest, "parent-session::")
                                         or manifest.get("parentSessionId"))
@@ -625,7 +630,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
                 if args.apply: quarantine_admission_failure(sid, reason, manifest)
                 continue
             value = lease_from_manifest(manifest)
-            value["state"] = classify(value, manifest, now_ms())
+            value["state"] = classify(value, manifest, now)
             sharing = active_by_cwd.get(value.get("worktree"), []) if value.get("worktree") else []
             value["cwdCollisionSessions"] = sharing if len(sharing) > 1 else []
             actions.append({"action": "create", "sessionId": sid, "state": value["state"], "reason": "missing-live-lease"})

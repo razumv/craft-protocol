@@ -18,6 +18,7 @@ authority. This tool never mutates session JSONL, leases, the registry, or gates
 """
 from __future__ import annotations
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -307,16 +308,30 @@ def lane_sources(session_id: str) -> list[str]:
 
 
 def certificate_ids(project: str) -> list[str]:
-    """Completion certificates are the other admissible proof of acceptance.
-
-    They are keyed by work unit rather than by story, so a story binds to one by
-    naming either the certificate file's stem or the work unit it certifies."""
+    """Legacy admissible certificate labels, retained for v3.4.35/v3.4.36 reads."""
     out: list[str] = []
     for path in sorted((RUNTIME / "completion-certificates" / project).glob("*.json")):
         out.append(path.stem)
         row = object_or_none(common.read_json(path))
         if row and row.get("workUnit"):
             out.append(str(row["workUnit"]))
+    return out
+
+
+def exact_completion_certificates(project: str) -> dict[str, dict[str, Any]]:
+    """Index immutable, structurally valid certificates by file identity only."""
+    spec = importlib.util.spec_from_file_location("completion_certificate", HERE / "completion-certificate.py")
+    tool = importlib.util.module_from_spec(spec); spec.loader.exec_module(tool)  # type: ignore
+    out: dict[str, dict[str, Any]] = {}
+    for path in sorted((RUNTIME / "completion-certificates" / project).glob("*.json")):
+        row = object_or_none(common.read_json(path))
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        if not row or row.get("project") != project or tool.validate(row):
+            continue
+        out[path.stem] = {"certificate": row, "fingerprint": hashlib.sha256(raw).hexdigest()}
     return out
 
 
@@ -969,7 +984,8 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
     strict_v3437 = "protocol-version::3.4.37" in set((common.read_manifest(coordinator) or {}).get("labels") or [])
     if increment.get("stage") == "complete":
         bound: dict[str, dict[str, Any]] = {}
-        for key, binding in completion.items():
+        for key in ("integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"):
+            binding = completion[key]
             event_key = str(binding.get("eventKey") or "")
             item = inbox_items.get(event_key)
             if not item:
@@ -1012,6 +1028,27 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
             fail("releaseReadbackRef must retain one exact terminal external-wait provenance binding")
         merged_stories = [story for story in increment.get("stories") or []
                           if isinstance(story, dict) and story.get("mergeSha")]
+        if strict_v3437:
+            certificate_ref = completion.get("certificateRef")
+            if not isinstance(certificate_ref, dict):
+                fail("v3.4.37 complete Product Increment requires consumed completion certificate")
+            certificate_entry = exact_completion_certificates(project).get(str(certificate_ref.get("certificateId") or ""))
+            if not certificate_entry or certificate_entry.get("fingerprint") != certificate_ref.get("fingerprint"):
+                fail("completion certificate is missing, invalid, or immutable binding mismatched")
+            certificate = certificate_entry["certificate"]
+            if (certificate.get("workUnit") != candidate_unit or certificate.get("candidateSha") != candidate_sha
+                    or certificate.get("auditedSha") != candidate_sha or certificate.get("auditVerdict") != "PASS"
+                    or certificate.get("unresolvedGates") not in ([], None)
+                    or certificate.get("mergedMainAllSuccess") is not True
+                    or not certificate.get("mergedMainRunIds")):
+                fail("completion certificate must bind exact candidate PASS workUnit and merged-main readback")
+            if len(merged_stories) != 1:
+                fail("v3.4.37 completion certificate consumes exactly one merged workUnit")
+            story = merged_stories[0]
+            if (str(story.get("workUnit") or story.get("id")) != candidate_unit
+                    or story.get("acceptanceRef") != bound["acceptanceRef"].get("eventKey")
+                    or certificate.get("mergeSha") != story.get("mergeSha")):
+                fail("completion certificate, acceptance event, and merge must bind one exact workUnit")
         if merged_stories:
             delivery = declared.get("delivery")
             if not delivery or not delivery.get("repoPath") or not delivery.get("targetBranch"):
@@ -1029,7 +1066,8 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
                 gate = resolved_gates.get(authority_ref)
                 standing = [receipt for receipt in receipts
                             if str(receipt.get("workUnit") or "") == unit
-                            and authority_ref in {unit, str(receipt.get("workUnit") or "")}]
+                            and authority_ref in {unit, str(receipt.get("workUnit") or "")}
+                            and (not strict_v3437 or receipt.get("candidateSha") == candidate_sha)]
                 if gate is not None and str(gate.get("workUnit") or "") != unit:
                     fail("merge-authorized completion gate authority must bind the exact workUnit")
                 if gate is None and not standing:
@@ -1180,11 +1218,12 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
         evidence_reuse = {"candidateSha": candidate_sha, "testEnvironmentFingerprint": environment_fingerprint,
                           "acceptanceRef": acceptance_ref}
     raw_completion = value.get("completionEvidence")
-    completion: dict[str, dict[str, Any]] | None = None
+    completion: dict[str, Any] | None = None
     if raw_completion is not None:
-        if not isinstance(raw_completion, dict) or set(raw_completion) != {
-                "integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"}:
-            fail("productIncrement.completionEvidence must contain exactly four evidence bindings")
+        event_keys = {"integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"}
+        keys = set(raw_completion) if isinstance(raw_completion, dict) else set()
+        if keys != event_keys and keys != event_keys | {"certificateRef"}:
+            fail("productIncrement.completionEvidence must contain four event bindings and optional certificateRef")
         completion = {}
         for key in ("integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"):
             binding = raw_completion.get(key)
@@ -1201,8 +1240,17 @@ def normalize_increment(value: Any) -> dict[str, Any] | None:
             if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
                 fail(f"productIncrement.completionEvidence.{key}.revision must be a positive integer")
             completion[key] = {"eventKey": event_key, "revision": revision, "fingerprint": fingerprint}
-        if len({binding["eventKey"] for binding in completion.values()}) != 4:
+        if len({completion[key]["eventKey"] for key in ("integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef")}) != 4:
             fail("productIncrement.completionEvidence event keys must be distinct")
+        if "certificateRef" in raw_completion:
+            binding = raw_completion["certificateRef"]
+            if not isinstance(binding, dict) or set(binding) != {"certificateId", "fingerprint"}:
+                fail("productIncrement.completionEvidence.certificateRef must bind certificateId and fingerprint")
+            certificate_id, fingerprint = binding.get("certificateId"), binding.get("fingerprint")
+            if (not isinstance(certificate_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", certificate_id)
+                    or not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint)):
+                fail("productIncrement.completionEvidence.certificateRef is malformed")
+            completion["certificateRef"] = {"certificateId": certificate_id, "fingerprint": fingerprint}
     if stage == "complete":
         if any(story["state"] != "accepted" for story in normalized):
             fail("complete Product Increment requires every story to be accepted")

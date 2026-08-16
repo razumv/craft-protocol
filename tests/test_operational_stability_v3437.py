@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Adversarial v3.4.37 operational-stability regressions (GVE/Client/Server/Magic/Twenty)."""
 from __future__ import annotations
+import hashlib
 import importlib.util
 import json
 import os
@@ -70,6 +71,14 @@ class OwnerPlanReceiptTests(Base):
         self.assertIn("dangerous", data["error"])
         self.cli("owner-plan-receipt.py", "revoke", "--project", "magicmarkets", "--receipt-id", "magic-plan-1", "--owner-session", "owner", "--reason", "scope changed")
 
+    def test_plan_derived_dangerous_effect_needs_receipt_and_exact_direct_gate(self):
+        denied, result = self.cli("owner-gate.py", "check", "--project", "magicmarkets", "--work-unit", "ship", "--action", "deploy", "--external-effect", "deploy", "--authority-source", "plan-derived", ok=False)
+        self.assertIn("plan-derived-dangerous-effect-without-plan-receipt", result["authorityRefusals"])
+        self.cli("owner-gate.py", "create", "--project", "magicmarkets", "--gate", "deploy-ship", "--work-unit", "ship", "--question", "Deploy exactly ship?", "--choices", "YES", "--owner-only-category", "high-blast-radius-public-release", "--external-effect", "deploy", "--scope", "deploy")
+        self.cli("owner-gate.py", "resolve", "--project", "magicmarkets", "--gate", "deploy-ship", "--choice", "YES", "--authority", "direct-owner", "--evidence", "owner message")
+        _, allowed = self.cli("owner-gate.py", "check", "--project", "magicmarkets", "--work-unit", "ship", "--action", "deploy", "--external-effect", "deploy")
+        self.assertTrue(allowed["allowed"])
+
 
 class RotationTests(unittest.TestCase):
     @classmethod
@@ -113,6 +122,18 @@ class TransferAndEvidenceTests(Base):
         self.assertEqual(out["record"]["activeChildren"], ["gve-auditor", "gve-worker"])
         self.assertEqual(out["record"]["transferDiscovery"]["predecessorSessionId"], "gve-old")
 
+    def test_transfer_refuses_preexisting_archived_or_foreign_child(self):
+        self.policy()
+        labels = ["coordinators", "project::gve", "protocol-version::3.4.37"]
+        for sid in ("gve-old", "gve-new"):
+            self.manifest(sid, "coordinator", labels=labels, name="[gve] Coordinator v3.4.37", projectId="native-gve", workingDirectory=str(self.root), llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="allow-all")
+        self.manifest("stale", "worker", archived=True, labels=["parent-session::gve-old", "project::gve", "work-unit::ship", "attempt::1"])
+        self.registry()
+        row = json.loads((self.runtime / "coordinators" / "gve.json").read_text()); row["activeChildren"] = ["stale"]
+        self.put(self.runtime / "coordinators" / "gve.json", row)
+        proc, _ = self.cli("coordinator-registry.py", "accept-transfer", "--project", "gve", "--session", "gve-new", "--expected-generation", "4", ok=False)
+        self.assertIn("inactive-or-archived", proc.stderr)
+
     def init_delivery_repo(self):
         repo = self.root / "repo"; repo.mkdir()
         for cmd in (("git", "init"), ("git", "config", "user.email", "test@example.invalid"), ("git", "config", "user.name", "Test")):
@@ -138,14 +159,23 @@ class TransferAndEvidenceTests(Base):
         self.put(inbox / "demo.json", item("demo", "terminal-handoff", [criterion], sender="worker", workUnit="ship"))
         self.put(self.runtime / "external-waits" / "readback.json", {"waitId": "readback", "project": "client", "coordinatorSessionId": "coord", "watcherSessionId": "watch", "workUnit": "ship", "state": "terminal"})
         self.put(self.runtime / "owner-gates" / "client" / "merge.json", {"gateId": "merge", "state": "resolved", "externalEffect": "merge-protected-branch", "workUnit": "ship"})
+        certificate_path = self.runtime / "completion-certificates" / "client" / "ship-candidate.json"
+        self.put(certificate_path, {"project": "client", "workUnit": "ship", "candidateSha": candidate, "auditedSha": candidate,
+                                    "auditorSessionId": "audit", "auditVerdict": "PASS", "requiredCiRunIds": ["ci-1"],
+                                    "requiredCiAllSuccess": True, "mergeSha": merge, "headUnchanged": True,
+                                    "mergedMainRunIds": ["readback-1"], "mergedMainAllSuccess": True, "unresolvedGates": []})
+        certificate_fingerprint = hashlib.sha256(certificate_path.read_bytes()).hexdigest()
         bind = lambda key: {"eventKey": key, "revision": 1, "fingerprint": fingerprint_chars[key] * 64}
         payload = {"objective": "Ship", "phase": "complete", "nextActions": [], "completedOutcomes": [{"summary": "done", "evidenceRef": "candidate"}],
           "delivery": {"repoPath": str(repo), "targetBranch": "main", "protectedBranches": ["main"]},
           "productIncrement": {"id": "client-release", "stage": "complete", "riskTier": "medium", "demonstrationCriterion": criterion,
             "stories": [{"id": "ship", "title": "Ship", "state": "accepted", "deliverableClass": "product", "workUnit": "ship", "acceptanceRef": "accept", "mergeSha": merge, "mergeAuthorityRef": "merge"}],
-            "completionEvidence": {"integratedCandidateRef": bind("candidate"), "acceptanceRef": bind("accept"), "releaseReadbackRef": bind("release"), "demonstrationRef": bind("demo")}}}
+            "completionEvidence": {"integratedCandidateRef": bind("candidate"), "acceptanceRef": bind("accept"), "releaseReadbackRef": bind("release"), "demonstrationRef": bind("demo"), "certificateRef": {"certificateId": "ship-candidate", "fingerprint": certificate_fingerprint}}}}
         _, published = self.cli("coordinator-status.py", "publish", "--project", "client", "--session", "coord", "--generation", "1", "--json", json.dumps(payload), "--apply")
         self.assertEqual(published["record"]["protocolVersion"], "3.4.37")
+        missing = json.loads(json.dumps(payload)); missing["productIncrement"]["completionEvidence"].pop("certificateRef")
+        proc, _ = self.cli("coordinator-status.py", "publish", "--project", "client", "--session", "coord", "--generation", "1", "--json", json.dumps(missing), "--apply", ok=False)
+        self.assertIn("requires consumed completion certificate", proc.stderr)
         bad = json.loads(json.dumps(payload)); self.put(inbox / "accept.json", item("accept", "audit-verdict", ["candidateSha:" + "b" * 40, "verdict:PASS"], senderRole="auditor", workUnit="ship"))
         proc, _ = self.cli("coordinator-status.py", "publish", "--project", "client", "--session", "coord", "--generation", "1", "--json", json.dumps(bad), "--apply", ok=False)
         self.assertIn("exact candidateSha", proc.stderr)
@@ -171,15 +201,29 @@ class ReleaseClosureTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls): cls.release = load("release-closure")
 
-    def test_v3436_missing_authenticated_github_release_can_never_close_as_latest(self):
-        old = os.environ.pop("CRAFT_GH_CLI", None)
+    def test_v3436_local_refs_or_fake_cli_environment_can_never_close_as_latest(self):
+        old = os.environ.get("CRAFT_GH_CLI")
+        os.environ["CRAFT_GH_CLI"] = "/tmp/attacker-controlled-gh"
         try:
             result = self.release.verify(ROOT, "3.4.36")
         finally:
-            if old is not None: os.environ["CRAFT_GH_CLI"] = old
+            if old is None: os.environ.pop("CRAFT_GH_CLI", None)
+            else: os.environ["CRAFT_GH_CLI"] = old
         self.assertFalse(result["closed"])
-        self.assertIn("github-auth-cli-unavailable", result["errors"])
-        self.assertIn("github-release-uncheckable-without-auth", result["errors"])
+        self.assertIn("github-auth-token-file-unavailable", result["errors"])
+        self.assertIsNone(result["remoteMainSha"])
+
+    def test_release_closure_rejects_noncanonical_origin_and_unsafe_token_file(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); repo = root / "repo"; repo.mkdir()
+            for cmd in (("git", "init"), ("git", "remote", "add", "origin", "https://example.invalid/fake/repo.git")):
+                subprocess.run(cmd, cwd=repo, check=True, capture_output=True)
+            token = root / "token"; token.write_text("not-a-real-token")
+            token.chmod(0o644)
+            result = self.release.verify(repo, "3.4.37", str(token))
+        self.assertFalse(result["closed"])
+        self.assertIn("github-origin-identity-unreadable", result["errors"])
+        self.assertIn("github-auth-token-file-unavailable", result["errors"])
 
 
 if __name__ == "__main__": unittest.main()
