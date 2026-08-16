@@ -13,6 +13,8 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("orch_common", HERE / "orchestration-common.py")
 common = importlib.util.module_from_spec(spec); spec.loader.exec_module(common)  # type: ignore
+registry_spec = importlib.util.spec_from_file_location("coordinator_registry", HERE / "coordinator-registry.py")
+coordinator_registry = importlib.util.module_from_spec(registry_spec); registry_spec.loader.exec_module(coordinator_registry)  # type: ignore
 RUNTIME = common.RUNTIME
 INCIDENTS = RUNTIME / "recovery-incidents"
 EXTERNAL_WAITS = RUNTIME / "external-waits"
@@ -308,19 +310,18 @@ def collect_observations():
         reasons: list[str] = []
         if record.get("rotationAuthority") == "direct-owner":
             reasons.append("direct-owner")
-        max_messages = int(os.environ.get("CRAFT_COORDINATOR_MAX_MESSAGES", "500"))
-        max_tokens = int(os.environ.get("CRAFT_COORDINATOR_MAX_TOKENS", "200000"))
-        messages = (manifest or {}).get("messageCount")
-        tokens = ((manifest or {}).get("tokenUsage") or {}).get("totalTokens") if isinstance((manifest or {}).get("tokenUsage"), dict) else None
-        if isinstance(messages, int) and messages >= max_messages:
-            reasons.append("message-threshold")
-        if isinstance(tokens, int) and tokens >= max_tokens:
-            reasons.append("token-threshold")
+        metric = coordinator_registry.rotation_metric(record, manifest or {}, now)
+        # A fresh successor receives its own grace window.  It cannot inherit a
+        # predecessor's raw count; conversely a request-buffer/context error is a
+        # concrete failure and bypasses grace/hysteresis rather than being hidden.
+        reasons.extend(metric["reasons"])
         if reasons and record.get("state") in {"authoritative", "rotating"}:
             kind = "direct-owner-rotation" if "direct-owner" in reasons else "coordinator-complexity-threshold"
-            stable = {"generation": record.get("generation"), "reasons": reasons}
+            stable = {"generation": record.get("generation"), "reasons": reasons,
+                      "metricSessionId": metric.get("sessionId"), "graceUntil": metric.get("graceUntil")}
             out.append(observation(kind, "high", project, sid,
-                {**stable, "messageCount": messages, "tokenCount": tokens},
+                {**stable, "messageCount": metric.get("messages"), "tokenCount": metric.get("tokens"),
+                 "inGrace": metric.get("inGrace"), "contextError": metric.get("contextError")},
                 fingerprint_evidence=stable, coordinatorGeneration=record.get("generation")))
         sigterms = unresolved_pi_sigterms(sid, record.get("lastHeartbeatAt") or record.get("claimedAt") or 0)
         if sigterms:

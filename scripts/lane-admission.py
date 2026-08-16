@@ -1,13 +1,13 @@
 #!/opt/homebrew/bin/python3
 # SPDX-License-Identifier: Apache-2.0
-"""Strict two-phase admission for v3.4.35/v3.4.36 worker/auditor lanes; legacy records pass unchanged."""
+"""Strict two-phase admission for v3.4.35/v3.4.36/v3.4.37 worker/auditor lanes; legacy records pass unchanged."""
 from __future__ import annotations
 import argparse, hashlib, importlib.util, json, re
 from pathlib import Path
 import os
 HERE=Path(__file__).resolve().parent
 spec=importlib.util.spec_from_file_location('common',HERE/'orchestration-common.py');common=importlib.util.module_from_spec(spec);spec.loader.exec_module(common) # type: ignore
-ROOT=common.RUNTIME/'lane-admissions'; LOCK=common.RUNTIME/'lane-admissions.lock'; ROLES={'worker','auditor'}; VERSIONS={'3.4.35','3.4.36'}
+ROOT=common.RUNTIME/'lane-admissions'; LOCK=common.RUNTIME/'lane-admissions.lock'; ROLES={'worker','auditor'}; VERSIONS={'3.4.35','3.4.36','3.4.37'}
 def clean(x):
  x=re.sub(r'[^A-Za-z0-9._-]+','-',x.strip()).strip('-')
  if not x: raise SystemExit('invalid identifier')
@@ -43,6 +43,17 @@ def collisions(identity,session=None):
  for p in (common.RUNTIME/'worker-leases').glob('*.json'):
   x=common.read_json(p) or {}
   if p.stem!=session and x.get('state')!='handoff-ready' and canon(x.get('worktree'))==worktree: raise SystemExit('live lease worktree collision')
+ # A transferred child can have no lease at all.  Its live/needs-review manifest
+ # is still a concrete executor, so a new same-role/work-unit reservation would
+ # duplicate work after a rotation merely because runtime bookkeeping was stale.
+ registry=common.read_json(common.RUNTIME/'coordinators'/f"{identity['project']}.json") or {}
+ parents={identity['parentSessionId']}
+ if registry.get('coordinatorSessionId')==identity['parentSessionId'] and registry.get('predecessorSessionId'): parents.add(str(registry['predecessorSessionId']))
+ for sid,m in common.all_manifests().items():
+  if sid==session or not common.session_live(m) or role(m)!=identity['role']: continue
+  parent=lab(m,'parent-session::') or m.get('parentSessionId')
+  if parent in parents and lab(m,'work-unit::')==identity['workUnit']:
+   raise SystemExit('live manifest work-unit collision')
 def cmd_reserve(a):
  parent=live(a.parent); project=lab(parent,'project::')
  if not project: raise SystemExit('parent project label required')
@@ -65,8 +76,8 @@ def cmd_confirm(a):
   actual={'parentSessionId':lab(m,'parent-session::') or m.get('parentSessionId'),'role':role(m),'project':lab(m,'project::'),'projectId':m.get('projectId'),'generation':r.get('generation'),'workUnit':lab(m,'work-unit::'),'attempt':lab(m,'attempt::'),'worktree':wd(m),'token':i.get('token')}
   version=lane_version(m)
   required={f'agent-role::{i.get("role")}',f'parent-session::{i.get("parentSessionId")}',f'project::{i.get("project")}',f'work-unit::{i.get("workUnit")}',f'attempt::{i.get("attempt")}',f'protocol-version::{version}'}
-  if not strict(m) or not required.issubset(set(m.get('labels') or [])): raise SystemExit('v3.4.35/v3.4.36 canonical lane labels required')
-  if m.get('llmConnection')!='chatgpt-plus' or m.get('model')!='pi/gpt-5.6-terra' or m.get('permissionMode') not in {'allow-all','execute'}: raise SystemExit('v3.4.35/v3.4.36 worker/auditor runtime identity mismatch')
+  if not strict(m) or not required.issubset(set(m.get('labels') or [])): raise SystemExit('v3.4.35/v3.4.36/v3.4.37 canonical lane labels required')
+  if m.get('llmConnection')!='chatgpt-plus' or m.get('model')!='pi/gpt-5.6-terra' or m.get('permissionMode') not in {'allow-all','execute'}: raise SystemExit('v3.4.35/v3.4.36/v3.4.37 worker/auditor runtime identity mismatch')
   if actual!=i: raise SystemExit('admission manifest/registry identity mismatch')
   if actual['worktree'] in {wd(live(i['parentSessionId'])),str(Path.cwd().resolve())}: raise SystemExit('lane worktree cannot be parent or repository root')
   collisions(i,a.session)

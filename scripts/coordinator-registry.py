@@ -29,8 +29,11 @@ DEFAULT_TTL = int(os.environ.get("CRAFT_COORDINATOR_TTL_SECONDS", "3600"))
 FALLBACK_TTL = int(os.environ.get("CRAFT_FALLBACK_TTL_SECONDS", "3600"))
 VALID_STATES = {"authoritative", "rotating", "hold", "superseded", "needs-owner"}
 REPORTING_POLICY = RUNTIME / "reporting-policy.json"
-CURRENT_VERSION = "3.4.36"
-COMPATIBLE_COORDINATOR_VERSIONS = {"3.4.35", CURRENT_VERSION}
+CURRENT_VERSION = "3.4.37"
+COMPATIBLE_COORDINATOR_VERSIONS = {"3.4.35", "3.4.36", CURRENT_VERSION}
+ROTATION_GRACE_MS = int(os.environ.get("CRAFT_ROTATION_GRACE_SECONDS", "900")) * 1000
+ROTATION_MESSAGE_HYSTERESIS = int(os.environ.get("CRAFT_ROTATION_MESSAGE_HYSTERESIS", "450"))
+ROTATION_TOKEN_HYSTERESIS = int(os.environ.get("CRAFT_ROTATION_TOKEN_HYSTERESIS", "180000"))
 
 
 # [<project>] Coordinator v<major>.<minor>.<patch> — nothing else, so the list the
@@ -97,7 +100,7 @@ def manifest_or_die(sid: str) -> dict[str, Any]:
 def reporting_policy(required: bool = False) -> dict[str, Any]:
     row = common.read_json(REPORTING_POLICY)
     if not common.valid_reporting_policy(row):
-        if required: raise SystemExit("v3.4.36 requires valid configured pull-only reporting policy")
+        if required: raise SystemExit("v3.4.37 requires valid configured pull-only reporting policy")
         return {}
     fingerprint = __import__("hashlib").sha256(json.dumps({"mode": row.get("mode"), "ownerFacingSessionId": row.get("ownerFacingSessionId"), "configuredAt": row.get("configuredAt")}, sort_keys=True).encode()).hexdigest()
     return {"reportingMode": "pull-only", "reportingPolicyRevision": row.get("configuredAt"), "reportingPolicyFingerprint": fingerprint}
@@ -118,7 +121,7 @@ def provider_fields(manifest: dict[str, Any]) -> dict[str, Any]:
 def cmd_claim(args: argparse.Namespace) -> int:
     project = clean_project(args.project)
     manifest = manifest_or_die(args.session)
-    # Claim creates/replaces authority: it is always a current v3.4.36 admission,
+    # Claim creates/replaces authority: it is always a current v3.4.37 admission,
     # never a loophole for malformed legacy successors.
     validate_successor_manifest(manifest, project, {"projectId": args.project_id or manifest.get("projectId")})
     reporting_policy(True)
@@ -143,7 +146,9 @@ def cmd_claim(args: argparse.Namespace) -> int:
             "successorSessionId": None, "claimedAt": now, "lastHeartbeatAt": now,
             "leaseExpiresAt": now + int(args.ttl) * 1000,
             "transferStartedAt": None, "fallbackReason": args.fallback_reason,
-            "unresolvedGates": [], "activeChildren": [], **provider_fields(manifest),
+            "unresolvedGates": [], "activeChildren": [],
+            "rotationMetric": {"sessionId": args.session, "startedAt": now, "pressureActive": False},
+            **provider_fields(manifest),
             **reporting_policy(any(f"protocol-version::{version}" in set(manifest.get("labels") or [])
                                 for version in COMPATIBLE_COORDINATOR_VERSIONS)),
         }
@@ -190,6 +195,31 @@ def latest_completed_assistant_at(session_id: str) -> int:
     return latest
 
 
+def cmd_reconcile_rotation(args: argparse.Namespace) -> int:
+    """Persist current-session pressure state so hysteresis survives watchdog ticks."""
+    now = common.now_ms(); rows: list[dict[str, Any]] = []; changed: list[str] = []
+    with common.file_lock(LOCK):
+        for path in sorted(REGISTRY.glob("*.json")):
+            value = common.read_json(path)
+            if not value or value.get("state") not in {"authoritative", "rotating"}:
+                continue
+            session_id = str(value.get("coordinatorSessionId") or "")
+            manifest = common.read_manifest(session_id)
+            if not common.session_live(manifest) or common.role_of(manifest or {}) != "coordinator":
+                continue
+            metric = rotation_metric(value, manifest or {}, now)
+            compact = {"sessionId": metric["sessionId"], "startedAt": metric["startedAt"],
+                       "pressureActive": metric["pressureActive"], "lastMeasuredAt": now,
+                       "lastReasons": metric["reasons"]}
+            rows.append({"project": value.get("project"), "sessionId": session_id, "metric": metric})
+            if value.get("rotationMetric") != compact:
+                value["rotationMetric"] = compact
+                if args.apply:
+                    save(value)
+                changed.append(str(value.get("project")))
+    print(json.dumps({"applied": args.apply, "changed": changed, "rows": rows}, ensure_ascii=False, indent=2)); return 0
+
+
 def cmd_reconcile_activity(args: argparse.Namespace) -> int:
     now = common.now_ms(); rows = []; changed = []
     with common.file_lock(LOCK):
@@ -225,7 +255,7 @@ def cmd_reconcile_activity(args: argparse.Namespace) -> int:
 def validate_successor_manifest(manifest: dict[str, Any], project: str, record: dict[str, Any]) -> None:
     raw_labels = manifest.get("labels")
     labels = raw_labels if isinstance(raw_labels, list) and all(isinstance(x, str) for x in raw_labels) else []
-    # Existing v3.4.35 coordinators remain admissible during rollout. New v3.4.36
+    # Existing v3.4.35/v3.4.36 coordinators remain admissible during rollout. New v3.4.37
     # coordinators use the current name/label pair; mixed or duplicated identities
     # are never accepted.
     roles = [x for x in labels if x.startswith("agent-role::")]
@@ -256,6 +286,65 @@ def transfer_identity(manifest: dict[str, Any]) -> dict[str, Any]:
     return {"id": manifest.get("id"), "workspaceRootPath": manifest.get("workspaceRootPath"),
             "projectId": manifest.get("projectId"), "role": common.role_of(manifest),
             "connection": manifest.get("llmConnection"), "model": manifest.get("model")}
+
+
+def rotation_metric(record: dict[str, Any], manifest: dict[str, Any], now: int) -> dict[str, Any]:
+    """Measure only the current coordinator session; grace never masks context errors.
+
+    Counters in a successor's manifest are its own counters.  The durable metric is
+    rebound at claim/accept, starts with a bounded grace interval, and keeps an
+    already-raised signal until it falls below lower clear thresholds.  A recorded
+    request-buffer/context error bypasses both grace and hysteresis.
+    """
+    session = str(record.get("coordinatorSessionId") or "")
+    metric = record.get("rotationMetric") if isinstance(record.get("rotationMetric"), dict) else {}
+    started = int(metric.get("startedAt") or record.get("transferAcceptedAt") or record.get("claimedAt") or now)
+    same_session = metric.get("sessionId") == session
+    messages = manifest.get("messageCount")
+    tokens = (manifest.get("tokenUsage") or {}).get("totalTokens") if isinstance(manifest.get("tokenUsage"), dict) else None
+    max_messages = int(os.environ.get("CRAFT_COORDINATOR_MAX_MESSAGES", "500"))
+    max_tokens = int(os.environ.get("CRAFT_COORDINATOR_MAX_TOKENS", "200000"))
+    error_text = " ".join(str(manifest.get(k) or "") for k in ("error", "lastError", "sessionError", "contextError")).lower()
+    context_error = any(marker in error_text for marker in ("context", "request buffer", "token limit", "maximum tokens"))
+    prior_active = bool(metric.get("pressureActive")) and same_session
+    message_pressure = isinstance(messages, int) and messages >= (ROTATION_MESSAGE_HYSTERESIS if prior_active else max_messages)
+    token_pressure = isinstance(tokens, int) and tokens >= (ROTATION_TOKEN_HYSTERESIS if prior_active else max_tokens)
+    in_grace = same_session and now < started + ROTATION_GRACE_MS
+    reasons: list[str] = []
+    if context_error:
+        reasons.append("context-error")
+    if not in_grace or context_error:
+        if message_pressure: reasons.append(f"messages={messages}")
+        if token_pressure: reasons.append(f"tokens={tokens}")
+    return {"sessionId": session, "startedAt": started, "sameCurrentSession": same_session,
+            "graceUntil": started + ROTATION_GRACE_MS, "inGrace": in_grace,
+            "messages": messages if isinstance(messages, int) else None,
+            "tokens": tokens if isinstance(tokens, int) else None,
+            "pressureActive": bool(reasons), "reasons": reasons,
+            "contextError": context_error,
+            "messageClearThreshold": ROTATION_MESSAGE_HYSTERESIS,
+            "tokenClearThreshold": ROTATION_TOKEN_HYSTERESIS}
+
+
+def discover_transfer_children(predecessor: str, project: str, existing: list[Any]) -> list[str]:
+    """Adopt every non-archived worker/auditor labelled to the predecessor.
+
+    A lease can be stale or absent while the session is still working or awaiting
+    review.  Manifest identity is therefore discovery evidence; registry children
+    and leases remain supplemental.  IDs, not work-unit guesses, are unioned so a
+    successor cannot manufacture or duplicate an adopted lane.
+    """
+    children = {str(value) for value in existing if isinstance(value, str) and value}
+    for session_id, manifest in common.all_manifests().items():
+        if not common.session_live(manifest) or common.role_of(manifest) not in {"worker", "auditor"}:
+            continue
+        if common.label_value(manifest, "parent-session::") != predecessor and manifest.get("parentSessionId") != predecessor:
+            continue
+        labelled_project = common.label_value(manifest, "project::")
+        if labelled_project and clean_project(labelled_project) != project:
+            continue
+        children.add(str(session_id))
+    return sorted(children)
 
 
 def cmd_begin_transfer(args: argparse.Namespace) -> int:
@@ -300,8 +389,12 @@ def cmd_accept_transfer(args: argparse.Namespace) -> int:
         if transfer_identity(manifest) != expected_identity:
             raise SystemExit("successor transfer identity mismatch")
         predecessor = value.get("coordinatorSessionId"); now = common.now_ms()
+        adopted_children = discover_transfer_children(str(predecessor or ""), project, list(value.get("activeChildren") or []))
         value.update({"coordinatorSessionId": args.session, "coordinatorCwd": common.coordinator_cwd(manifest.get("workingDirectory") or manifest.get("sdkCwd")), "predecessorSessionId": predecessor,
                       "successorSessionId": None, "generation": int(value.get("generation") or 0) + 1,
+                      "activeChildren": adopted_children, "transferDiscovery": {"predecessorSessionId": predecessor,
+                      "adoptedChildren": adopted_children, "discoveredAt": now},
+                      "rotationMetric": {"sessionId": args.session, "startedAt": now, "pressureActive": False},
                       "state": "authoritative", "claimedAt": now, "lastHeartbeatAt": now,
                       "leaseExpiresAt": now + int(args.ttl) * 1000, "transferAcceptedAt": now,
                       "transferStartedAt": None, "transferIdentityAcceptedAt": now,
@@ -381,18 +474,13 @@ def inspect_one(project: str) -> dict[str, Any]:
         if (value.get("state") in {"authoritative", "rotating"}
                 and manifest.get("sessionStatus") in {"needs-review", "done"}):
             issues.append(f"coordinator-worker-terminal-status:{manifest.get('sessionStatus')}")
-        # Rotation thresholds were prompt-only guidance; a coordinator past them
-        # keeps dying mid-turn instead of rotating. Flag it machine-side so the
-        # owner/watchdog sees the pressure before the deaths.
+        # Rotation pressure is measured against this session only. A grace window
+        # prevents a fresh successor inheriting a stale warning, while a real
+        # context/request-buffer error bypasses grace and hysteresis.
         if value.get("state") in {"authoritative", "rotating"}:
-            max_messages = int(os.environ.get("CRAFT_COORDINATOR_MAX_MESSAGES", "500"))
-            max_tokens = int(os.environ.get("CRAFT_COORDINATOR_MAX_TOKENS", "200000"))
-            messages = manifest.get("messageCount")
-            tokens = (manifest.get("tokenUsage") or {}).get("totalTokens") if isinstance(manifest.get("tokenUsage"), dict) else None
-            if isinstance(messages, int) and messages >= max_messages:
-                issues.append(f"coordinator-complexity-threshold:messages={messages}")
-            if isinstance(tokens, int) and tokens >= max_tokens:
-                issues.append(f"coordinator-complexity-threshold:tokens={tokens}")
+            pressure = rotation_metric(value, manifest, now)
+            for reason in pressure["reasons"]:
+                issues.append(f"coordinator-complexity-threshold:{reason}")
         if manifest.get("projectId") != value.get("projectId"): issues.append("native-project-binding-drift")
         # A coordinator's session name is how the owner finds it among hundreds.
         # Successors are spawned by their predecessor, which named them whatever it
@@ -410,7 +498,10 @@ def inspect_one(project: str) -> dict[str, Any]:
             if required not in labels: issues.append(f"missing-label:{required}")
         if not any(label == "protocol-version::3" or label.startswith("protocol-version::3.") for label in labels):
             issues.append("missing-label:protocol-version::3.x")
-    return {"record": value, "issues": issues, "healthy": not issues}
+    pressure = rotation_metric(value, manifest, now) if manifest and value.get("state") in {"authoritative", "rotating"} else None
+    maintenance_debt = [issue for issue in issues if issue.startswith("predecessor-not-archived:")]
+    return {"record": value, "rotationMetric": pressure, "issues": issues,
+            "maintenanceDebt": maintenance_debt, "healthy": not issues}
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
@@ -428,6 +519,7 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__); sub = p.add_subparsers(dest="command", required=True)
     c = sub.add_parser("claim"); c.add_argument("--project", required=True); c.add_argument("--session", required=True); c.add_argument("--project-id"); c.add_argument("--predecessor"); c.add_argument("--fallback-reason"); c.add_argument("--ttl", type=int, default=DEFAULT_TTL); c.set_defaults(func=cmd_claim)
     r = sub.add_parser("renew"); r.add_argument("--project", required=True); r.add_argument("--session", required=True); r.add_argument("--ttl", type=int, default=DEFAULT_TTL); r.set_defaults(func=cmd_renew)
+    rr_metric = sub.add_parser("reconcile-rotation"); rr_metric.add_argument("--apply", action="store_true"); rr_metric.set_defaults(func=cmd_reconcile_rotation)
     ra = sub.add_parser("reconcile-activity"); ra.add_argument("--ttl", type=int, default=DEFAULT_TTL); ra.add_argument("--apply", action="store_true"); ra.set_defaults(func=cmd_reconcile_activity)
     b = sub.add_parser("begin-transfer"); b.add_argument("--project", required=True); b.add_argument("--session", required=True); b.add_argument("--successor", required=True); b.add_argument("--reason", required=True); b.set_defaults(func=cmd_begin_transfer)
     a = sub.add_parser("accept-transfer"); a.add_argument("--project", required=True); a.add_argument("--session", required=True); a.add_argument("--expected-generation", type=int); a.add_argument("--ttl", type=int, default=DEFAULT_TTL); a.set_defaults(func=cmd_accept_transfer)

@@ -1,10 +1,10 @@
-# Craft Agents Multi-Agent Orchestration Protocol v3.4.36 — Complete Standalone Guide
+# Craft Agents Multi-Agent Orchestration Protocol v3.4.37 — Complete Standalone Guide
 
 [![Protocol tests](https://github.com/razumv/craft-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/razumv/craft-protocol/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-**Snapshot:** 2026-08-12 23:07 Europe/Warsaw
+**Snapshot:** 2026-08-16 18:35 Europe/Warsaw
 **Audience:** operators and contributors building safer coordinator/worker/auditor control planes with Craft Agents.
 **Purpose:** deliver owner-requested product outcomes through autonomous project coordinators while preserving work, preventing split-brain, detecting stalls deterministically, gating irreversible actions, and using evidence as bounded acceptance rather than work for its own sake.
 
@@ -93,6 +93,14 @@ Chat claims, silence, status names, and repeated CI polling are not authoritativ
 20. When the owner asks for status, lead with customer outcome, demonstrable workflow, remaining work, ETA/confidence and one blocker; PR/SHA/CI/session/audit details are secondary evidence only.
 
 ---
+
+## v3.4.37 operational-stability controls
+
+- Rotation pressure is measured against the **current coordinator session** only. A bounded post-claim/transfer grace window prevents inherited counter noise; lower clear thresholds provide hysteresis after a true pressure signal. Request-buffer/context errors bypass both protections and remain concrete recovery evidence.
+- Complete Product Increments consume immutable event bindings **and** exact candidate, `verdict:PASS`, merge, and readback markers. A semantically mismatched handoff cannot be completed by reusing plausible event IDs. A predecessor left live after an otherwise healthy transfer is classified `healthy-with-maintenance-debt`, never silently ignored and never conflated with a context failure.
+- `owner-plan-receipt.py` stores a direct-owner approval only for one SHA-256 plan digest, exact increment/work-unit scope, explicit reversible effects, bounded expiry, and durable revocation. It cannot authorize credentials, spending, deployment, protected merges, releases, remote access, or irreversible changes.
+- `release-closure.py verify` is read-only and refuses closure without local `main`, reachable version tag, passing package manifest, successful no-mutation installer dry-run, captured GitHub API Release evidence marked Latest, and exact version adoption in shipped entry points. It never tags, pushes, installs, or calls GitHub.
+- Transfer acceptance discovers non-archived worker/auditor manifests labelled to the predecessor even where leases are stale or absent, including `needs-review` auditors. These IDs become successor children and strict lane admission refuses a duplicate same-role/work-unit reservation.
 
 ## v3.4.36 product-pressure controls
 

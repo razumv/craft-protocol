@@ -1,4 +1,4 @@
-# Protocol v3.4.36 defaults
+# Protocol v3.4.37 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -109,6 +109,13 @@ Merge authority (3.4.36):      resolved protected-merge authority issues merge +
 Coordinator CWD (3.4.36):      absolute or trusted ~/ syntax canonicalized; other relatives refused
 Coordinator identity (3.4.36): coordinator-reconcile.py apply requires authenticated RPC rename receipt; never edits session JSONL
 Rotation priority (3.4.36):    direct-owner/complexity rotation precedes a routine no-rotation tick
+Rotation metric (3.4.37):      current coordinator session only; 900s claim/transfer grace, clear at 450 msgs / 180k tokens after pressure
+Context error (3.4.37):        request-buffer/context/token errors bypass rotation grace and hysteresis
+Exact completion (3.4.37):     v3.4.37 complete bindings require exact candidateSha, verdict:PASS, merge and readback markers
+Maintenance debt (3.4.37):     live predecessor after healthy handoff → healthy-with-maintenance-debt, archive still owed
+Plan receipt (3.4.37):         direct-owner SHA-256 plan + increment/work-unit scope + safe effect only; 60..604800s, revocable
+Release closure (3.4.37):      read-only main/tag/manifest/installer/GitHub Release Latest/version-adoption verifier
+Transfer discovery (3.4.37):   live/needs-review predecessor worker/auditor manifests are adopted even if their lease is absent/stale
 Admission interval:            300 seconds; report-only under kill switch
 Production admission:          capability-v2 delivery/inspect/recover on exact runtime identity
 Direct capability:             available=true, version=2; deliver + inspect + recover channels

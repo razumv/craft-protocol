@@ -40,6 +40,8 @@ GATES = RUNTIME / "owner-gates"
 INBOX = RUNTIME / "coordinator-inbox"
 COMMITMENTS = RUNTIME / "coordinator-commitments"
 SCHEMA = 1
+CURRENT_VERSION = "3.4.37"
+CURRENT_PROTOCOL_LABELS = {"protocol-version::3.4.36", "protocol-version::3.4.37"}
 
 PHASES = {"initializing", "executing", "waiting", "blocked", "review", "complete", "hold"}
 TERMINAL_PHASES = {"complete", "hold", "blocked"}
@@ -49,7 +51,7 @@ ACTIVE_COMMITMENT_STATES = {"registered", "observing", "overdue", "ready"}
 # owner-gate commitments are promises to look later.
 WORK_OBSERVER_BINDINGS = {"worker-lease", "external-wait"}
 SELF_REVIEW_CHURN_LIMIT = int(os.environ.get("CRAFT_STATUS_SELF_REVIEW_CHURN_LIMIT", "2"))
-CLASSIFICATIONS = {"verified", "executing", "waiting-observed", "blocked", "stale", "contradictory"}
+CLASSIFICATIONS = {"verified", "executing", "waiting-observed", "blocked", "stale", "contradictory", "healthy-with-maintenance-debt"}
 CRED_MARKERS = ("authorization:", "bearer ", "token=", "api_key=", "apikey=", "secret=", "password=", "-----begin")
 MAX_ACTIONS = 3
 MAX_INCREMENT_STORIES = 8
@@ -161,11 +163,37 @@ def authoritative(project: str) -> dict[str, Any] | None:
 
 
 def project_leases(coordinator: str) -> list[dict[str, Any]]:
+    """Return registered lanes plus transfer-discovered manifests without inventing completion.
+
+    A rotation may happen between child spawn and lease creation or after a stale
+    lease was removed.  The registry's adopted IDs and their live/needs-review
+    manifests remain evidence of one real lane, so synthesis must not launch a
+    duplicate just because its runtime lease is missing.
+    """
     rows = []
+    known: set[str] = set()
     for path in sorted(LEASES.glob("*.json")):
         lease = object_or_none(common.read_json(path))
         if lease and lease.get("parentSessionId") == coordinator:
-            rows.append(lease)
+            rows.append(lease); known.add(str(lease.get("sessionId") or path.stem))
+    registry_row = next((row for path in sorted(COORDINATORS.glob("*.json"))
+                         if (row := object_or_none(common.read_json(path)))
+                         and row.get("coordinatorSessionId") == coordinator), None)
+    for session_id in (registry_row or {}).get("activeChildren") or []:
+        session_id = str(session_id)
+        if session_id in known:
+            continue
+        manifest = object_or_none(common.read_manifest(session_id))
+        if not common.session_live(manifest) or common.role_of(manifest or {}) not in {"worker", "auditor"}:
+            continue
+        status = (manifest or {}).get("sessionStatus")
+        rows.append({"sessionId": session_id, "parentSessionId": coordinator,
+                     "role": common.role_of(manifest or {}),
+                     "workUnit": common.label_value(manifest or {}, "work-unit::"),
+                     "attempt": common.label_value(manifest or {}, "attempt::"),
+                     "worktree": common.canonical_path((manifest or {}).get("workingDirectory") or (manifest or {}).get("sdkCwd")),
+                     "state": "handoff-ready" if status == "needs-review" else "running",
+                     "discoveredFromManifest": True})
     return rows
 
 
@@ -199,6 +227,12 @@ def planning_only_authority_observed(project: str, ref: str | None) -> bool:
                 and str(gate.get("decisionKey") or "").startswith("planning-only:")):
             return True
     return False
+
+
+def evidence_values(item: dict[str, Any], prefix: str) -> set[str]:
+    """Return exact durable evidence values; prefix text never counts as a match."""
+    return {str(value).split(":", 1)[1] for value in item.get("evidence") or []
+            if isinstance(value, str) and value.startswith(prefix + ":") and len(value.split(":", 1)[1]) > 0}
 
 
 def reusable_evidence_identity(project: str, generation: int, ref: str,
@@ -450,6 +484,10 @@ def synthesize(project: str, now: int) -> dict[str, Any]:
         "_observedWaitUnits": {str(w.get("workUnit") or "") for w in observed_waits if w.get("workUnit")},
         "_resolvedGates": [g for g in gates if g.get("state") == "resolved"],
         "_standingMergeReceipts": standing_merge_receipts(project),
+        "maintenanceDebt": ([f"predecessor-not-archived:{reg.get('predecessorSessionId')}" ]
+                            if reg and reg.get("predecessorSessionId")
+                            and (predecessor_manifest := common.read_manifest(str(reg.get("predecessorSessionId"))))
+                            and not predecessor_manifest.get("isArchived") else []),
     }
 
 
@@ -928,6 +966,7 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
                                                 str(reuse.get("testEnvironmentFingerprint") or "")):
         fail("productIncrement.evidenceReuse must bind observed candidate SHA and environment/input fingerprint")
     completion = increment.get("completionEvidence") or {}
+    strict_v3437 = "protocol-version::3.4.37" in set((common.read_manifest(coordinator) or {}).get("labels") or [])
     if increment.get("stage") == "complete":
         bound: dict[str, dict[str, Any]] = {}
         for key, binding in completion.items():
@@ -943,6 +982,12 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
             bound[key] = item
         if bound["integratedCandidateRef"].get("kind") != "terminal-handoff":
             fail("integratedCandidateRef must reference a terminal-handoff")
+        # v3.4.37 consumes a concrete candidate, not four plausible event labels.
+        # Legacy v3.4.36 completion records remain readable without these markers.
+        candidate_values = evidence_values(bound["integratedCandidateRef"], "candidateSha")
+        if strict_v3437 and (len(candidate_values) != 1 or not all(COMMIT_SHA.fullmatch(value) for value in candidate_values)):
+            fail("integratedCandidateRef must carry one exact candidateSha evidence marker")
+        candidate_sha = next(iter(candidate_values), None)
         acceptance_kind = bound["acceptanceRef"].get("kind")
         if increment.get("riskTier") in {"medium", "high"} and acceptance_kind != "audit-verdict":
             fail("Medium/High Product Increment acceptanceRef must reference an audit-verdict")
@@ -950,6 +995,9 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
             fail("audit-verdict acceptanceRef must be authored by an auditor")
         if acceptance_kind not in {"audit-verdict", "terminal-handoff"}:
             fail("acceptanceRef must reference a verification-grade acceptance report")
+        if strict_v3437 and (candidate_sha not in evidence_values(bound["acceptanceRef"], "candidateSha")
+                             or "PASS" not in evidence_values(bound["acceptanceRef"], "verdict")):
+            fail("acceptanceRef must consume the exact candidateSha with verdict:PASS")
         release = bound["releaseReadbackRef"]
         if release.get("kind") != "observer-terminal":
             fail("releaseReadbackRef must reference an observer-terminal receipt")
@@ -985,6 +1033,8 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
                     fail("merge-authorized completion requires observed resolved gate or standing receipt for exact workUnit")
                 if f"merged-main:{story.get('mergeSha')}" not in release_evidence:
                     fail("merge-authorized completion requires merged-main readback evidence for exact mergeSha")
+                if strict_v3437 and candidate_sha not in evidence_values(release, "candidateSha"):
+                    fail("releaseReadbackRef must bind the exact integrated candidateSha")
         demonstration = bound["demonstrationRef"]
         if demonstration.get("kind") not in {"terminal-handoff", "observer-terminal"}:
             fail("demonstrationRef must reference a terminal real-workflow report")
@@ -1430,13 +1480,15 @@ def cmd_publish(args: argparse.Namespace) -> int:
         if not common.session_live(manifest) or common.role_of(manifest) != "coordinator":
             fail("coordinator session is not live")
         declared = normalize_declared(payload, now)
-        current_v3436 = "protocol-version::3.4.36" in set((manifest or {}).get("labels") or [])
-        if (current_v3436 and declared["productIncrement"] is None
+        protocol_labels = set((manifest or {}).get("labels") or [])
+        current_protocol = next((label.split("::", 1)[1] for label in sorted(protocol_labels)
+                                 if label in CURRENT_PROTOCOL_LABELS), None)
+        if (current_protocol and declared["productIncrement"] is None
                 and not planning_only_authority_observed(project, declared["planningOnlyAuthorityRef"])):
-            fail("v3.4.36 status requires a Product Increment or observed direct-owner planning-only authority")
-        if current_v3436 and declared["productIncrement"] and any(
+            fail(f"v{current_protocol} status requires a Product Increment or observed direct-owner planning-only authority")
+        if current_protocol and declared["productIncrement"] and any(
                 not story.get("deliverableClassExplicit") for story in declared["productIncrement"].get("stories") or []):
-            fail("v3.4.36 Product Increment stories require deliverableClass")
+            fail(f"v{current_protocol} Product Increment stories require deliverableClass")
         validate_refs(project, args.session, declared)
         if declared["phase"] == "waiting":
             commitments = {c.get("commitmentId"): c for c in project_commitments(project)
@@ -1474,7 +1526,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
         revision = prior_revision + 1
         record = {"schemaVersion": SCHEMA, "project": project, "coordinatorSessionId": args.session,
                   "generation": args.generation, "revision": revision, "declared": declared,
-                  **({"protocolVersion": "3.4.36"} if current_v3436 else {}),
+                  **({"protocolVersion": current_protocol} if current_protocol else {}),
                   "publishedAt": now, "updatedAt": now}
         if args.apply:
             common.atomic_json(STATUS / f"{project}.json", record)
@@ -1519,20 +1571,28 @@ def build_report(project: str, now: int) -> dict[str, Any]:
     verdict = classify(declared, synth, now, status_generation=status_generation,
                        complete_age_ms=complete_age)
     issues = list(verdict["issues"])
-    current_null_increment = bool(status and status.get("protocolVersion") == "3.4.36"
+    current_null_increment = bool(status and status.get("protocolVersion") in {"3.4.36", CURRENT_VERSION}
                                   and (not declared or declared.get("productIncrement") is None)
                                   and not planning_only_authority_observed(project, (declared or {}).get("planningOnlyAuthorityRef")))
     if current_null_increment:
-        issues.append("v3.4.36-status-missing-product-outcome")
+        issues.append(f"v{status.get('protocolVersion')}-status-missing-product-outcome")
     if malformed:
         issues.append("stored-status-malformed")
+    classification = "contradictory" if malformed or current_null_increment else verdict["classification"]
+    # This new public classification applies only to current v3.4.37 snapshots;
+    # older transfer records stay readable with their historical classification.
+    maintenance_debt = list(synth.get("maintenanceDebt") or [])
+    if (status and status.get("protocolVersion") == CURRENT_VERSION and maintenance_debt
+            and classification in {"verified", "executing", "waiting-observed"}):
+        classification = "healthy-with-maintenance-debt"
+        issues.extend("maintenance-debt:" + debt for debt in maintenance_debt)
     public_synth = {key: value for key, value in synth.items() if not key.startswith("_")}
     public_synth["deliveryPressure"] = delivery_pressure((declared or {}).get("productIncrement") or {}, synth,
                                                          (declared or {}).get("delivery"))
     return {"project": project, "declared": declared,
             "revision": status.get("revision") if status else None,
             "publishedAt": status.get("publishedAt") if status else None,
-            "synthesized": public_synth, "classification": ("contradictory" if malformed or current_null_increment else verdict["classification"]),
+            "synthesized": public_synth, "classification": classification,
             "issues": issues}
 
 

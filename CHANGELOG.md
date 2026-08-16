@@ -4,6 +4,16 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.37] — 2026-08-16
+
+### Operational stability and release closure
+
+- Rotation metrics now bind to the current coordinator session with a post-claim/transfer grace window and lower hysteresis clear thresholds. Concrete request-buffer/context errors bypass both protections, so fresh-session noise is suppressed without hiding a real context failure.
+- Complete increments consume exact immutable event bindings plus matching `candidateSha`, `verdict:PASS`, merge and readback markers. A completed project whose only remaining issue is a live predecessor is classified `healthy-with-maintenance-debt`; archive debt stays visible without being misreported as execution/context failure.
+- Added `owner-plan-receipt.py`: direct-owner, digest-bound, increment/work-unit-scoped approvals for explicit reversible plan effects only, with expiry and immediate durable revocation. It refuses inference of credentials, spend, deploy, protected merge, release, remote access, or irreversible effects.
+- Added `release-closure.py verify`: a read-only closure gate requiring local main/tag/manifest/installer-dry-run facts, captured GitHub API Release evidence marked Latest, and exact version adoption across packaged entry points. It never tags, pushes, installs, or contacts GitHub.
+- Transfer acceptance now discovers live and `needs-review` predecessor workers/auditors from manifests where leases are absent/stale, records adoption, and lane admission refuses duplicate same-role/work-unit dispatch. The predecessor archive obligation remains durable maintenance debt.
+
 ## [3.4.36] — 2026-08-16
 
 ### Product delivery pressure and safe coordinator rollout

@@ -131,6 +131,11 @@ class OrchestrationV320Test(unittest.TestCase):
     def test_06c_complexity_threshold_is_flagged(self):
         # Rotation thresholds are machine-flagged before context deaths, not after.
         m=self.manifest("c1", messages=501, tokens=250_000); self.claim()
+        # v3.4.37 protects a fresh coordinator from inherited pressure; exercise
+        # the existing mature-session threshold assertion outside that grace.
+        registry_path = self.runtime / "coordinators" / "demo.json"
+        registry = json.loads(registry_path.read_text()); registry["rotationMetric"]["startedAt"] = 1
+        registry_path.write_text(json.dumps(registry) + "\n")
         p=self.exec_tool("coordinator-registry.py","inspect","--project","demo",ok=False)
         self.assertIn("coordinator-complexity-threshold:messages=501",p.stdout)
         self.assertIn("coordinator-complexity-threshold:tokens=250000",p.stdout)
@@ -257,6 +262,6 @@ class OrchestrationV320Test(unittest.TestCase):
         self.exec_tool("coordinator-registry.py","inspect","--project","demo")
         report=json.loads(self.exec_tool("coordinator-reconcile.py").stdout)
         self.assertTrue(report["healthy"]); self.assertEqual(report["coordinators"][0]["issues"],[])
-        self.assertEqual(report["coordinators"][0]["desiredName"], "[demo] Coordinator v3.4.36")
+        self.assertEqual(report["coordinators"][0]["desiredName"], "[demo] Coordinator v3.4.37")
 
 if __name__ == "__main__": unittest.main()

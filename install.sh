@@ -1,6 +1,6 @@
 #!/bin/zsh
 # SPDX-License-Identifier: Apache-2.0
-# Safe installer for Craft Agents orchestration protocol v3.4.36.
+# Safe installer for Craft Agents orchestration protocol v3.4.37.
 # Dry-run by default. Use --apply only after reviewing README.md.
 set -eu
 
@@ -23,7 +23,7 @@ SKILLS="$WORKSPACE/skills"
 RUNTIME="$CRAFT/runtime"
 LOGS="$CRAFT/logs"
 STAMP=$(date '+%Y%m%d-%H%M%S')
-BACKUP="$CRAFT/backups/orchestration-v3.4.36-$STAMP"
+BACKUP="$CRAFT/backups/orchestration-v3.4.37-$STAMP"
 PYTHON="${CRAFT_PYTHON:-/opt/homebrew/bin/python3}"
 [[ -x "$PYTHON" ]] || PYTHON=$(command -v python3)
 PLIST_NAME="com.craft-protocol.worker-watchdog.plist"
@@ -35,6 +35,7 @@ files=(
   worker-lease.py observable-job.py external-wait.py worker-watchdog.py post-archive-reaper.py
   controller-harness.py recovery-admission.py
   coordinator-inbox.py coordinator-status.py coordinator-commitment.py owner-gate-board.py increment-board.py standing-authority.py
+  owner-plan-receipt.py release-closure.py
   scan-reapable-workers.py watchdog-cron.sh recovery-admission-cron.sh coordinator-kickoff.md lane-admission.py reporting-policy.py
 )
 
@@ -137,7 +138,8 @@ if (( APPLY )); then
   (cd "$ROOT/tests" && CRAFT_TEST_SCRIPTS="$SCRIPTS" "$PYTHON" -m unittest -v \
     test_worker_reliability.py test_orchestration_v320.py test_self_healing_v311.py \
     test_delivery_mode_v320.py test_controller_harness_v321.py \
-    test_recovery_admission_v322.py test_external_wait_v321.py test_coordinator_v330.py)
+    test_recovery_admission_v322.py test_external_wait_v321.py test_coordinator_v330.py \
+    test_product_pressure_v3436.py test_operational_stability_v3437.py)
   echo "Running watchdog dry-run..."
   "$PYTHON" "$SCRIPTS/worker-watchdog.py"
   # Re-arm only what was already armed, and only after the payload installed and

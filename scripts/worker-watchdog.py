@@ -33,6 +33,7 @@ def main() -> int:
         leases += ["--apply"]
     waits = [sys.executable, str(HERE / "external-wait.py"), "reconcile"]
     activity = [sys.executable, str(HERE / "coordinator-registry.py"), "reconcile-activity"]
+    rotation = [sys.executable, str(HERE / "coordinator-registry.py"), "reconcile-rotation"]
     inbox = [sys.executable, str(HERE / "coordinator-inbox.py"), "reconcile"]
     commitments = [sys.executable, str(HERE / "coordinator-commitment.py"), "reconcile"]
     status = [sys.executable, str(HERE / "coordinator-status.py"), "reconcile"]
@@ -40,6 +41,7 @@ def main() -> int:
     if args.apply:
         waits += ["--apply"]
         activity += ["--apply"]
+        rotation += ["--apply"]
         inbox += ["--apply"]
         commitments += ["--apply"]
         status += ["--apply"]
@@ -49,6 +51,7 @@ def main() -> int:
         "leaseReconcile": call(leases),
         "externalWaits": call(waits),
         "coordinatorActivity": call(activity),
+        "coordinatorRotation": call(rotation),
         # v3.3.0: coalesce inbox claims and advance commitment/status trust before
         # the incident scan reads runtime truth.
         "coordinatorInbox": call(inbox),
@@ -64,7 +67,7 @@ def main() -> int:
     # Runtime cleanup or incident-registry failures are fatal. Registry/metadata
     # non-zero means drift was detected and is surfaced; it never authorizes repair.
     fatal = any(report[key]["exitCode"] != 0 for key in
-                ("archiveReaper", "leaseReconcile", "externalWaits", "coordinatorActivity",
+                ("archiveReaper", "leaseReconcile", "externalWaits", "coordinatorActivity", "coordinatorRotation",
                  "coordinatorInbox", "coordinatorCommitments", "controllerHarnesses", "recoveryIncidents"))
     report["healthy"] = (not fatal and report["coordinatorRegistry"]["exitCode"] == 0
                          and report["coordinatorMetadata"]["exitCode"] == 0
