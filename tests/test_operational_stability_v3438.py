@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Adversarial v3.4.37 operational-stability regressions (GVE/Client/Server/Magic/Twenty)."""
+"""Adversarial v3.4.38 operational-stability regressions (GVE/Client/Server/Magic/Twenty)."""
 from __future__ import annotations
 import hashlib
 import importlib.util
@@ -110,10 +110,10 @@ class TransferAndEvidenceTests(Base):
 
     def test_gve_transfer_discovers_live_and_needs_review_children_without_leases(self):
         self.policy()
-        labels = ["coordinators", "project::gve", "protocol-version::3.4.37"]
-        self.manifest("gve-old", "coordinator", labels=labels, name="[gve] Coordinator v3.4.37", projectId="native-gve", workingDirectory=str(self.root),
+        labels = ["coordinators", "project::gve", "protocol-version::3.4.38"]
+        self.manifest("gve-old", "coordinator", labels=labels, name="[gve] Coordinator v3.4.38", projectId="native-gve", workingDirectory=str(self.root),
                       llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="allow-all")
-        self.manifest("gve-new", "coordinator", labels=labels, name="[gve] Coordinator v3.4.37", projectId="native-gve", workingDirectory=str(self.root),
+        self.manifest("gve-new", "coordinator", labels=labels, name="[gve] Coordinator v3.4.38", projectId="native-gve", workingDirectory=str(self.root),
                       llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="allow-all")
         worker_cwd = self.root / "gve-worker-worktree"; worker_cwd.mkdir()
         auditor_cwd = self.root / "gve-auditor-worktree"; auditor_cwd.mkdir()
@@ -126,9 +126,9 @@ class TransferAndEvidenceTests(Base):
 
     def test_transfer_child_cwd_refuses_missing_and_shared_then_adopts_unique_existing(self):
         self.policy()
-        labels = ["coordinators", "project::gve", "protocol-version::3.4.37"]
+        labels = ["coordinators", "project::gve", "protocol-version::3.4.38"]
         for sid in ("gve-old", "gve-new"):
-            self.manifest(sid, "coordinator", labels=labels, name="[gve] Coordinator v3.4.37", projectId="native-gve", workingDirectory=str(self.root), llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="allow-all")
+            self.manifest(sid, "coordinator", labels=labels, name="[gve] Coordinator v3.4.38", projectId="native-gve", workingDirectory=str(self.root), llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="allow-all")
         child_labels = ["parent-session::gve-old", "project::gve", "work-unit::audit", "attempt::1"]
 
         # The final audit finding: a live auditor without a CWD cannot be adopted.
@@ -150,11 +150,35 @@ class TransferAndEvidenceTests(Base):
         _, out = self.cli("coordinator-registry.py", "accept-transfer", "--project", "gve", "--session", "gve-new", "--expected-generation", "4")
         self.assertEqual(out["record"]["activeChildren"], ["gve-auditor"])
 
-    def test_transfer_refuses_preexisting_archived_or_foreign_child(self):
+    def test_transfer_accepts_trusted_tilde_child_cwds_with_isolated_home(self):
+        self.policy()
+        home = self.root / "isolated-home"; home.mkdir()
+        self.env["HOME"] = str(home)
+        labels = ["coordinators", "project::gve", "protocol-version::3.4.38"]
+        for sid in ("gve-old", "gve-new"):
+            self.manifest(sid, "coordinator", labels=labels, name="[gve] Coordinator v3.4.38", projectId="native-gve", workingDirectory=str(self.root), llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="allow-all")
+        worker_cwd = home / "work" / "gve-worker"; worker_cwd.mkdir(parents=True)
+        auditor_cwd = home / "work" / "gve-auditor"; auditor_cwd.mkdir(parents=True)
+        self.manifest("gve-worker", "worker", workingDirectory="~/work/gve-worker", sdkCwd=str(worker_cwd), labels=["parent-session::gve-old", "project::gve", "work-unit::ship", "attempt::1"])
+        self.manifest("gve-auditor", "auditor", sdkCwd="~/work/gve-auditor", labels=["parent-session::gve-old", "project::gve", "work-unit::audit", "attempt::1"])
+        self.registry()
+        _, out = self.cli("coordinator-registry.py", "accept-transfer", "--project", "gve", "--session", "gve-new", "--expected-generation", "4")
+        self.assertEqual(out["record"]["activeChildren"], ["gve-auditor", "gve-worker"])
+
+    def test_v3437_transfer_records_remain_compatible(self):
         self.policy()
         labels = ["coordinators", "project::gve", "protocol-version::3.4.37"]
         for sid in ("gve-old", "gve-new"):
             self.manifest(sid, "coordinator", labels=labels, name="[gve] Coordinator v3.4.37", projectId="native-gve", workingDirectory=str(self.root), llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="allow-all")
+        self.registry()
+        _, out = self.cli("coordinator-registry.py", "accept-transfer", "--project", "gve", "--session", "gve-new", "--expected-generation", "4")
+        self.assertEqual(out["record"]["generation"], 5)
+
+    def test_transfer_refuses_preexisting_archived_or_foreign_child(self):
+        self.policy()
+        labels = ["coordinators", "project::gve", "protocol-version::3.4.38"]
+        for sid in ("gve-old", "gve-new"):
+            self.manifest(sid, "coordinator", labels=labels, name="[gve] Coordinator v3.4.38", projectId="native-gve", workingDirectory=str(self.root), llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="allow-all")
         self.manifest("stale", "worker", archived=True, labels=["parent-session::gve-old", "project::gve", "work-unit::ship", "attempt::1"])
         self.registry()
         row = json.loads((self.runtime / "coordinators" / "gve.json").read_text()); row["activeChildren"] = ["stale"]
@@ -173,7 +197,7 @@ class TransferAndEvidenceTests(Base):
         return repo, sha
 
     def test_client_server_exact_candidate_handoff_acceptance_merge_and_readback_are_consumed(self):
-        self.manifest("coord", "coordinator", labels=["protocol-version::3.4.37"])
+        self.manifest("coord", "coordinator", labels=["protocol-version::3.4.38"])
         self.put(self.runtime / "coordinators" / "client.json", {"project": "client", "state": "authoritative", "coordinatorSessionId": "coord", "generation": 1})
         repo, merge = self.init_delivery_repo(); candidate = "a" * 40
         criterion = "customer completes checkout"
@@ -200,7 +224,7 @@ class TransferAndEvidenceTests(Base):
             "stories": [{"id": "ship", "title": "Ship", "state": "accepted", "deliverableClass": "product", "workUnit": "ship", "acceptanceRef": "accept", "mergeSha": merge, "mergeAuthorityRef": "merge"}],
             "completionEvidence": {"integratedCandidateRef": bind("candidate"), "acceptanceRef": bind("accept"), "releaseReadbackRef": bind("release"), "demonstrationRef": bind("demo"), "certificateRef": {"certificateId": "ship-candidate", "fingerprint": certificate_fingerprint}}}}
         _, published = self.cli("coordinator-status.py", "publish", "--project", "client", "--session", "coord", "--generation", "1", "--json", json.dumps(payload), "--apply")
-        self.assertEqual(published["record"]["protocolVersion"], "3.4.37")
+        self.assertEqual(published["record"]["protocolVersion"], "3.4.38")
         missing = json.loads(json.dumps(payload)); missing["productIncrement"]["completionEvidence"].pop("certificateRef")
         proc, _ = self.cli("coordinator-status.py", "publish", "--project", "client", "--session", "coord", "--generation", "1", "--json", json.dumps(missing), "--apply", ok=False)
         self.assertIn("requires consumed completion certificate", proc.stderr)
@@ -209,7 +233,7 @@ class TransferAndEvidenceTests(Base):
         self.assertIn("exact candidateSha", proc.stderr)
 
     def test_server_healthy_with_predecessor_archive_debt_is_not_a_context_failure(self):
-        self.manifest("server-new", "coordinator", labels=["protocol-version::3.4.37"])
+        self.manifest("server-new", "coordinator", labels=["protocol-version::3.4.38"])
         self.manifest("server-old", "coordinator", labels=["protocol-version::3.4.36"])
         self.manifest("server-worker", "worker", labels=["parent-session::server-new", "work-unit::ship", "attempt::1"])
         self.put(self.runtime / "coordinators" / "server.json", {"project": "server", "state": "authoritative", "coordinatorSessionId": "server-new", "generation": 2,
@@ -248,14 +272,14 @@ class ReleaseClosureTests(unittest.TestCase):
                 subprocess.run(cmd, cwd=repo, check=True, capture_output=True)
             token = root / "token"; token.write_text("not-a-real-token")
             token.chmod(0o644)
-            result = self.release.verify(repo, "3.4.37", str(token))
+            result = self.release.verify(repo, "3.4.38", str(token))
         self.assertFalse(result["closed"])
         self.assertIn("github-origin-identity-unreadable", result["errors"])
         self.assertIn("github-auth-token-file-unavailable", result["errors"])
 
     def receipt_body(self, **changes):
         sha = "a" * 40
-        receipt = {"schemaVersion": 1, "version": "3.4.37", "tag": "v3.4.37", "commit": sha,
+        receipt = {"schemaVersion": 1, "version": "3.4.38", "tag": "v3.4.38", "commit": sha,
                    "state": "adopted", "ownerFacingOrchestratorSessionId": "owner-orchestrator-session",
                    "adoptedAt": "2026-08-17T10:14:00Z",
                    "adoptions": [{"project": "client", "coordinatorSessionId": "client-coordinator"},
@@ -265,7 +289,7 @@ class ReleaseClosureTests(unittest.TestCase):
 
     def test_release_body_receipt_binds_exact_release_and_canonical_fleet_adoption(self):
         sha = "a" * 40
-        self.assertEqual(self.release.adoption_errors(self.receipt_body(), "v3.4.37", "3.4.37", sha), [])
+        self.assertEqual(self.release.adoption_errors(self.receipt_body(), "v3.4.38", "3.4.38", sha), [])
         for field, value in (("schemaVersion", 2), ("version", "3.4.36"), ("tag", "v3.4.36"),
                              ("commit", "b" * 40), ("state", "draft"),
                              ("ownerFacingOrchestratorSessionId", " "), ("adoptedAt", ""),
@@ -273,13 +297,13 @@ class ReleaseClosureTests(unittest.TestCase):
                                              {"project": "client", "coordinatorSessionId": "client-coordinator"}]),
                              ("adoptions", [{"project": "client", "coordinatorSessionId": "client-coordinator"},
                                              {"project": "client", "coordinatorSessionId": "other-coordinator"}])):
-            self.assertEqual(self.release.adoption_errors(self.receipt_body(**{field: value}), "v3.4.37", "3.4.37", sha),
+            self.assertEqual(self.release.adoption_errors(self.receipt_body(**{field: value}), "v3.4.38", "3.4.38", sha),
                              ["fleet-adoption-receipt-mismatch"], field)
         duplicate = self.receipt_body().replace('"schemaVersion": 1', '"schemaVersion": 1, "schemaVersion": 1')
-        self.assertEqual(self.release.adoption_errors(duplicate, "v3.4.37", "3.4.37", sha),
+        self.assertEqual(self.release.adoption_errors(duplicate, "v3.4.38", "3.4.38", sha),
                          ["fleet-adoption-receipt-missing-or-invalid"])
         doubled = self.receipt_body() + self.receipt_body()
-        self.assertEqual(self.release.adoption_errors(doubled, "v3.4.37", "3.4.37", sha),
+        self.assertEqual(self.release.adoption_errors(doubled, "v3.4.38", "3.4.38", sha),
                          ["fleet-adoption-receipt-missing-or-invalid"])
 
     def test_release_receipt_replaces_impossible_tagged_tree_self_reference(self):
@@ -292,14 +316,14 @@ class ReleaseClosureTests(unittest.TestCase):
             subprocess.run(("git", "add", "payload"), cwd=repo, check=True, capture_output=True)
             subprocess.run(("git", "commit", "-m", "payload"), cwd=repo, check=True, capture_output=True)
             tag_sha = subprocess.run(("git", "rev-parse", "HEAD"), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
-            receipt = {"schemaVersion": 1, "version": "3.4.37", "tag": "v3.4.37", "commit": tag_sha, "state": "adopted"}
-            adoption_file = repo / ".craft-protocol" / "adoptions" / "v3.4.37.json"; adoption_file.parent.mkdir(parents=True)
+            receipt = {"schemaVersion": 1, "version": "3.4.38", "tag": "v3.4.38", "commit": tag_sha, "state": "adopted"}
+            adoption_file = repo / ".craft-protocol" / "adoptions" / "v3.4.38.json"; adoption_file.parent.mkdir(parents=True)
             adoption_file.write_text(json.dumps(receipt) + "\n")
             subprocess.run(("git", "add", ".craft-protocol"), cwd=repo, check=True, capture_output=True)
             subprocess.run(("git", "commit", "-m", "self reference"), cwd=repo, check=True, capture_output=True)
-            subprocess.run(("git", "tag", "-a", "v3.4.37", "-m", "release"), cwd=repo, check=True, capture_output=True)
-            self.assertNotEqual(subprocess.run(("git", "rev-parse", "v3.4.37^{}"), cwd=repo, check=True, capture_output=True, text=True).stdout.strip(), tag_sha)
-        self.assertEqual(self.release.adoption_errors(self.receipt_body(), "v3.4.37", "3.4.37", "a" * 40), [])
+            subprocess.run(("git", "tag", "-a", "v3.4.38", "-m", "release"), cwd=repo, check=True, capture_output=True)
+            self.assertNotEqual(subprocess.run(("git", "rev-parse", "v3.4.38^{}"), cwd=repo, check=True, capture_output=True, text=True).stdout.strip(), tag_sha)
+        self.assertEqual(self.release.adoption_errors(self.receipt_body(), "v3.4.38", "3.4.38", "a" * 40), [])
 
     def test_receipt_is_required_only_after_release_is_published_and_latest(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -314,12 +338,12 @@ class ReleaseClosureTests(unittest.TestCase):
                 self.release.remote_sha256 = lambda *_args: "c" * 64
                 self.release.installer_errors = lambda *_args: []
                 def result(draft, latest_id=1):
-                    release = {"id": 1, "tag_name": "v3.4.37", "draft": draft, "prerelease": False,
+                    release = {"id": 1, "tag_name": "v3.4.38", "draft": draft, "prerelease": False,
                                "published_at": "2026-08-17T10:14:00Z", "target_commitish": sha,
                                "assets": [{"name": name, "digest": "sha256:" + "c" * 64} for name in ("manifest.sha256", "install.sh")]}
                     latest = {**release, "id": latest_id}
-                    self.release.api = lambda _token, endpoint: release if endpoint.endswith("releases/tags/v3.4.37") else (latest if endpoint.endswith("releases/latest") else None)
-                    return self.release.verify(repo, "3.4.37", str(token))["errors"]
+                    self.release.api = lambda _token, endpoint: release if endpoint.endswith("releases/tags/v3.4.38") else (latest if endpoint.endswith("releases/latest") else None)
+                    return self.release.verify(repo, "3.4.38", str(token))["errors"]
                 self.assertNotIn("fleet-adoption-receipt-missing-or-invalid", result(True))
                 self.assertNotIn("fleet-adoption-receipt-missing-or-invalid", result(False, latest_id=2))
                 self.assertIn("fleet-adoption-receipt-missing-or-invalid", result(False))
@@ -328,7 +352,7 @@ class ReleaseClosureTests(unittest.TestCase):
                  self.release.remote_sha256, self.release.installer_errors) = original
 
     def test_github_contents_wrapped_base64_is_strict_but_accepts_realistic_line_wraps(self):
-        payload = b'{"release":"v3.4.37", "files": ["README.md", "manifest.sha256"]}' + bytes([10])
+        payload = b'{"release":"v3.4.38", "files": ["README.md", "manifest.sha256"]}' + bytes([10])
         wrapped = __import__("base64").encodebytes(payload).decode("ascii")
         self.assertEqual(self.release.decode_github_content(wrapped), payload)
         self.assertIsNone(self.release.decode_github_content(wrapped.replace(chr(10), chr(160), 1)))
@@ -346,7 +370,7 @@ class ReleaseClosureTests(unittest.TestCase):
                 def check(remote_manifest):
                     files = {"manifest.sha256": remote_manifest, "a.txt": a, "b.txt": b}
                     self.release.remote_file = lambda *_args: files.get(_args[2])
-                    return self.release.remote_manifest_errors(repo, "token", "owner/repo", "v3.4.37")
+                    return self.release.remote_manifest_errors(repo, "token", "owner/repo", "v3.4.38")
                 partial = f"{hashlib.sha256(a).hexdigest()}  a.txt".encode() + line
                 extra = local + f"{hashlib.sha256(b).hexdigest()}  extra.txt".encode() + line
                 duplicate = local + f"{hashlib.sha256(a).hexdigest()}  a.txt".encode() + line
@@ -371,8 +395,8 @@ class ReportingPermitTests(Base):
         self.manifest("owner", "owner")
         self.event("owner", "owner-query", self.now - 10, type="user", content="What is the current product status?")
         for sid in coordinators:
-            self.manifest(sid, "coordinator", labels=["coordinators", "project::p", "protocol-version::3.4.37"],
-                          name="[p] Coordinator v3.4.37", projectId="native", workingDirectory=str(self.root),
+            self.manifest(sid, "coordinator", labels=["coordinators", "project::p", "protocol-version::3.4.38"],
+                          name="[p] Coordinator v3.4.38", projectId="native", workingDirectory=str(self.root),
                           llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="allow-all")
 
     def issue(self, coordinator, permit_id, ttl=60):
@@ -419,6 +443,32 @@ class ReportingPermitTests(Base):
         self.assertEqual(renewed["record"]["state"], "authoritative")
         self.assertEqual(renewed["record"]["activeChildren"], ["live-child"])
         self.assertNotIn("reportingViolation", renewed["record"])
+
+    def test_successful_renew_refreshes_policy_epoch_without_mutating_operational_state(self):
+        self.policy(); self.setup_sessions("coord")
+        self.put(self.runtime / "coordinators" / "p.json", {
+            "project": "p", "projectId": "native", "state": "authoritative",
+            "coordinatorSessionId": "coord", "generation": 7,
+            "activeChildren": ["worker-a"], "unresolvedGates": ["gate-a"],
+            "transferStartedAt": 123, "reportingMode": "pull-only",
+            "reportingPolicyRevision": 1, "reportingPolicyFingerprint": "old-policy",
+            "leaseExpiresAt": self.now + 1
+        })
+        self.put(self.runtime / "reporting-policy.json", {
+            "schemaVersion": 1, "mode": "pull-only", "ownerFacingSessionId": "owner",
+            "configuredAt": 2, "interception": "unavailable",
+            "detection": "best-effort-session-transcript"
+        })
+        _, renewed = self.cli("coordinator-registry.py", "renew", "--project", "p", "--session", "coord")
+        record = renewed["record"]
+        self.assertEqual(record["reportingMode"], "pull-only")
+        self.assertEqual(record["reportingPolicyRevision"], 2)
+        self.assertNotEqual(record["reportingPolicyFingerprint"], "old-policy")
+        self.assertEqual(record["generation"], 7)
+        self.assertEqual(record["state"], "authoritative")
+        self.assertEqual(record["activeChildren"], ["worker-a"])
+        self.assertEqual(record["unresolvedGates"], ["gate-a"])
+        self.assertEqual(record["transferStartedAt"], 123)
 
     def test_exact_permitted_reply_consumes_once_and_silence_does_not_pause_work(self):
         self.policy(); self.setup_sessions("coord")

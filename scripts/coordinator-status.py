@@ -41,8 +41,10 @@ GATES = RUNTIME / "owner-gates"
 INBOX = RUNTIME / "coordinator-inbox"
 COMMITMENTS = RUNTIME / "coordinator-commitments"
 SCHEMA = 1
-CURRENT_VERSION = "3.4.37"
-CURRENT_PROTOCOL_LABELS = {"protocol-version::3.4.36", "protocol-version::3.4.37"}
+CURRENT_VERSION = "3.4.38"
+# Status publication remains able to read prior v3.4.36/v3.4.37 records.
+CURRENT_PROTOCOL_LABELS = {"protocol-version::3.4.36", "protocol-version::3.4.37", "protocol-version::3.4.38"}
+STRICT_COMPLETION_PROTOCOL_LABELS = {"protocol-version::3.4.37", "protocol-version::3.4.38"}
 
 PHASES = {"initializing", "executing", "waiting", "blocked", "review", "complete", "hold"}
 TERMINAL_PHASES = {"complete", "hold", "blocked"}
@@ -981,7 +983,7 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
                                                 str(reuse.get("testEnvironmentFingerprint") or "")):
         fail("productIncrement.evidenceReuse must bind observed candidate SHA and environment/input fingerprint")
     completion = increment.get("completionEvidence") or {}
-    strict_v3437 = "protocol-version::3.4.37" in set((common.read_manifest(coordinator) or {}).get("labels") or [])
+    strict_completion = bool(STRICT_COMPLETION_PROTOCOL_LABELS & set((common.read_manifest(coordinator) or {}).get("labels") or []))
     if increment.get("stage") == "complete":
         bound: dict[str, dict[str, Any]] = {}
         for key in ("integratedCandidateRef", "acceptanceRef", "releaseReadbackRef", "demonstrationRef"):
@@ -998,10 +1000,10 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
             bound[key] = item
         if bound["integratedCandidateRef"].get("kind") != "terminal-handoff":
             fail("integratedCandidateRef must reference a terminal-handoff")
-        # v3.4.37 consumes a concrete candidate, not four plausible event labels.
+        # v3.4.37+ consumes a concrete candidate, not four plausible event labels.
         # Legacy v3.4.36 completion records remain readable without these markers.
         candidate_values = evidence_values(bound["integratedCandidateRef"], "candidateSha")
-        if strict_v3437 and (len(candidate_values) != 1 or not all(COMMIT_SHA.fullmatch(value) for value in candidate_values)):
+        if strict_completion and (len(candidate_values) != 1 or not all(COMMIT_SHA.fullmatch(value) for value in candidate_values)):
             fail("integratedCandidateRef must carry one exact candidateSha evidence marker")
         candidate_sha = next(iter(candidate_values), None)
         acceptance_kind = bound["acceptanceRef"].get("kind")
@@ -1013,7 +1015,7 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
             fail("acceptanceRef must reference a verification-grade acceptance report")
         candidate_unit = str(bound["integratedCandidateRef"].get("workUnit") or "")
         acceptance_unit = str(bound["acceptanceRef"].get("workUnit") or "")
-        if strict_v3437 and (candidate_sha not in evidence_values(bound["acceptanceRef"], "candidateSha")
+        if strict_completion and (candidate_sha not in evidence_values(bound["acceptanceRef"], "candidateSha")
                              or "PASS" not in evidence_values(bound["acceptanceRef"], "verdict")
                              or not candidate_unit or acceptance_unit != candidate_unit):
             fail("acceptanceRef must consume exact candidateSha/verdict/workUnit")
@@ -1028,10 +1030,10 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
             fail("releaseReadbackRef must retain one exact terminal external-wait provenance binding")
         merged_stories = [story for story in increment.get("stories") or []
                           if isinstance(story, dict) and story.get("mergeSha")]
-        if strict_v3437:
+        if strict_completion:
             certificate_ref = completion.get("certificateRef")
             if not isinstance(certificate_ref, dict):
-                fail("v3.4.37 complete Product Increment requires consumed completion certificate")
+                fail("v3.4.38 complete Product Increment requires consumed completion certificate")
             certificate_entry = exact_completion_certificates(project).get(str(certificate_ref.get("certificateId") or ""))
             if not certificate_entry or certificate_entry.get("fingerprint") != certificate_ref.get("fingerprint"):
                 fail("completion certificate is missing, invalid, or immutable binding mismatched")
@@ -1043,7 +1045,7 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
                     or not certificate.get("mergedMainRunIds")):
                 fail("completion certificate must bind exact candidate PASS workUnit and merged-main readback")
             if len(merged_stories) != 1:
-                fail("v3.4.37 completion certificate consumes exactly one merged workUnit")
+                fail("v3.4.38 completion certificate consumes exactly one merged workUnit")
             story = merged_stories[0]
             if (str(story.get("workUnit") or story.get("id")) != candidate_unit
                     or story.get("acceptanceRef") != bound["acceptanceRef"].get("eventKey")
@@ -1067,14 +1069,14 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
                 standing = [receipt for receipt in receipts
                             if str(receipt.get("workUnit") or "") == unit
                             and authority_ref in {unit, str(receipt.get("workUnit") or "")}
-                            and (not strict_v3437 or receipt.get("candidateSha") == candidate_sha)]
+                            and (not strict_completion or receipt.get("candidateSha") == candidate_sha)]
                 if gate is not None and str(gate.get("workUnit") or "") != unit:
                     fail("merge-authorized completion gate authority must bind the exact workUnit")
                 if gate is None and not standing:
                     fail("merge-authorized completion requires observed resolved gate or standing receipt for exact workUnit")
                 if f"merged-main:{story.get('mergeSha')}" not in release_evidence:
                     fail("merge-authorized completion requires merged-main readback evidence for exact mergeSha")
-                if strict_v3437 and (candidate_sha not in evidence_values(release, "candidateSha")
+                if strict_completion and (candidate_sha not in evidence_values(release, "candidateSha")
                                      or str(release.get("workUnit") or "") != unit
                                      or candidate_unit != unit):
                     fail("releaseReadbackRef must bind exact candidateSha and workUnit")
@@ -1632,7 +1634,7 @@ def build_report(project: str, now: int) -> dict[str, Any]:
     if malformed:
         issues.append("stored-status-malformed")
     classification = "contradictory" if malformed or current_null_increment else verdict["classification"]
-    # This new public classification applies only to current v3.4.37 snapshots;
+    # This public classification applies only to current v3.4.38 snapshots;
     # older transfer records stay readable with their historical classification.
     maintenance_debt = list(synth.get("maintenanceDebt") or [])
     if (status and status.get("protocolVersion") == CURRENT_VERSION and maintenance_debt

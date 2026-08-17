@@ -8,6 +8,14 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 - Replaced the impossible tagged-tree fleet-adoption self-reference with one authenticated GitHub Release-body receipt. Final non-draft Latest closure now binds schema/version/tag/the exact peeled tag commit, adopted state, owner-facing orchestrator session, adoption timestamp, and a canonical unique project/coordinator roster without changing the tagged commit after rollout.
 
+## [3.4.38] — 2026-08-17
+
+### Clean rotation hotfix
+
+- Transfer adoption now accepts an existing, unique worker or auditor CWD written in protocol-trusted `~/...` syntax after canonical expansion. Relative non-tilde, missing, dangling, disagreeing, parent-shared, and colliding paths remain refused.
+- A successful coordinator renewal refreshes the configured pull-only reporting mode, policy revision, and fingerprint while preserving generation, state, gates, children, and reporting-only quarantine recovery.
+- Coordinator archival hygiene is now mandatory immediately after transfer adoption and at material transitions: archive first, then guarded-reap preservation-proven predecessors, terminal/unused children, and stale coordinators in bounded batches until machine-visible backlog and debt violations clear. Dirty, shared-CWD, unknown-holder work and history remain protected; cleanup is never reported to Fleet.
+
 ## [3.4.37] — 2026-08-16
 
 ### Operational stability and release closure

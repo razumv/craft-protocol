@@ -107,6 +107,25 @@ class DeliveryModeV320Tests(unittest.TestCase):
         self.assertIn("Advance automatically across the DAG", spec)
         self.assertIn("Human-stop boundary", spec)
 
+    def test_archival_hygiene_is_mandatory_exhaustive_and_never_owner_reported(self):
+        skill = self.read("skills/coordinator-lifecycle-protocol/SKILL.md")
+        kickoff = self.read("scripts/coordinator-kickoff.md")
+        defaults = self.read("docs/CURRENT-DEFAULTS.md")
+        for text in (skill, kickoff, defaults):
+            self.assertIn("archivableBacklog", text)
+            self.assertIn("predecessor-not-archived", text)
+            self.assertIn("stale-coordinator-session", text)
+            self.assertIn("unknown-holder", text)
+            self.assertIn("cleanup reports to Fleet", text)
+        self.assertIn("Immediately after `accept-transfer`", skill)
+        self.assertIn("Continue bounded batches", skill)
+        self.assertIn("Archive first, then use the guarded reaper", skill)
+        self.assertIn("Never delete history", skill)
+        self.assertIn("сразу после `accept-transfer` adoption", kickoff)
+        self.assertIn("Archive FIRST, потом guarded reaper", kickoff)
+        self.assertIn("immediately after transfer adoption/material transitions", defaults)
+        self.assertIn("never delete history", defaults)
+
     def test_manifest_generator_covers_release_changelog(self):
         generator = self.read("tools/generate-manifest.sh")
         manifest = self.read("manifest.sha256")
