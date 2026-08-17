@@ -116,6 +116,11 @@ def supervise(args: argparse.Namespace) -> int:
         try:
             fcntl.flock(heavy_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
+            # This supervisor owns no heavyweight lock after a failed nonblocking
+            # acquisition. Close its handle before making the terminal result
+            # observable, just as successful finalization closes all owned state
+            # before publishing its receipt.
+            heavy_handle.close()
             atomic_json(path_for(args.session), {
                 "schemaVersion": 1, "sessionId": args.session, "supervisorPid": os.getpid(),
                 "childPid": None, "cwd": str(cwd), "logPath": str(log_path),
@@ -142,32 +147,39 @@ def supervise(args: argparse.Namespace) -> int:
         "heavy": bool(args.heavy),
     }
     atomic_json(path_for(args.session), receipt)
-    with log_path.open("ab", buffering=0) as log:
-        log.write((f"\n===== observable job start {time.strftime('%F %T')} =====\n").encode())
-        try:
-            child = subprocess.Popen(args.command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT)
-            receipt["childPid"] = child.pid
-            receipt["updatedAt"] = now_ms()
-            atomic_json(path_for(args.session), receipt)
-            heartbeat(args.session, "long-job", "observable child started", child.pid, str(log_path))
-            rc = child.wait()
-        except Exception as exc:
-            log.write((f"observable job launch failure: {exc}\n").encode())
-            rc = 127
-            receipt["launchError"] = str(exc)
-        receipt["exitCode"] = rc
-        receipt["finishedAt"] = now_ms()
-        receipt["updatedAt"] = now_ms()
-        atomic_json(path_for(args.session), receipt)
-        log.write((f"===== observable job exit {rc} {time.strftime('%F %T')} =====\n").encode())
-    heartbeat(args.session, "job-finished", f"observable job exited {rc}", None, str(log_path))
-    if heavy_handle is not None:
-        owner = read_json_file(HEAVY_OWNER) or {}
-        if owner.get("sessionId") == args.session:
-            with contextlib.suppress(FileNotFoundError):
-                HEAVY_OWNER.unlink()
-        fcntl.flock(heavy_handle.fileno(), fcntl.LOCK_UN)
-        heavy_handle.close()
+    # A terminal receipt is the linearization point for consumers that may reap a
+    # worktree or start another heavy job. Finish every owned operation first:
+    # close the log, record the final heartbeat, and release/remove heavyweight
+    # ownership. If finalization crashes, the nonterminal receipt and dead PID
+    # deliberately remain recoverable as a failed observable job.
+    try:
+        with log_path.open("ab", buffering=0) as log:
+            log.write((f"\n===== observable job start {time.strftime('%F %T')} =====\n").encode())
+            try:
+                child = subprocess.Popen(args.command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT)
+                receipt["childPid"] = child.pid
+                receipt["updatedAt"] = now_ms()
+                atomic_json(path_for(args.session), receipt)
+                heartbeat(args.session, "long-job", "observable child started", child.pid, str(log_path))
+                rc = child.wait()
+            except Exception as exc:
+                log.write((f"observable job launch failure: {exc}\n").encode())
+                rc = 127
+                receipt["launchError"] = str(exc)
+            log.write((f"===== observable job exit {rc} {time.strftime('%F %T')} =====\n").encode())
+        heartbeat(args.session, "job-finished", f"observable job exited {rc}", None, str(log_path))
+    finally:
+        if heavy_handle is not None:
+            owner = read_json_file(HEAVY_OWNER) or {}
+            if owner.get("sessionId") == args.session:
+                with contextlib.suppress(FileNotFoundError):
+                    HEAVY_OWNER.unlink()
+            fcntl.flock(heavy_handle.fileno(), fcntl.LOCK_UN)
+            heavy_handle.close()
+    receipt["exitCode"] = rc
+    receipt["finishedAt"] = now_ms()
+    receipt["updatedAt"] = now_ms()
+    atomic_json(path_for(args.session), receipt)
     return rc
 
 
@@ -181,8 +193,12 @@ def cmd_start(args: argparse.Namespace) -> int:
         raise SystemExit("command required after --")
     if read_job(args.session) and not args.replace:
         existing = read_job(args.session) or {}
-        pid = existing.get("childPid") or existing.get("supervisorPid")
-        if pid:
+        # The child can exit before its supervisor completes its final owned
+        # writes. Check both identities so a dead child never masks that live
+        # supervisor and allows a duplicate launch into its cleanup window.
+        for pid in (existing.get("childPid"), existing.get("supervisorPid")):
+            if not pid:
+                continue
             try:
                 os.kill(int(pid), 0)
                 raise SystemExit(f"live receipt already exists for {args.session}: pid {pid}")
@@ -209,12 +225,16 @@ def cmd_status(args: argparse.Namespace) -> int:
     if not value:
         print(json.dumps({"sessionId": args.session, "state": "absent"}, indent=2))
         return 1
-    pid = value.get("childPid") or value.get("supervisorPid")
+    # The supervisor remains live during finalization after its child exits.
+    # Expose either live identity rather than letting a dead child mask it.
     alive = False
-    if pid:
+    for pid in (value.get("childPid"), value.get("supervisorPid")):
+        if not pid:
+            continue
         try:
             os.kill(int(pid), 0)
             alive = True
+            break
         except Exception:
             pass
     value["alive"] = alive

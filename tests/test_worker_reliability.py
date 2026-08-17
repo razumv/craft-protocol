@@ -1,3 +1,6 @@
+import argparse
+import fcntl
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -213,6 +216,58 @@ class ReliabilityToolsTest(unittest.TestCase):
         self.assertIsNotNone(value)
         self.assertEqual(value.get("exitCode"), 0)
         self.assertIn("observable-ok", log.read_text())
+
+    def test_terminal_receipt_waits_for_all_finalization(self):
+        # The terminal receipt is the handoff/reap linearization point. Exercise
+        # the supervisor directly so this proves the ordering without timing:
+        # the prior implementation published exitCode before the exit marker,
+        # log close, final heartbeat, owner cleanup, and heavy-lock release.
+        spec = importlib.util.spec_from_file_location(
+            f"observable_job_{time.time_ns()}", SCRIPTS / "observable-job.py")
+        observable = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(observable)
+        observable.RUNTIME = self.runtime
+        observable.JOBS = self.runtime / "worker-jobs"
+        observable.HEAVY_LOCK = self.runtime / "heavy-job.lock"
+        observable.HEAVY_OWNER = self.runtime / "heavy-job-owner.json"
+        log_path = self.root / "terminal-order.log"
+        events = []
+        original_atomic = observable.atomic_json
+
+        def heartbeat(session, phase, evidence, pid, log):
+            events.append(f"heartbeat:{phase}")
+
+        def terminal_after_finalization(path, value):
+            if path == observable.path_for("terminal-order") and value.get("exitCode") is not None:
+                self.assertEqual(events[-1:], ["heartbeat:job-finished"])
+                self.assertFalse(observable.HEAVY_OWNER.exists())
+                with observable.HEAVY_LOCK.open("a+") as probe:
+                    fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(probe.fileno(), fcntl.LOCK_UN)
+                self.assertIn("observable job exit 0", log_path.read_text())
+            original_atomic(path, value)
+
+        observable.heartbeat = heartbeat
+        observable.atomic_json = terminal_after_finalization
+        args = argparse.Namespace(
+            session="terminal-order", cwd=str(self.root), log=str(log_path), heavy=True,
+            command=[sys.executable, "-c", "pass"])
+        self.assertEqual(observable.supervise(args), 0)
+        receipt = json.loads((self.runtime / "worker-jobs/terminal-order.json").read_text())
+        self.assertEqual(receipt["exitCode"], 0)
+
+    def test_status_keeps_a_live_supervisor_visible_after_child_exit(self):
+        # A completed child must not hide its supervisor while it finalizes.
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        child.wait(timeout=5)
+        jobs = self.runtime / "worker-jobs"
+        jobs.mkdir(parents=True)
+        (jobs / "supervisor.json").write_text(json.dumps({
+            "sessionId": "supervisor", "childPid": child.pid,
+            "supervisorPid": os.getpid(), "exitCode": None,
+            "logPath": str(self.root / "supervisor.log")}))
+        status = json.loads(self.exec_tool("observable-job.py", "status", "--session", "supervisor").stdout)
+        self.assertTrue(status["alive"])
 
     def test_heavy_jobs_are_serialized(self):
         self.manifest("heavy1")
