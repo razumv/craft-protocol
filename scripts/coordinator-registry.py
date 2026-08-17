@@ -30,10 +30,10 @@ FALLBACK_TTL = int(os.environ.get("CRAFT_FALLBACK_TTL_SECONDS", "3600"))
 VALID_STATES = {"authoritative", "rotating", "hold", "superseded", "needs-owner"}
 REPORTING_POLICY = RUNTIME / "reporting-policy.json"
 REPORTING_POLICY_TOOL = HERE / "reporting-policy.py"
-CURRENT_VERSION = "3.4.39"
-# Retain already-admitted v3.4.35–v3.4.38 coordinators as readable/adoptable
+CURRENT_VERSION = "3.4.40"
+# Retain already-admitted v3.4.35–v3.4.39 coordinators as readable/adoptable
 # runtime records; new claims and successors use CURRENT_VERSION.
-COMPATIBLE_COORDINATOR_VERSIONS = {"3.4.35", "3.4.36", "3.4.37", "3.4.38", CURRENT_VERSION}
+COMPATIBLE_COORDINATOR_VERSIONS = {"3.4.35", "3.4.36", "3.4.37", "3.4.38", "3.4.39", CURRENT_VERSION}
 ROTATION_GRACE_MS = int(os.environ.get("CRAFT_ROTATION_GRACE_SECONDS", "900")) * 1000
 ROTATION_MESSAGE_HYSTERESIS = int(os.environ.get("CRAFT_ROTATION_MESSAGE_HYSTERESIS", "450"))
 ROTATION_TOKEN_HYSTERESIS = int(os.environ.get("CRAFT_ROTATION_TOKEN_HYSTERESIS", "180000"))
@@ -103,7 +103,7 @@ def manifest_or_die(sid: str) -> dict[str, Any]:
 def reporting_policy(required: bool = False) -> dict[str, Any]:
     row = common.read_json(REPORTING_POLICY)
     if not common.valid_reporting_policy(row):
-        if required: raise SystemExit("v3.4.39 requires valid configured pull-only reporting policy")
+        if required: raise SystemExit("v3.4.40 requires valid configured pull-only reporting policy")
         return {}
     fingerprint = __import__("hashlib").sha256(json.dumps({"mode": row.get("mode"), "ownerFacingSessionId": row.get("ownerFacingSessionId"), "configuredAt": row.get("configuredAt")}, sort_keys=True).encode()).hexdigest()
     return {"reportingMode": "pull-only", "reportingPolicyRevision": row.get("configuredAt"), "reportingPolicyFingerprint": fingerprint}
@@ -145,7 +145,7 @@ def provider_fields(manifest: dict[str, Any]) -> dict[str, Any]:
 def cmd_claim(args: argparse.Namespace) -> int:
     project = clean_project(args.project)
     manifest = manifest_or_die(args.session)
-    # Claim creates/replaces authority: it is always a current v3.4.39 admission,
+    # Claim creates/replaces authority: it is always a current v3.4.40 admission,
     # never a loophole for malformed legacy successors.
     validate_successor_manifest(manifest, project, {"projectId": args.project_id or manifest.get("projectId")})
     reporting_policy(True)
@@ -350,7 +350,7 @@ def cmd_reconcile_activity(args: argparse.Namespace) -> int:
 def validate_successor_manifest(manifest: dict[str, Any], project: str, record: dict[str, Any]) -> None:
     raw_labels = manifest.get("labels")
     labels = raw_labels if isinstance(raw_labels, list) and all(isinstance(x, str) for x in raw_labels) else []
-    # Existing v3.4.35–v3.4.38 coordinators remain admissible during rollout. New v3.4.39
+    # Existing v3.4.35–v3.4.39 coordinators remain admissible during rollout. New v3.4.40
     # coordinators use the current name/label pair; mixed or duplicated identities
     # are never accepted.
     roles = [x for x in labels if x.startswith("agent-role::")]

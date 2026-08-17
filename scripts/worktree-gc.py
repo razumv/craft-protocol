@@ -281,7 +281,7 @@ def build_report(explicit_repos: list[str], unowned_min_age_ms: int) -> dict[str
             errors.append(f"{root}: {error}")
             continue
         rows.extend(classify(row, root, snapshot, now, unowned_min_age_ms) for row in worktrees)
-    return {"schemaVersion": 1, "protocolVersion": "3.4.39", "generatedAt": now,
+    return {"schemaVersion": 1, "protocolVersion": "3.4.40", "generatedAt": now,
             "mode": "dry-run", "applied": False, "observationComplete": not errors and snapshot["holdersComplete"],
             "observationErrors": [*errors, *([snapshot["holdersError"]] if snapshot["holdersError"] else [])],
             "repositories": repos, "worktrees": rows}
@@ -331,7 +331,7 @@ def main() -> int:
         if args.apply:
             prior_age = common.now_ms() - int((prior or {}).get("generatedAt") or 0)
             prior_ok = bool(prior and prior.get("schemaVersion") == 1
-                            and prior.get("protocolVersion") == "3.4.39"
+                            and prior.get("protocolVersion") == "3.4.40"
                             and prior.get("mode") == "dry-run"
                             and prior.get("observationComplete")
                             and prior.get("unownedMinAgeHours") == args.unowned_min_age_hours

@@ -262,6 +262,6 @@ class OrchestrationV320Test(unittest.TestCase):
         self.exec_tool("coordinator-registry.py","inspect","--project","demo")
         report=json.loads(self.exec_tool("coordinator-reconcile.py").stdout)
         self.assertTrue(report["healthy"]); self.assertEqual(report["coordinators"][0]["issues"],[])
-        self.assertEqual(report["coordinators"][0]["desiredName"], "[demo] Coordinator v3.4.39")
+        self.assertEqual(report["coordinators"][0]["desiredName"], "[demo] Coordinator v3.4.40")
 
 if __name__ == "__main__": unittest.main()

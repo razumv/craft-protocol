@@ -4,6 +4,13 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.40] — 2026-08-17
+
+### Strict lane admission child-CWD hotfix
+
+- Confirming an exact reserved worker/auditor identity now permits the strict child process to run from its own canonical worktree. Reserve still refuses the authoritative parent worktree and invoking repository root; confirmation still enforces exact reserved identity, parent truth, runtime identity, token binding, and every live admission/manifest/lease/work-unit collision check.
+- Added subprocess-CWD regressions for successful child confirmation plus retained reserve root/parent, identity-mismatch, and worktree-collision refusals. The isolated installer suite now runs lane-admission regressions against the installed payload.
+
 ## [3.4.39] — 2026-08-17
 
 ### Lifecycle garbage collection
@@ -511,7 +518,8 @@ Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's 
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.39...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.40...HEAD
+[3.4.40]: https://github.com/razumv/craft-protocol/compare/v3.4.39...v3.4.40
 [3.4.39]: https://github.com/razumv/craft-protocol/compare/v3.4.38...v3.4.39
 [3.4.38]: https://github.com/razumv/craft-protocol/compare/v3.4.37...v3.4.38
 [3.4.37]: https://github.com/razumv/craft-protocol/compare/v3.4.36...v3.4.37

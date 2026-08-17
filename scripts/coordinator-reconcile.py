@@ -22,7 +22,7 @@ HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("orch_common", HERE / "orchestration-common.py")
 common = importlib.util.module_from_spec(spec); spec.loader.exec_module(common)  # type: ignore
 
-CURRENT_VERSION = "3.4.39"
+CURRENT_VERSION = "3.4.40"
 PROJECT_NAMES = {"magicmarkets": "Magicmarkets", "twenty": "Twenty", "lineage-client": "Lineage Client",
                  "lineage-server": "Lineage Server", "magnetring": "Magnetring", "gta-kiev": "GTA-Kiev", "gve": "GVE"}
 
