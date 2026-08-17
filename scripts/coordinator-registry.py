@@ -371,6 +371,29 @@ def rotation_metric(record: dict[str, Any], manifest: dict[str, Any], now: int) 
             "tokenClearThreshold": ROTATION_TOKEN_HYSTERESIS}
 
 
+def transfer_child_cwd(manifest: dict[str, Any]) -> str:
+    """Return an unambiguous, canonical, existing child worktree or refuse.
+
+    Child manifests may use either historical CWD field, but an asserted field is
+    never allowed to be silently ignored.  A transfer is an authority boundary:
+    resolving a relative path against this process, accepting a dangling path, or
+    choosing between disagreeing fields could attach a live lane to the wrong
+    repository.
+    """
+    values = [manifest.get(field) for field in ("workingDirectory", "sdkCwd") if field in manifest]
+    if not values:
+        raise SystemExit("transfer child working directory missing")
+    canonical: set[str] = set()
+    for raw in values:
+        cwd = common.coordinator_cwd(raw)
+        if cwd is None or not os.path.isdir(cwd) or raw.strip() != cwd:
+            raise SystemExit("transfer child working directory is not canonical and existing")
+        canonical.add(cwd)
+    if len(canonical) != 1:
+        raise SystemExit("transfer child working directory fields disagree")
+    return canonical.pop()
+
+
 def discover_transfer_children(predecessor: str, project: str, existing: list[Any]) -> list[str]:
     """Adopt only exact live predecessor lanes; registry IDs are never trusted.
 
@@ -392,6 +415,8 @@ def discover_transfer_children(predecessor: str, project: str, existing: list[An
     seen_cwds: dict[str, str] = {}
     predecessor_manifest = common.read_manifest(predecessor) or {}
     predecessor_cwd = common.coordinator_cwd(predecessor_manifest.get("workingDirectory") or predecessor_manifest.get("sdkCwd"))
+    if predecessor_cwd is None or not os.path.isdir(predecessor_cwd):
+        raise SystemExit("transfer predecessor working directory is invalid")
     adopted: list[str] = []
     for session_id in sorted(candidates):
         manifest = manifests[session_id]
@@ -409,11 +434,10 @@ def discover_transfer_children(predecessor: str, project: str, existing: list[An
         if identity in seen_attempts:
             raise SystemExit("duplicate live transfer child work-unit/attempt")
         seen_attempts.add(identity)
-        cwd = common.canonical_path(manifest.get("workingDirectory") or manifest.get("sdkCwd"))
-        if cwd:
-            if cwd == predecessor_cwd or cwd in seen_cwds:
-                raise SystemExit("transfer child shared worktree refusal")
-            seen_cwds[cwd] = session_id
+        cwd = transfer_child_cwd(manifest)
+        if cwd == predecessor_cwd or cwd in seen_cwds:
+            raise SystemExit("transfer child shared worktree refusal")
+        seen_cwds[cwd] = session_id
         adopted.append(session_id)
     return adopted
 

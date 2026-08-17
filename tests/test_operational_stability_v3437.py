@@ -115,12 +115,40 @@ class TransferAndEvidenceTests(Base):
                       llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="allow-all")
         self.manifest("gve-new", "coordinator", labels=labels, name="[gve] Coordinator v3.4.37", projectId="native-gve", workingDirectory=str(self.root),
                       llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="allow-all")
-        self.manifest("gve-worker", "worker", labels=["parent-session::gve-old", "project::gve", "work-unit::ship", "attempt::1"])
-        self.manifest("gve-auditor", "auditor", status="needs-review", labels=["parent-session::gve-old", "project::gve", "work-unit::audit", "attempt::1"])
+        worker_cwd = self.root / "gve-worker-worktree"; worker_cwd.mkdir()
+        auditor_cwd = self.root / "gve-auditor-worktree"; auditor_cwd.mkdir()
+        self.manifest("gve-worker", "worker", workingDirectory=str(worker_cwd.resolve()), labels=["parent-session::gve-old", "project::gve", "work-unit::ship", "attempt::1"])
+        self.manifest("gve-auditor", "auditor", status="needs-review", workingDirectory=str(auditor_cwd.resolve()), labels=["parent-session::gve-old", "project::gve", "work-unit::audit", "attempt::1"])
         self.registry()
         _, out = self.cli("coordinator-registry.py", "accept-transfer", "--project", "gve", "--session", "gve-new", "--expected-generation", "4")
         self.assertEqual(out["record"]["activeChildren"], ["gve-auditor", "gve-worker"])
         self.assertEqual(out["record"]["transferDiscovery"]["predecessorSessionId"], "gve-old")
+
+    def test_transfer_child_cwd_refuses_missing_and_shared_then_adopts_unique_existing(self):
+        self.policy()
+        labels = ["coordinators", "project::gve", "protocol-version::3.4.37"]
+        for sid in ("gve-old", "gve-new"):
+            self.manifest(sid, "coordinator", labels=labels, name="[gve] Coordinator v3.4.37", projectId="native-gve", workingDirectory=str(self.root), llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="allow-all")
+        child_labels = ["parent-session::gve-old", "project::gve", "work-unit::audit", "attempt::1"]
+
+        # The final audit finding: a live auditor without a CWD cannot be adopted.
+        self.manifest("gve-auditor", "auditor", labels=child_labels)
+        self.registry()
+        proc, _ = self.cli("coordinator-registry.py", "accept-transfer", "--project", "gve", "--session", "gve-new", "--expected-generation", "4", ok=False)
+        self.assertIn("working directory missing", proc.stderr)
+
+        # A child may not inherit the parent repository CWD either.
+        self.manifest("gve-auditor", "auditor", workingDirectory=str(self.root.resolve()), labels=child_labels)
+        self.registry()
+        proc, _ = self.cli("coordinator-registry.py", "accept-transfer", "--project", "gve", "--session", "gve-new", "--expected-generation", "4", ok=False)
+        self.assertIn("shared worktree refusal", proc.stderr)
+
+        # A canonical, existing, independently owned worktree remains admissible.
+        worktree = self.root / "gve-auditor-worktree"; worktree.mkdir()
+        self.manifest("gve-auditor", "auditor", workingDirectory=str(worktree.resolve()), labels=child_labels)
+        self.registry()
+        _, out = self.cli("coordinator-registry.py", "accept-transfer", "--project", "gve", "--session", "gve-new", "--expected-generation", "4")
+        self.assertEqual(out["record"]["activeChildren"], ["gve-auditor"])
 
     def test_transfer_refuses_preexisting_archived_or_foreign_child(self):
         self.policy()
