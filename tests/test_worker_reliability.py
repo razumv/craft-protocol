@@ -274,9 +274,14 @@ class ReliabilityToolsTest(unittest.TestCase):
         self.manifest("heavy2")
         self.exec_tool("worker-lease.py", "reconcile", "--apply")
         self.exec_tool("worker-lease.py", "reconcile", "--apply")
+        release = self.root / "release-heavy1"
         self.exec_tool("observable-job.py", "start", "--session", "heavy1", "--cwd", str(self.root),
                        "--log", str(self.root / "heavy1.log"), "--heavy", "--",
-                       "/bin/sh", "-c", "sleep 1")
+                       sys.executable, "-c",
+                       "import pathlib,sys,time; p=pathlib.Path(sys.argv[1]); deadline=time.time()+15\n"
+                       "while not p.exists() and time.time()<deadline: time.sleep(0.02)\n"
+                       "raise SystemExit(0 if p.exists() else 124)",
+                       str(release))
         deadline = time.time() + 3
         while time.time() < deadline and not (self.runtime / "heavy-job-owner.json").exists():
             time.sleep(0.05)
@@ -293,6 +298,7 @@ class ReliabilityToolsTest(unittest.TestCase):
                     break
             time.sleep(0.05)
         self.assertEqual(value2.get("exitCode"), 75)
+        release.write_text("continue")
         receipt1 = self.runtime / "worker-jobs/heavy1.json"
         deadline = time.time() + 3
         while time.time() < deadline:
