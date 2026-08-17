@@ -19,7 +19,7 @@ VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 GITHUB_ORIGIN = re.compile(r"^(?:https://github\.com/|git@github\.com:)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$")
-ADOPTION_FILES = ("README.md", "docs/CURRENT-DEFAULTS.md", "install.sh", "scripts/coordinator-registry.py", "scripts/coordinator-reconcile.py", "scripts/coordinator-status.py", "scripts/recovery-admission.py", "scripts/lane-admission.py", "scripts/worker-lease.py", "scripts/observable-job.py", "skills/coordinator-lifecycle-protocol/SKILL.md", "skills/worker-completion-protocol/SKILL.md", "skills/self-healing-controller/SKILL.md")
+RECEIPT_FENCE = re.compile(r"^```json[ \t]*\r?\n(.*?)\r?\n```[ \t]*$", re.MULTILINE | re.DOTALL)
 API_HOST = "https://api.github.com"
 
 
@@ -147,14 +147,61 @@ def installer_errors(repo: Path, version: str) -> list[str]:
     return [] if code == 0 and "No files changed." in out else ["installer-dry-run-not-proven"]
 
 
-def adoption_errors(token: str, identity: str, tag: str, version: str, tag_sha: str) -> list[str]:
-    raw = remote_file(token, identity, f".craft-protocol/adoptions/{tag}.json", tag)
+def no_duplicate_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON key")
+        value[key] = item
+    return value
+
+
+def release_receipt(body: Any) -> dict[str, Any] | None:
+    """Extract exactly one strict JSON receipt from the authenticated Release body."""
+    if not isinstance(body, str):
+        return None
+    matches = RECEIPT_FENCE.findall(body)
+    if len(matches) != 1:
+        return None
     try:
-        value = json.loads((raw or b"").decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return ["fleet-adoption-record-missing-or-invalid"]
+        value = json.loads(matches[0], object_pairs_hook=no_duplicate_json_object)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def nonempty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value) and value == value.strip()
+
+
+def canonical_adoptions(value: Any) -> bool:
+    """Require an ordered, unique project/coordinator roster, not a prose claim."""
+    if not isinstance(value, list) or not value:
+        return False
+    pairs: list[tuple[str, str]] = []
+    for row in value:
+        if not isinstance(row, dict) or set(row) != {"project", "coordinatorSessionId"}:
+            return False
+        project, coordinator = row.get("project"), row.get("coordinatorSessionId")
+        if not nonempty_string(project) or not nonempty_string(coordinator):
+            return False
+        pairs.append((project, coordinator))
+    return (pairs == sorted(pairs) and len({project for project, _ in pairs}) == len(pairs)
+            and len({coordinator for _, coordinator in pairs}) == len(pairs))
+
+
+def adoption_errors(release_body: Any, tag: str, version: str, tag_sha: str) -> list[str]:
+    """Validate the post-rollout Release receipt without changing the tagged tree."""
+    value = release_receipt(release_body)
+    if value is None:
+        return ["fleet-adoption-receipt-missing-or-invalid"]
     required = {"schemaVersion": 1, "version": version, "tag": tag, "commit": tag_sha, "state": "adopted"}
-    return [] if all(value.get(key) == expected for key, expected in required.items()) and value.get("adoptedAt") else ["fleet-adoption-record-mismatch"]
+    expected_keys = {*required, "ownerFacingOrchestratorSessionId", "adoptedAt", "adoptions"}
+    if (set(value) != expected_keys or not all(value.get(key) == expected for key, expected in required.items())
+            or not nonempty_string(value.get("ownerFacingOrchestratorSessionId"))
+            or not nonempty_string(value.get("adoptedAt")) or not canonical_adoptions(value.get("adoptions"))):
+        return ["fleet-adoption-receipt-mismatch"]
+    return []
 
 
 def asset_digest(release: dict[str, Any], name: str) -> str | None:
@@ -201,6 +248,7 @@ def verify(repo: Path, version: str, token_file: str | None = None) -> dict[str,
         errors.append("remote-tag-does-not-peel-exactly-to-remote-main")
     release = api(token, f"repos/{identity}/releases/tags/{tag}")
     latest = api(token, f"repos/{identity}/releases/latest")
+    final_release = False
     if not release:
         errors.append("github-release-object-missing")
     else:
@@ -212,13 +260,18 @@ def verify(repo: Path, version: str, token_file: str | None = None) -> dict[str,
             errors.append("github-release-not-latest")
         if release.get("target_commitish") not in {tag_sha, "main"}:
             errors.append("github-release-target-mismatch")
+        final_release = (release.get("tag_name") == tag and release.get("draft") is False
+                         and release.get("prerelease") is False and bool(release.get("published_at"))
+                         and bool(latest) and latest.get("id") == release.get("id")
+                         and latest.get("tag_name") == tag)
         for name in ("manifest.sha256", "install.sh"):
             digest = remote_sha256(token, identity, name, tag)
             if not digest or asset_digest(release, name) != f"sha256:{digest}":
                 errors.append(f"github-release-asset-hash-mismatch:{name}")
     if tag_sha:
         errors += remote_manifest_errors(repo, token, identity, tag)
-        errors += adoption_errors(token, identity, tag, version, tag_sha)
+        if final_release:
+            errors += adoption_errors(release.get("body"), tag, version, tag_sha)
     errors += installer_errors(repo, version)
     return {"closed": not errors, "version": version, "tag": tag, "repository": identity,
             "remoteMainSha": main_sha if SHA.fullmatch(main_sha or "") else None,

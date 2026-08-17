@@ -114,7 +114,7 @@ Context error (3.4.37):        request-buffer/context/token errors bypass rotati
 Exact completion (3.4.37):     v3.4.37 complete bindings require exact candidateSha, verdict:PASS, merge and readback markers
 Maintenance debt (3.4.37):     live predecessor after healthy handoff → healthy-with-maintenance-debt, archive still owed
 Plan receipt (3.4.37):         authenticated owner session + exact plan bytes/SHA-256 + scope/effects/all dangerous exclusions; 60..604800s, revocable
-Release closure (3.4.37):      authenticated gh API + annotated tag exactly at origin/main + Release/Latest/assets/fleet-adoption + manifest/installer verifier
+Release closure (3.4.37):      authenticated gh API + annotated tag exactly at origin/main + final Release/Latest/assets/body receipt + manifest/installer verifier
 Transfer discovery (3.4.37):   only exact project-bound live/needs-review predecessor lanes; foreign, duplicate attempt, and shared-cwd children refuse transfer
 Admission interval:            300 seconds; report-only under kill switch
 Production admission:          capability-v2 delivery/inspect/recover on exact runtime identity

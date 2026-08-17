@@ -99,7 +99,7 @@ Chat claims, silence, status names, and repeated CI polling are not authoritativ
 - Rotation pressure is measured against the **current coordinator session** only. A bounded post-claim/transfer grace window prevents inherited counter noise; lower clear thresholds provide hysteresis after a true pressure signal. Request-buffer/context errors bypass both protections and remain concrete recovery evidence.
 - Complete v3.4.37 Product Increments consume an immutable completion-certificate file binding **and** exact candidate, `verdict:PASS`, acceptance event, merge authority, merge SHA, and merged-main readback on one work unit. Missing, cross-work-unit, stale, or byte-mutated certificate evidence refuses completion. A predecessor left live after an otherwise healthy transfer is classified `healthy-with-maintenance-debt`, never silently ignored and never conflated with a context failure.
 - `owner-plan-receipt.py` requires an authenticated configured owner session, exact plan bytes/fingerprint, increment/work-unit scope, explicit safe effects, every dangerous exclusion, bounded expiry, and durable revocation. It cannot authorize credentials, spending, deployment, protected merges, releases, remote access, or irreversible changes.
-- `release-closure.py verify` is read-only and refuses closure without a mode-restricted explicit token file and TLS-authenticated requests to fixed `api.github.com`. It derives only canonical GitHub `origin`, reads remote `main` plus annotated-tag peel directly (never cached `origin/main`), accepts only ASCII-whitespace-wrapped strict base64 Contents payloads, and requires exact Release/Latest/freshness/assets, a remote manifest with the exact locally audited path/digest set (no omissions, extras, duplicates, or unsafe paths), fleet adoption record, and no-mutation installer proof. It ignores caller-selected CLI/API environment overrides and never tags, pushes, installs, or prints credentials.
+- `release-closure.py verify` is read-only and refuses closure without a mode-restricted explicit token file and TLS-authenticated requests to fixed `api.github.com`. It derives only canonical GitHub `origin`, reads remote `main` plus annotated-tag peel directly (never cached `origin/main`), accepts only ASCII-whitespace-wrapped strict base64 Contents payloads, and requires exact Release/Latest/freshness/assets, a remote manifest with the exact locally audited path/digest set (no omissions, extras, duplicates, or unsafe paths), an authenticated final Release-body fleet-adoption receipt, and no-mutation installer proof. It ignores caller-selected CLI/API environment overrides and never tags, pushes, installs, or prints credentials.
 - Transfer acceptance revalidates both discovered and pre-existing `activeChildren`: only live, predecessor/project-bound worker/auditor lanes with unique work-unit/attempt bindings and non-colliding canonical worktrees are adoptable. Archived, foreign, stale, duplicate, or shared-cwd records refuse the handoff.
 - Pull-only reporting retains project-local violation evidence. Outbound interception remains unavailable and is never claimed; completed transcript sends to the owner-facing session require a one-use, expiring marker-bound permit for one exact prior owner request. An unresolved violation blocks claim/renew/healthy authority and drives preservation-safe successor rotation, while silence and the absence of an owner query never pause autonomous project work.
 
@@ -1002,6 +1002,20 @@ Validate packaged hashes:
 - Distinct merged-main readback IDs.
 - Closure evidence.
 - Valid completion certificate.
+
+### Before release closure
+
+1. Push the exact `main` commit and annotated tag; the tag must peel to that exact remote `main` SHA.
+2. Create the GitHub Release as a **draft** and upload `manifest.sha256` and `install.sh` with their required SHA-256 asset digests.
+3. Install and adopt the fleet.
+4. Write exactly one `json`-fenced receipt in the authenticated Release body, then publish it as the non-draft Latest Release:
+
+   ```json
+   {"schemaVersion":1,"version":"3.4.37","tag":"v3.4.37","commit":"<peeled-tag-commit-sha>","state":"adopted","ownerFacingOrchestratorSessionId":"<owner-facing-session-id>","adoptedAt":"<nonempty-timestamp>","adoptions":[{"project":"<project>","coordinatorSessionId":"<coordinator-session-id>"}]}
+   ```
+
+   `adoptions` is a nonempty canonical roster: each entry has only `project` and `coordinatorSessionId`, projects and coordinators are unique, and entries are ascending by `(project, coordinatorSessionId)`. The receipt is deliberately Release metadata, not a tracked file at the tag: committing a file that names its own resulting commit would change that commit.
+5. Run `release-closure.py verify`. The verifier requires the receipt only after the Release is published, non-draft, and Latest; it rejects missing, malformed, duplicate, stale, or noncanonical receipts.
 
 ### Before archive/reap
 

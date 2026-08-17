@@ -253,6 +253,80 @@ class ReleaseClosureTests(unittest.TestCase):
         self.assertIn("github-origin-identity-unreadable", result["errors"])
         self.assertIn("github-auth-token-file-unavailable", result["errors"])
 
+    def receipt_body(self, **changes):
+        sha = "a" * 40
+        receipt = {"schemaVersion": 1, "version": "3.4.37", "tag": "v3.4.37", "commit": sha,
+                   "state": "adopted", "ownerFacingOrchestratorSessionId": "owner-orchestrator-session",
+                   "adoptedAt": "2026-08-17T10:14:00Z",
+                   "adoptions": [{"project": "client", "coordinatorSessionId": "client-coordinator"},
+                                  {"project": "server", "coordinatorSessionId": "server-coordinator"}]}
+        receipt.update(changes)
+        return "Fleet rollout completed.\n\n```json\n" + json.dumps(receipt, sort_keys=True) + "\n```\n"
+
+    def test_release_body_receipt_binds_exact_release_and_canonical_fleet_adoption(self):
+        sha = "a" * 40
+        self.assertEqual(self.release.adoption_errors(self.receipt_body(), "v3.4.37", "3.4.37", sha), [])
+        for field, value in (("schemaVersion", 2), ("version", "3.4.36"), ("tag", "v3.4.36"),
+                             ("commit", "b" * 40), ("state", "draft"),
+                             ("ownerFacingOrchestratorSessionId", " "), ("adoptedAt", ""),
+                             ("adoptions", [{"project": "server", "coordinatorSessionId": "server-coordinator"},
+                                             {"project": "client", "coordinatorSessionId": "client-coordinator"}]),
+                             ("adoptions", [{"project": "client", "coordinatorSessionId": "client-coordinator"},
+                                             {"project": "client", "coordinatorSessionId": "other-coordinator"}])):
+            self.assertEqual(self.release.adoption_errors(self.receipt_body(**{field: value}), "v3.4.37", "3.4.37", sha),
+                             ["fleet-adoption-receipt-mismatch"], field)
+        duplicate = self.receipt_body().replace('"schemaVersion": 1', '"schemaVersion": 1, "schemaVersion": 1')
+        self.assertEqual(self.release.adoption_errors(duplicate, "v3.4.37", "3.4.37", sha),
+                         ["fleet-adoption-receipt-missing-or-invalid"])
+        doubled = self.receipt_body() + self.receipt_body()
+        self.assertEqual(self.release.adoption_errors(doubled, "v3.4.37", "3.4.37", sha),
+                         ["fleet-adoption-receipt-missing-or-invalid"])
+
+    def test_release_receipt_replaces_impossible_tagged_tree_self_reference(self):
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            for cmd in (("git", "init"), ("git", "config", "user.email", "test@example.invalid"),
+                        ("git", "config", "user.name", "Test")):
+                subprocess.run(cmd, cwd=repo, check=True, capture_output=True)
+            (repo / "payload").write_text("release payload\n")
+            subprocess.run(("git", "add", "payload"), cwd=repo, check=True, capture_output=True)
+            subprocess.run(("git", "commit", "-m", "payload"), cwd=repo, check=True, capture_output=True)
+            tag_sha = subprocess.run(("git", "rev-parse", "HEAD"), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+            receipt = {"schemaVersion": 1, "version": "3.4.37", "tag": "v3.4.37", "commit": tag_sha, "state": "adopted"}
+            adoption_file = repo / ".craft-protocol" / "adoptions" / "v3.4.37.json"; adoption_file.parent.mkdir(parents=True)
+            adoption_file.write_text(json.dumps(receipt) + "\n")
+            subprocess.run(("git", "add", ".craft-protocol"), cwd=repo, check=True, capture_output=True)
+            subprocess.run(("git", "commit", "-m", "self reference"), cwd=repo, check=True, capture_output=True)
+            subprocess.run(("git", "tag", "-a", "v3.4.37", "-m", "release"), cwd=repo, check=True, capture_output=True)
+            self.assertNotEqual(subprocess.run(("git", "rev-parse", "v3.4.37^{}"), cwd=repo, check=True, capture_output=True, text=True).stdout.strip(), tag_sha)
+        self.assertEqual(self.release.adoption_errors(self.receipt_body(), "v3.4.37", "3.4.37", "a" * 40), [])
+
+    def test_receipt_is_required_only_after_release_is_published_and_latest(self):
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw); subprocess.run(("git", "init"), cwd=repo, check=True, capture_output=True)
+            subprocess.run(("git", "remote", "add", "origin", "https://github.com/owner/repo.git"), cwd=repo, check=True, capture_output=True)
+            token = repo / "token"; token.write_text("test-token"); token.chmod(0o600)
+            original = self.release.api, self.release.remote_refs, self.release.remote_manifest_errors, self.release.remote_sha256, self.release.installer_errors
+            sha = "a" * 40
+            try:
+                self.release.remote_refs = lambda *_args: (sha, "b" * 40, sha)
+                self.release.remote_manifest_errors = lambda *_args: []
+                self.release.remote_sha256 = lambda *_args: "c" * 64
+                self.release.installer_errors = lambda *_args: []
+                def result(draft, latest_id=1):
+                    release = {"id": 1, "tag_name": "v3.4.37", "draft": draft, "prerelease": False,
+                               "published_at": "2026-08-17T10:14:00Z", "target_commitish": sha,
+                               "assets": [{"name": name, "digest": "sha256:" + "c" * 64} for name in ("manifest.sha256", "install.sh")]}
+                    latest = {**release, "id": latest_id}
+                    self.release.api = lambda _token, endpoint: release if endpoint.endswith("releases/tags/v3.4.37") else (latest if endpoint.endswith("releases/latest") else None)
+                    return self.release.verify(repo, "3.4.37", str(token))["errors"]
+                self.assertNotIn("fleet-adoption-receipt-missing-or-invalid", result(True))
+                self.assertNotIn("fleet-adoption-receipt-missing-or-invalid", result(False, latest_id=2))
+                self.assertIn("fleet-adoption-receipt-missing-or-invalid", result(False))
+            finally:
+                (self.release.api, self.release.remote_refs, self.release.remote_manifest_errors,
+                 self.release.remote_sha256, self.release.installer_errors) = original
+
     def test_github_contents_wrapped_base64_is_strict_but_accepts_realistic_line_wraps(self):
         payload = b'{"release":"v3.4.37", "files": ["README.md", "manifest.sha256"]}' + bytes([10])
         wrapped = __import__("base64").encodebytes(payload).decode("ascii")

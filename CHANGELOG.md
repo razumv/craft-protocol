@@ -4,6 +4,10 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+### Release closure correction
+
+- Replaced the impossible tagged-tree fleet-adoption self-reference with one authenticated GitHub Release-body receipt. Final non-draft Latest closure now binds schema/version/tag/the exact peeled tag commit, adopted state, owner-facing orchestrator session, adoption timestamp, and a canonical unique project/coordinator roster without changing the tagged commit after rollout.
+
 ## [3.4.37] — 2026-08-16
 
 ### Operational stability and release closure
