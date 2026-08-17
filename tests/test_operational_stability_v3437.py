@@ -393,6 +393,33 @@ class ReportingPermitTests(Base):
         self.assertIn("unresolved-owner-reporting-violation", proc.stderr)
         self.assertEqual(json.loads((self.runtime / "coordinators/p.json").read_text())["state"], "needs-owner")
 
+    def test_new_policy_epoch_ignores_historical_reports_and_stale_violations(self):
+        self.setup_sessions("coord")
+        self.send("coord", "historical", "legacy report", self.now - 100)
+        self.put(self.runtime / "reporting-violations" / "coord.json", {
+            "schemaVersion": 1, "sessionId": "coord", "violations": [{
+                "eventId": "historical", "eventAt": self.now - 100,
+                "reason": "unsolicited-owner-report", "detectedAt": self.now - 50
+            }]
+        })
+        self.put(self.runtime / "reporting-policy.json", {
+            "schemaVersion": 1, "mode": "pull-only", "ownerFacingSessionId": "owner",
+            "configuredAt": self.now - 10, "interception": "unavailable",
+            "detection": "best-effort-session-transcript"
+        })
+        _, checked = self.cli("reporting-policy.py", "check", "--session", "coord")
+        self.assertTrue(checked["compliant"])
+        self.put(self.runtime / "coordinators" / "p.json", {
+            "project": "p", "projectId": "native", "state": "needs-owner",
+            "coordinatorSessionId": "coord", "generation": 1,
+            "leaseExpiresAt": self.now + 1, "activeChildren": ["live-child"],
+            "reportingViolation": {"admissionBlocker": "unresolved-owner-reporting-violation"}
+        })
+        _, renewed = self.cli("coordinator-registry.py", "renew", "--project", "p", "--session", "coord")
+        self.assertEqual(renewed["record"]["state"], "authoritative")
+        self.assertEqual(renewed["record"]["activeChildren"], ["live-child"])
+        self.assertNotIn("reportingViolation", renewed["record"])
+
     def test_exact_permitted_reply_consumes_once_and_silence_does_not_pause_work(self):
         self.policy(); self.setup_sessions("coord")
         permit = self.issue("coord", "permit-123456789012")

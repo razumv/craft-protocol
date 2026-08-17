@@ -105,11 +105,18 @@ def audit_session(session: str) -> dict[str, Any]:
     silence.  A malformed transcript is a fail-closed admission blocker.
     """
     policy = policy_or_die(); now = common.now_ms(); rows = transcript(session)
-    known = {str(row.get("eventId")): row for row in durable_violations(session) if row.get("eventId")}
+    configured_at = policy["configuredAt"]
+    # A newly installed/configured policy starts a new enforcement epoch. Historical
+    # sends predate one-use permits and must not quarantine every adopted coordinator.
+    existing = [row for row in durable_violations(session)
+                if type(row.get("eventAt")) is int and row["eventAt"] >= configured_at]
+    known = {str(row.get("eventId")): row for row in existing if row.get("eventId")}
     fresh: list[dict[str, Any]] = []
     for event in send_events(rows, policy["ownerFacingSessionId"]):
         event_id = event.get("id")
         timestamp = event.get("timestamp")
+        if type(timestamp) is int and timestamp < configured_at:
+            continue
         tool_input = event.get("toolInput")
         message = tool_input.get("message") if isinstance(tool_input, dict) else None
         reason = None; permit_id = None
@@ -143,7 +150,6 @@ def audit_session(session: str) -> dict[str, Any]:
             fresh.append({"eventId": event_id, "eventAt": timestamp if type(timestamp) is int else None,
                           "reason": reason, "permitId": permit_id, "eventFingerprint": event_digest(event),
                           "detectedAt": now})
-    existing = durable_violations(session)
     if fresh:
         combined = existing + fresh
         overflow = len(combined) > MAX_VIOLATIONS

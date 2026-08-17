@@ -196,6 +196,12 @@ def cmd_renew(args: argparse.Namespace) -> int:
         if violation:
             mark_reporting_violation(value, violation); save(value)
             raise SystemExit("unresolved-owner-reporting-violation; authority marked needs-owner for preservation-safe rotation")
+        if value.get("state") == "needs-owner" and isinstance(value.get("reportingViolation"), dict):
+            # Reporting quarantine is recoverable once a newer policy epoch makes
+            # the same current coordinator compliant. Preserve all children,
+            # generation, gates, and transfer state; only restore its authority.
+            value["state"] = "authoritative"
+            value.pop("reportingViolation", None)
         if value.get("state") not in {"authoritative", "hold"}:
             raise SystemExit(f"cannot renew state={value.get('state')}")
         now = common.now_ms(); value["lastHeartbeatAt"] = now; value["leaseExpiresAt"] = now + int(args.ttl) * 1000
