@@ -502,9 +502,12 @@ Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's 
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.36...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.38...HEAD
+[3.4.38]: https://github.com/razumv/craft-protocol/compare/v3.4.37...v3.4.38
+[3.4.37]: https://github.com/razumv/craft-protocol/compare/v3.4.36...v3.4.37
 [3.4.36]: https://github.com/razumv/craft-protocol/compare/v3.4.35...v3.4.36
-[3.4.34]: https://github.com/razumv/craft-protocol/compare/v3.4.33...v3.4.35
+[3.4.35]: https://github.com/razumv/craft-protocol/compare/v3.4.34...v3.4.35
+[3.4.34]: https://github.com/razumv/craft-protocol/compare/v3.4.33...v3.4.34
 [3.4.33]: https://github.com/razumv/craft-protocol/compare/v3.4.32...v3.4.33
 [3.4.32]: https://github.com/razumv/craft-protocol/compare/v3.4.31...v3.4.32
 [3.4.31]: https://github.com/razumv/craft-protocol/compare/v3.4.30...v3.4.31
