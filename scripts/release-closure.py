@@ -9,7 +9,7 @@ tags, pushes, installs, or mutates runtime state.
 """
 from __future__ import annotations
 import argparse, base64, hashlib, json, os, re, stat, subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -75,14 +75,25 @@ def api(token: str, endpoint: str) -> dict[str, Any] | None:
         return None
 
 
+def decode_github_content(content: str) -> bytes | None:
+    """Decode GitHub Contents base64 without treating arbitrary Unicode as space."""
+    # GitHub legitimately wraps Contents responses.  Remove only ASCII whitespace;
+    # any other code point remains invalid input to the strict base64 decoder.
+    ascii_whitespace = {" ", chr(9), chr(10), chr(11), chr(12), chr(13)}
+    compact = "".join(ch for ch in content if ch not in ascii_whitespace)
+    if len(compact) + sum(ch in ascii_whitespace for ch in content) != len(content):
+        return None
+    try:
+        return base64.b64decode(compact, validate=True)
+    except (ValueError, TypeError, base64.binascii.Error):
+        return None
+
+
 def remote_file(token: str, identity: str, rel: str, ref: str) -> bytes | None:
     row = api(token, f"repos/{identity}/contents/{quote(rel)}?ref={quote(ref, safe='')}")
     if not row or row.get("type") != "file" or not isinstance(row.get("content"), str):
         return None
-    try:
-        return base64.b64decode(row["content"], validate=True)
-    except Exception:
-        return None
+    return decode_github_content(row["content"])
 
 
 def remote_sha256(token: str, identity: str, rel: str, ref: str) -> str | None:
@@ -90,24 +101,41 @@ def remote_sha256(token: str, identity: str, rel: str, ref: str) -> str | None:
     return hashlib.sha256(value).hexdigest() if value is not None else None
 
 
-def remote_manifest_errors(token: str, identity: str, tag: str) -> list[str]:
-    raw = remote_file(token, identity, "manifest.sha256", tag)
-    if raw is None:
-        return ["remote-manifest-missing"]
+def valid_manifest_path(path: str) -> bool:
+    if not path or chr(0) in path or "\\" in path:
+        return False
+    pure = PurePosixPath(path)
+    return (not pure.is_absolute() and path == pure.as_posix()
+            and all(part not in {"", ".", ".."} for part in pure.parts))
+
+
+def parse_manifest(raw: bytes) -> dict[str, str] | None:
     try:
         rows = raw.decode("utf-8").splitlines()
     except UnicodeDecodeError:
-        return ["remote-manifest-invalid"]
-    expected: dict[str, str] = {}
+        return None
+    entries: dict[str, str] = {}
     for line in rows:
         match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
-        if not match or match.group(2).startswith("/") or ".." in Path(match.group(2)).parts:
-            return ["remote-manifest-invalid"]
-        expected[match.group(2)] = match.group(1)
-    if not expected:
+        if not match or not valid_manifest_path(match.group(2)) or match.group(2) in entries:
+            return None
+        entries[match.group(2)] = match.group(1)
+    return entries or None
+
+
+def remote_manifest_errors(repo: Path, token: str, identity: str, tag: str) -> list[str]:
+    local = parse_manifest((repo / "manifest.sha256").read_bytes()) if (repo / "manifest.sha256").is_file() else None
+    if local is None:
+        return ["local-manifest-invalid"]
+    raw = remote_file(token, identity, "manifest.sha256", tag)
+    if raw is None:
+        return ["remote-manifest-missing"]
+    remote = parse_manifest(raw)
+    if remote is None:
         return ["remote-manifest-invalid"]
-    bad = [path for path, digest in expected.items()
-           if remote_sha256(token, identity, path, tag) != digest]
+    if remote != local:
+        return ["remote-manifest-coverage-mismatch"]
+    bad = [path for path, digest in local.items() if remote_sha256(token, identity, path, tag) != digest]
     return ["remote-manifest-mismatch:" + ",".join(bad[:4])] if bad else []
 
 
@@ -189,7 +217,7 @@ def verify(repo: Path, version: str, token_file: str | None = None) -> dict[str,
             if not digest or asset_digest(release, name) != f"sha256:{digest}":
                 errors.append(f"github-release-asset-hash-mismatch:{name}")
     if tag_sha:
-        errors += remote_manifest_errors(token, identity, tag)
+        errors += remote_manifest_errors(repo, token, identity, tag)
         errors += adoption_errors(token, identity, tag, version, tag_sha)
     errors += installer_errors(repo, version)
     return {"closed": not errors, "version": version, "tag": tag, "repository": identity,

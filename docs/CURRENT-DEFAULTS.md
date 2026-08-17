@@ -101,7 +101,7 @@ Legacy recurring prompts:      permanently disabled
 Admission supervisor:          deterministic, before any LLM session
 Lane admission (3.4.35):       reserve immutable worker/auditor identity, then manifest-confirm before lease
 Transfer admission (3.4.35):   successor manifest identity is bound at begin-transfer and rechecked at accept
-Owner reporting (3.4.35):      durable pull-only policy; transcript detection is best-effort because interception is unavailable
+Owner reporting (3.4.37):      durable pull-only policy; explicit one-use request/session/expiry permits; transcript detection is best-effort because interception is unavailable
 Owner-memory (3.4.35):         canonical exact decision/preference fingerprint suppresses duplicate gates
 Product-bearing increment (3.4.36): at least one `product` deliverableClass; contract/acceptance/housekeeping cannot starve ready product work
 Evidence reuse (3.4.36):       exact candidate SHA + test-environment fingerprint; no freshness rerun

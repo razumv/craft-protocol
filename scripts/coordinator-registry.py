@@ -29,6 +29,7 @@ DEFAULT_TTL = int(os.environ.get("CRAFT_COORDINATOR_TTL_SECONDS", "3600"))
 FALLBACK_TTL = int(os.environ.get("CRAFT_FALLBACK_TTL_SECONDS", "3600"))
 VALID_STATES = {"authoritative", "rotating", "hold", "superseded", "needs-owner"}
 REPORTING_POLICY = RUNTIME / "reporting-policy.json"
+REPORTING_POLICY_TOOL = HERE / "reporting-policy.py"
 CURRENT_VERSION = "3.4.37"
 COMPATIBLE_COORDINATOR_VERSIONS = {"3.4.35", "3.4.36", CURRENT_VERSION}
 ROTATION_GRACE_MS = int(os.environ.get("CRAFT_ROTATION_GRACE_SECONDS", "900")) * 1000
@@ -106,6 +107,27 @@ def reporting_policy(required: bool = False) -> dict[str, Any]:
     return {"reportingMode": "pull-only", "reportingPolicyRevision": row.get("configuredAt"), "reportingPolicyFingerprint": fingerprint}
 
 
+def reporting_audit(session: str) -> dict[str, Any]:
+    """Run the explicit transcript detector; it is not outbound interception."""
+    spec = importlib.util.spec_from_file_location("reporting_policy_admission", REPORTING_POLICY_TOOL)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)  # type: ignore
+    with common.file_lock(module.LOCK):
+        return module.audit_session(session)
+
+
+def reporting_refusal(session: str) -> dict[str, Any] | None:
+    result = reporting_audit(session)
+    return result if not result.get("compliant") else None
+
+
+def mark_reporting_violation(value: dict[str, Any], result: dict[str, Any]) -> None:
+    """Remove healthy authority without destroying lanes or work evidence."""
+    value["reportingViolation"] = {"detectedAt": common.now_ms(), "sessionId": result.get("sessionId"),
+                                   "admissionBlocker": result.get("admissionBlocker"),
+                                   "violations": result.get("violations", [])}
+    value["state"] = "needs-owner"
+
+
 def provider_fields(manifest: dict[str, Any]) -> dict[str, Any]:
     connection = manifest.get("llmConnection")
     model = manifest.get("model")
@@ -125,6 +147,8 @@ def cmd_claim(args: argparse.Namespace) -> int:
     # never a loophole for malformed legacy successors.
     validate_successor_manifest(manifest, project, {"projectId": args.project_id or manifest.get("projectId")})
     reporting_policy(True)
+    if reporting_refusal(args.session):
+        raise SystemExit("unresolved-owner-reporting-violation")
     with common.file_lock(LOCK):
         refuse_cross_project(args.session, project, include_pending=True)
         current = load(project)
@@ -168,7 +192,11 @@ def cmd_renew(args: argparse.Namespace) -> int:
     project = clean_project(args.project)
     with common.file_lock(LOCK):
         value = require_owner(project, args.session)
-        if value.get("state") not in {"authoritative", "hold", "needs-owner"}:
+        violation = reporting_refusal(args.session)
+        if violation:
+            mark_reporting_violation(value, violation); save(value)
+            raise SystemExit("unresolved-owner-reporting-violation; authority marked needs-owner for preservation-safe rotation")
+        if value.get("state") not in {"authoritative", "hold"}:
             raise SystemExit(f"cannot renew state={value.get('state')}")
         now = common.now_ms(); value["lastHeartbeatAt"] = now; value["leaseExpiresAt"] = now + int(args.ttl) * 1000
         save(value)
@@ -207,6 +235,15 @@ def cmd_reconcile_rotation(args: argparse.Namespace) -> int:
             manifest = common.read_manifest(session_id)
             if not common.session_live(manifest) or common.role_of(manifest or {}) != "coordinator":
                 continue
+            violation = reporting_refusal(session_id)
+            if violation:
+                row = {"project": value.get("project"), "sessionId": session_id,
+                       "admissionBlocker": violation.get("admissionBlocker")}
+                rows.append(row)
+                if args.apply:
+                    mark_reporting_violation(value, violation); save(value)
+                changed.append(str(value.get("project")))
+                continue
             metric = rotation_metric(value, manifest or {}, now)
             compact = {"sessionId": metric["sessionId"], "startedAt": metric["startedAt"],
                        "pressureActive": metric["pressureActive"], "lastMeasuredAt": now,
@@ -230,6 +267,14 @@ def cmd_reconcile_activity(args: argparse.Namespace) -> int:
             session_id = str(value.get("coordinatorSessionId") or "")
             manifest = common.read_manifest(session_id)
             if not common.session_live(manifest) or common.role_of(manifest) != "coordinator":
+                continue
+            violation = reporting_refusal(session_id)
+            if violation:
+                row = {"project": value.get("project"), "sessionId": session_id,
+                       "eligible": False, "admissionBlocker": violation.get("admissionBlocker")}
+                if args.apply:
+                    mark_reporting_violation(value, violation); save(value); changed.append(str(value.get("project")))
+                rows.append(row)
                 continue
             activity_at = latest_completed_assistant_at(session_id)
             previous = int(value.get("lastHeartbeatAt") or 0)
@@ -378,6 +423,8 @@ def cmd_begin_transfer(args: argparse.Namespace) -> int:
     identity = transfer_identity(successor)
     validate_successor_manifest(successor, project, load(project) or {})
     reporting_policy(True)
+    if reporting_refusal(args.successor):
+        raise SystemExit("unresolved-owner-reporting-violation")
     # A coordinator is project-bound.  Do not defer this proof until after the
     # predecessor has entered rotating state.
     if successor.get("projectId") != (load(project) or {}).get("projectId"):
@@ -385,6 +432,11 @@ def cmd_begin_transfer(args: argparse.Namespace) -> int:
     with common.file_lock(LOCK):
         refuse_cross_project(args.successor, project, include_pending=True)
         value = require_owner(project, args.session)
+        source_violation = reporting_refusal(args.session)
+        if source_violation:
+            # The reporting violator may only use this path to hand work over to a
+            # clean successor; it may not renew or present healthy authority.
+            mark_reporting_violation(value, source_violation)
         if value.get("state") == "rotating":
             if value.get("successorSessionId") == args.successor:
                 print(json.dumps({"ok": True, "record": value, "idempotent": True}, indent=2)); return 0
@@ -409,6 +461,8 @@ def cmd_accept_transfer(args: argparse.Namespace) -> int:
             raise SystemExit("generation mismatch")
         validate_successor_manifest(manifest, project, value)
         policy = reporting_policy(True)
+        if reporting_refusal(args.session):
+            raise SystemExit("unresolved-owner-reporting-violation")
         expected_identity = value.get("successorIdentity")
         if not isinstance(expected_identity, dict):
             raise SystemExit("transfer identity admission missing; begin a new transfer")
@@ -484,6 +538,12 @@ def inspect_one(project: str) -> dict[str, Any]:
         if pred_manifest and not pred_manifest.get("isArchived"):
             issues.append(f"predecessor-not-archived:{predecessor}")
     if manifest:
+        try:
+            violation = reporting_refusal(str(value.get("coordinatorSessionId") or ""))
+        except SystemExit:
+            violation = {"admissionBlocker": "owner-reporting-transcript-unavailable"}
+        if violation:
+            issues.append(str(violation.get("admissionBlocker") or "unresolved-owner-reporting-violation"))
         raw_labels = manifest.get("labels")
         if isinstance(raw_labels, list):
             roles = [x for x in raw_labels if isinstance(x, str) and x.startswith("agent-role::")]

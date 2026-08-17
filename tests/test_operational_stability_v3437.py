@@ -225,5 +225,98 @@ class ReleaseClosureTests(unittest.TestCase):
         self.assertIn("github-origin-identity-unreadable", result["errors"])
         self.assertIn("github-auth-token-file-unavailable", result["errors"])
 
+    def test_github_contents_wrapped_base64_is_strict_but_accepts_realistic_line_wraps(self):
+        payload = b'{"release":"v3.4.37", "files": ["README.md", "manifest.sha256"]}' + bytes([10])
+        wrapped = __import__("base64").encodebytes(payload).decode("ascii")
+        self.assertEqual(self.release.decode_github_content(wrapped), payload)
+        self.assertIsNone(self.release.decode_github_content(wrapped.replace(chr(10), chr(160), 1)))
+        self.assertIsNone(self.release.decode_github_content(wrapped[:-2] + "$$"))
+
+    def test_remote_manifest_requires_exact_local_coverage_and_rejects_extra_or_duplicate_rows(self):
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw); a = b"a"; b = b"b"
+            line = bytes([10])
+            local = (f"{hashlib.sha256(a).hexdigest()}  a.txt".encode() + line
+                     + f"{hashlib.sha256(b).hexdigest()}  b.txt".encode() + line)
+            (repo / "manifest.sha256").write_bytes(local)
+            original = self.release.remote_file
+            try:
+                def check(remote_manifest):
+                    files = {"manifest.sha256": remote_manifest, "a.txt": a, "b.txt": b}
+                    self.release.remote_file = lambda *_args: files.get(_args[2])
+                    return self.release.remote_manifest_errors(repo, "token", "owner/repo", "v3.4.37")
+                partial = f"{hashlib.sha256(a).hexdigest()}  a.txt".encode() + line
+                extra = local + f"{hashlib.sha256(b).hexdigest()}  extra.txt".encode() + line
+                duplicate = local + f"{hashlib.sha256(a).hexdigest()}  a.txt".encode() + line
+                self.assertEqual(check(partial), ["remote-manifest-coverage-mismatch"])
+                self.assertEqual(check(extra), ["remote-manifest-coverage-mismatch"])
+                self.assertEqual(check(duplicate), ["remote-manifest-invalid"])
+            finally:
+                self.release.remote_file = original
+
+
+class ReportingPermitTests(Base):
+    def policy(self):
+        self.put(self.runtime / "reporting-policy.json", {"schemaVersion": 1, "mode": "pull-only", "ownerFacingSessionId": "owner", "configuredAt": 1,
+                 "interception": "unavailable", "detection": "best-effort-session-transcript"})
+
+    def event(self, sid, event_id, timestamp, **extra):
+        path = self.sessions / sid / "session.jsonl"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"id": event_id, "timestamp": timestamp, **extra}) + chr(10))
+
+    def setup_sessions(self, *coordinators):
+        self.manifest("owner", "owner")
+        self.event("owner", "owner-query", self.now - 10, type="user", content="What is the current product status?")
+        for sid in coordinators:
+            self.manifest(sid, "coordinator", labels=["coordinators", "project::p", "protocol-version::3.4.37"],
+                          name="[p] Coordinator v3.4.37", projectId="native", workingDirectory=str(self.root),
+                          llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="allow-all")
+
+    def issue(self, coordinator, permit_id, ttl=60):
+        return self.cli("reporting-policy.py", "issue-permit", "--coordinator", coordinator, "--owner-request-event", "owner-query",
+                        "--ttl-seconds", str(ttl), "--permit-id", permit_id)[1]["permit"]
+
+    def send(self, coordinator, event_id, message, at):
+        self.event(coordinator, event_id, at, type="tool", toolName="mcp__session__send_agent_message", toolStatus="completed",
+                   toolInput={"sessionId": "owner", "message": message})
+
+    def test_unsolicited_report_is_durable_and_blocks_renewal(self):
+        self.policy(); self.setup_sessions("coord")
+        self.send("coord", "unsolicited", "routine status", self.now)
+        _, checked = self.cli("reporting-policy.py", "check", "--session", "coord", ok=False)
+        self.assertEqual(checked["violations"][0]["reason"], "unsolicited-owner-report")
+        self.put(self.runtime / "coordinators" / "p.json", {"project": "p", "projectId": "native", "state": "authoritative", "coordinatorSessionId": "coord", "generation": 1, "leaseExpiresAt": self.now + 1})
+        proc, _ = self.cli("coordinator-registry.py", "renew", "--project", "p", "--session", "coord", ok=False)
+        self.assertIn("unresolved-owner-reporting-violation", proc.stderr)
+        self.assertEqual(json.loads((self.runtime / "coordinators/p.json").read_text())["state"], "needs-owner")
+
+    def test_exact_permitted_reply_consumes_once_and_silence_does_not_pause_work(self):
+        self.policy(); self.setup_sessions("coord")
+        permit = self.issue("coord", "permit-123456789012")
+        self.send("coord", "reply", permit["responseMarker"] + " Status is healthy.", self.now + 1)
+        _, checked = self.cli("reporting-policy.py", "check", "--session", "coord")
+        self.assertTrue(checked["compliant"])
+        self.assertEqual(json.loads((self.runtime / "reporting-permits/permit-123456789012.json").read_text())["state"], "consumed")
+        self.put(self.runtime / "coordinators" / "p.json", {"project": "p", "projectId": "native", "state": "authoritative", "coordinatorSessionId": "coord", "generation": 1, "leaseExpiresAt": self.now + 1})
+        _, renewed = self.cli("coordinator-registry.py", "renew", "--project", "p", "--session", "coord")
+        self.assertEqual(renewed["record"]["state"], "authoritative")
+
+    def test_replay_expiry_and_wrong_session_reports_are_refused(self):
+        self.policy(); self.setup_sessions("coord-a", "coord-b")
+        replay = self.issue("coord-a", "permit-replay-12345")
+        self.send("coord-a", "first", replay["responseMarker"] + " first", self.now + 1)
+        self.send("coord-a", "second", replay["responseMarker"] + " replay", self.now + 2)
+        _, result = self.cli("reporting-policy.py", "check", "--session", "coord-a", ok=False)
+        self.assertIn("owner-report-permit-replayed", [v["reason"] for v in result["violations"]])
+        expired = self.issue("coord-b", "permit-expired-1234", ttl=1)
+        self.send("coord-b", "expired", expired["responseMarker"] + " late", self.now + 1001)
+        _, result = self.cli("reporting-policy.py", "check", "--session", "coord-b", ok=False)
+        self.assertIn("owner-report-permit-expired", [v["reason"] for v in result["violations"]])
+        wrong = self.issue("coord-a", "permit-wrong-123456")
+        self.send("coord-b", "wrong", wrong["responseMarker"] + " wrong coordinator", self.now + 1)
+        _, result = self.cli("reporting-policy.py", "check", "--session", "coord-b", ok=False)
+        self.assertIn("owner-report-permit-coordinator-mismatch", [v["reason"] for v in result["violations"]])
+
 
 if __name__ == "__main__": unittest.main()
