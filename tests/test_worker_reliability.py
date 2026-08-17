@@ -301,6 +301,21 @@ class ReliabilityToolsTest(unittest.TestCase):
                 break
             time.sleep(0.05)
         self.assertEqual(value1.get("exitCode"), 0)
+        # A terminal receipt linearizes owned writes, but the short-lived Python
+        # supervisor may still be exiting. Wait for both supervisors before the
+        # TemporaryDirectory teardown so process-exit timing cannot race cleanup.
+        for value in (value1, value2):
+            pid = int(value.get("supervisorPid") or 0)
+            deadline = time.time() + 3
+            alive = bool(pid)
+            while alive and time.time() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    alive = False
+                    break
+                time.sleep(0.02)
+            self.assertFalse(alive, f"observable supervisor {pid} outlived terminal receipt")
 
     def test_descendant_process_tree_cpu_counts_as_progress(self):
         # A4 regression: supervisor alive, direct driver nearly idle, a descendant

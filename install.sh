@@ -139,7 +139,7 @@ if (( APPLY )); then
     test_worker_reliability.py test_orchestration_v320.py test_self_healing_v311.py \
     test_delivery_mode_v320.py test_controller_harness_v321.py \
     test_recovery_admission_v322.py test_external_wait_v321.py test_coordinator_v330.py \
-    test_product_pressure_v3436.py test_operational_stability_v3437.py)
+    test_product_pressure_v3436.py test_operational_stability_v3438.py)
   echo "Running watchdog dry-run..."
   "$PYTHON" "$SCRIPTS/worker-watchdog.py"
   # Re-arm only what was already armed, and only after the payload installed and
