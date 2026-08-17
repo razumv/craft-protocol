@@ -1,4 +1,4 @@
-# Protocol v3.4.38 defaults
+# Protocol v3.4.39 defaults
 
 This file records the portable defaults represented by the packaged scripts. Replace model connection slugs and paths for the target workspace.
 
@@ -101,7 +101,7 @@ Legacy recurring prompts:      permanently disabled
 Admission supervisor:          deterministic, before any LLM session
 Lane admission (3.4.35):       reserve immutable worker/auditor identity, then manifest-confirm before lease
 Transfer admission (3.4.35):   successor manifest identity is bound at begin-transfer and rechecked at accept
-Owner reporting (3.4.38):      durable pull-only policy; successful renew refreshes its current mode/revision/fingerprint; transcript detection is best-effort because interception is unavailable
+Owner reporting (3.4.39):      durable pull-only policy; successful renew refreshes its current mode/revision/fingerprint; transcript detection is best-effort because interception is unavailable
 Owner-memory (3.4.35):         canonical exact decision/preference fingerprint suppresses duplicate gates
 Product-bearing increment (3.4.36): at least one `product` deliverableClass; contract/acceptance/housekeeping cannot starve ready product work
 Evidence reuse (3.4.36):       exact candidate SHA + test-environment fingerprint; no freshness rerun
@@ -109,13 +109,13 @@ Merge authority (3.4.36):      resolved protected-merge authority issues merge +
 Coordinator CWD (3.4.36):      absolute or trusted ~/ syntax canonicalized; other relatives refused
 Coordinator identity (3.4.36): coordinator-reconcile.py apply requires authenticated RPC rename receipt; never edits session JSONL
 Rotation priority (3.4.36):    direct-owner/complexity rotation precedes a routine no-rotation tick
-Rotation metric (3.4.38):      current coordinator session only; 900s claim/transfer grace, clear at 450 msgs / 180k tokens after pressure
-Context error (3.4.38):        request-buffer/context/token errors bypass rotation grace and hysteresis
-Exact completion (3.4.38):     v3.4.38 complete bindings require exact candidateSha, verdict:PASS, merge and readback markers
-Maintenance debt (3.4.38):     live predecessor after healthy handoff → healthy-with-maintenance-debt, archive still owed
-Plan receipt (3.4.38):         authenticated owner session + exact plan bytes/SHA-256 + scope/effects/all dangerous exclusions; 60..604800s, revocable
-Release closure (3.4.38):      authenticated gh API + annotated tag exactly at origin/main + final Release/Latest/assets/body receipt + manifest/installer verifier
-Transfer discovery (3.4.38):   protocol-trusted ~/ CWD canonicalizes when existing/unique; relative, missing, dangling, disagreeing, parent-shared and colliding paths refuse
+Rotation metric (3.4.39):      current coordinator session only; 900s claim/transfer grace, clear at 450 msgs / 180k tokens after pressure
+Context error (3.4.39):        request-buffer/context/token errors bypass rotation grace and hysteresis
+Exact completion (3.4.39):     v3.4.39 complete bindings require exact candidateSha, verdict:PASS, merge and readback markers
+Maintenance debt (3.4.39):     live predecessor after healthy handoff → healthy-with-maintenance-debt, archive still owed
+Plan receipt (3.4.39):         authenticated owner session + exact plan bytes/SHA-256 + scope/effects/all dangerous exclusions; 60..604800s, revocable
+Release closure (3.4.39):      authenticated gh API + annotated tag exactly at origin/main + final Release/Latest/assets/body receipt + manifest/installer verifier
+Transfer discovery (3.4.39):   protocol-trusted ~/ CWD canonicalizes when existing/unique; relative, missing, dangling, disagreeing, parent-shared and colliding paths refuse
 Admission interval:            300 seconds; report-only under kill switch
 Production admission:          capability-v2 delivery/inspect/recover on exact runtime identity
 Direct capability:             available=true, version=2; deliver + inspect + recover channels
@@ -175,7 +175,10 @@ Gate external effect (3.4.34): create requires --external-effect from the owner-
 Correction budget (3.4.34):    extensions bounded by distinct proven rootCauseRef, not by count; repeated cause returns to the owner
 Coordinator name (3.4.34):     exactly [<project>] Coordinator v<version> → coordinator-name-nonconforming / -project-mismatch
 Stale coordinators (3.4.34):   every live coordinator session that is not the current one → stale-coordinator-session
-Archival drain (3.4.38):       immediately after transfer adoption/material transitions, archive predecessor + preservation-proven terminal/unused children + stale coordinators; archive first, guarded reap second, repeat bounded batches until archivableBacklog=0 and predecessor-not-archived/stale-coordinator-session violations clear; never delete history, archive dirty/shared-CWD/unknown-holder work, or send cleanup reports to Fleet
+Archival drain (3.4.39):       immediately after transfer adoption/material transitions, archive predecessor + preservation-proven terminal/unused children + stale coordinators; archive first, guarded reap second, reviewed worktree GC third; predecessor-not-archived remains debt
+Lifecycle debt (3.4.39):       preservation-proven-archivable + terminal-unknown + orphaned-dead + stale-coordinator + archived-active-child + stale-clean-worktree; archivableBacklog=0 alone is not clean; require lifecycleDebt.clean=true
+Worktree GC (3.4.39):          dry-run default; durable runtime/worktree-gc/latest.json; apply max 3 by default (coordinator batch max 5); unowned min age 24h; only registered .worktrees entries through git worktree remove
+Worktree GC protections:       root checkout, every non-archived session CWD, authoritative activeChildren, shared session CWDs, every process CWD holder, dirty trees, unreachable detached HEADs, locked/unmanaged/recent-unowned/unknown-holder entries; never delete history or branches/session records
 Plan dispatchability (3.4.34): worker/auditor action with no ready or executing story and no lane → worker-action-without-dispatchable-story
 Plan story refs (3.4.34):      nextActions[].storyRef must name a story the increment contains
 Dead lane reaping (3.4.34):    lease state stalled/error qualifies for reaping; preservation still gates it; board no longer marks dead lanes todo
@@ -234,7 +237,7 @@ Commitment bindings:           worker-lease, external-wait, owner-gate, schedule
 Commitment deadline range:     60..604800 seconds
 Owner aggregate report:        coordinator-status.py report --all --format markdown|json
 Reconcile cadence:             watchdog, every 300 seconds, before the incident scan
-Housekeeping (3.4.8):          up to 5 preservation-proven terminal children archived per material transition; predecessor archived after handoff; archivableBacklog in worker-lease report
+Housekeeping (3.4.39):         up to 5 preservation-proven terminal children archived per material transition; predecessor archived after handoff; guarded process reap before reviewed bounded worktree GC; exhaustive lifecycleDebt in worker-lease report; never send cleanup reports to Fleet
 Deaf-coordinator wake (3.4.6): coordinator-worker-terminal-status, controller-bound, wake-1/wake-2/rotation stages
 New incidents:                 coordinator-inbox-ready, coordinator-status-missing, coordinator-status-stale,
                                coordinator-plan-unexecutable, coordinator-commitment-overdue, coordinator-status-contradiction

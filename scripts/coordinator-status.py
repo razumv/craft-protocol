@@ -41,10 +41,10 @@ GATES = RUNTIME / "owner-gates"
 INBOX = RUNTIME / "coordinator-inbox"
 COMMITMENTS = RUNTIME / "coordinator-commitments"
 SCHEMA = 1
-CURRENT_VERSION = "3.4.38"
+CURRENT_VERSION = "3.4.39"
 # Status publication remains able to read prior v3.4.36/v3.4.37 records.
-CURRENT_PROTOCOL_LABELS = {"protocol-version::3.4.36", "protocol-version::3.4.37", "protocol-version::3.4.38"}
-STRICT_COMPLETION_PROTOCOL_LABELS = {"protocol-version::3.4.37", "protocol-version::3.4.38"}
+CURRENT_PROTOCOL_LABELS = {"protocol-version::3.4.36", "protocol-version::3.4.37", "protocol-version::3.4.38", "protocol-version::3.4.39"}
+STRICT_COMPLETION_PROTOCOL_LABELS = {"protocol-version::3.4.37", "protocol-version::3.4.38", "protocol-version::3.4.39"}
 
 PHASES = {"initializing", "executing", "waiting", "blocked", "review", "complete", "hold"}
 TERMINAL_PHASES = {"complete", "hold", "blocked"}
@@ -1033,7 +1033,7 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
         if strict_completion:
             certificate_ref = completion.get("certificateRef")
             if not isinstance(certificate_ref, dict):
-                fail("v3.4.38 complete Product Increment requires consumed completion certificate")
+                fail("v3.4.39 complete Product Increment requires consumed completion certificate")
             certificate_entry = exact_completion_certificates(project).get(str(certificate_ref.get("certificateId") or ""))
             if not certificate_entry or certificate_entry.get("fingerprint") != certificate_ref.get("fingerprint"):
                 fail("completion certificate is missing, invalid, or immutable binding mismatched")
@@ -1045,7 +1045,7 @@ def validate_refs(project: str, coordinator: str, declared: dict[str, Any]) -> N
                     or not certificate.get("mergedMainRunIds")):
                 fail("completion certificate must bind exact candidate PASS workUnit and merged-main readback")
             if len(merged_stories) != 1:
-                fail("v3.4.38 completion certificate consumes exactly one merged workUnit")
+                fail("v3.4.39 completion certificate consumes exactly one merged workUnit")
             story = merged_stories[0]
             if (str(story.get("workUnit") or story.get("id")) != candidate_unit
                     or story.get("acceptanceRef") != bound["acceptanceRef"].get("eventKey")
@@ -1634,7 +1634,7 @@ def build_report(project: str, now: int) -> dict[str, Any]:
     if malformed:
         issues.append("stored-status-malformed")
     classification = "contradictory" if malformed or current_null_increment else verdict["classification"]
-    # This public classification applies only to current v3.4.38 snapshots;
+    # This public classification applies only to current v3.4.39 snapshots;
     # older transfer records stay readable with their historical classification.
     maintenance_debt = list(synth.get("maintenanceDebt") or [])
     if (status and status.get("protocolVersion") == CURRENT_VERSION and maintenance_debt

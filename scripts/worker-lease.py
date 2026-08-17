@@ -35,7 +35,9 @@ COMMON = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(COMMON
 SCHEMA = 1
 HEALTHY_SECONDS = int(os.environ.get("CRAFT_LEASE_HEALTHY_SECONDS", "900"))
 STALLED_SECONDS = int(os.environ.get("CRAFT_LEASE_STALLED_SECONDS", "1800"))
+ORPHANED_LANE_SECONDS = int(os.environ.get("CRAFT_ORPHANED_LANE_SECONDS", "86400"))
 TERMINAL_STATES = {"handoff-ready"}
+TERMINAL_SESSION_STATUSES = {"needs-review", "done"}
 ROLES = {"worker", "auditor"}
 
 
@@ -427,10 +429,10 @@ def refuse_role_drift_create(session_id: str, value: dict[str, Any]) -> None:
 
 def validate_existing_admission(session_id: str) -> None:
     manifest = read_manifest(session_id) or {}
-    if not ({"protocol-version::3.4.35", "protocol-version::3.4.36", "protocol-version::3.4.37", "protocol-version::3.4.38"} & set(manifest.get("labels") or [])): return
+    if not ({"protocol-version::3.4.35", "protocol-version::3.4.36", "protocol-version::3.4.37", "protocol-version::3.4.38", "protocol-version::3.4.39"} & set(manifest.get("labels") or [])): return
     matches = [read_json(p) for p in (RUNTIME / "lane-admissions").glob("*.json")]
     matches = [x for x in matches if x and x.get("state") == "admitted" and x.get("sessionId") == session_id]
-    if len(matches) != 1: raise SystemExit("v3.4.35/v3.4.36/v3.4.37/v3.4.38 lane has no unique admitted record")
+    if len(matches) != 1: raise SystemExit("v3.4.35–v3.4.39 lane has no unique admitted record")
     spec = importlib.util.spec_from_file_location("lane_admission", Path(__file__).with_name("lane-admission.py"))
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)  # type: ignore
     module.cmd_confirm(argparse.Namespace(token=matches[0]["token"], session=session_id))
@@ -648,6 +650,91 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     return 0
 
 
+def lifecycle_debt(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Classify all known lifecycle debt without treating one zero as cleanliness."""
+    now = now_ms()
+    manifests = all_manifests()
+    records = [value for path in sorted(COORDINATORS.glob("*.json"))
+               if (value := read_json(path)) and value.get("state") in
+               {"authoritative", "rotating", "hold", "needs-owner"}]
+    current_coordinators = {str(value.get("coordinatorSessionId") or "") for value in records}
+    current_coordinators.update(str(value.get("successorSessionId") or "") for value in records
+                                if value.get("state") == "rotating")
+    classes: dict[str, list[dict[str, Any]]] = {
+        "preservation-proven-archivable": [],
+        "terminal-unknown": [],
+        "orphaned-dead": [],
+        "stale-coordinator": [],
+        "archived-active-child": [],
+        "stale-clean-worktree": [],
+    }
+    leases_by_id = {str(value.get("sessionId") or ""): value for value in rows}
+    for value in rows:
+        sid = str(value.get("sessionId") or "")
+        manifest = manifests.get(sid) or {}
+        if manifest.get("isArchived"):
+            continue
+        state = str(value.get("state") or "")
+        preservation = value.get("preservationState")
+        evidence = {"sessionId": sid, "state": state, "preservationState": preservation,
+                    "worktree": value.get("worktree"), "parentSessionId": value.get("parentSessionId")}
+        if state == "handoff-ready" and preservation in {"pushed", "merged"}:
+            classes["preservation-proven-archivable"].append(evidence)
+        elif state == "handoff-ready" or manifest.get("sessionStatus") in TERMINAL_SESSION_STATUSES:
+            classes["terminal-unknown"].append(evidence)
+        created = value.get("createdAt") if isinstance(value.get("createdAt"), int) else value.get("lastHeartbeatAt")
+        parent = str(value.get("parentSessionId") or "")
+        if (state in {"stalled", "error"} and parent and parent not in current_coordinators
+                and isinstance(created, int) and not isinstance(created, bool)
+                and created > 0 and now - created > ORPHANED_LANE_SECONDS * 1000):
+            classes["orphaned-dead"].append({**evidence, "ageMs": now - created})
+    # A terminal manifest with a missing lease is still unknown debt, not proof of
+    # a clean fleet. Reconcile can rebuild its lease, but report must not false-zero.
+    terminal_ids = {row["sessionId"] for row in classes["terminal-unknown"]}
+    terminal_ids.update(row["sessionId"] for row in classes["preservation-proven-archivable"])
+    for sid, manifest in sorted(manifests.items()):
+        if (sid not in terminal_ids and sid not in leases_by_id and not manifest.get("isArchived")
+                and role_of(manifest) in ROLES and manifest.get("sessionStatus") in TERMINAL_SESSION_STATUSES):
+            classes["terminal-unknown"].append({"sessionId": sid, "state": "missing-lease",
+                                                "preservationState": "unknown",
+                                                "worktree": expand(manifest.get("workingDirectory") or manifest.get("sdkCwd"))})
+        if (not manifest.get("isArchived") and role_of(manifest) == "coordinator"
+                and sid not in current_coordinators):
+            classes["stale-coordinator"].append({"sessionId": sid,
+                                                 "sessionStatus": manifest.get("sessionStatus"),
+                                                 "worktree": expand(manifest.get("workingDirectory") or manifest.get("sdkCwd"))})
+    for record in records:
+        for sid in sorted({str(value) for value in (record.get("activeChildren") or []) if value}):
+            manifest = manifests.get(sid)
+            if not manifest or manifest.get("isArchived"):
+                classes["archived-active-child"].append({"sessionId": sid,
+                    "project": record.get("project"), "manifestState": "absent" if not manifest else "archived",
+                    "worktree": expand((manifest or {}).get("workingDirectory") or (manifest or {}).get("sdkCwd"))})
+    gc_report = read_json(Path(os.environ.get("CRAFT_WORKTREE_GC_REPORT", RUNTIME / "worktree-gc/latest.json")).expanduser())
+    gc_observed = bool(gc_report and gc_report.get("schemaVersion") == 1
+                       and gc_report.get("protocolVersion") == "3.4.39"
+                       and gc_report.get("mode") in {"dry-run", "apply"}
+                       and not gc_report.get("applyRefusal")
+                       and gc_report.get("observationComplete"))
+    if gc_report:
+        for value in gc_report.get("worktrees") or []:
+            if (isinstance(value, dict) and value.get("classification") == "stale-clean-worktree"
+                    and value.get("state") in {"candidate", "deferred"}):
+                classes["stale-clean-worktree"].append({key: value.get(key) for key in
+                    ("repository", "worktree", "head", "branch", "ownership", "ageMs", "state")})
+    for values in classes.values():
+        values.sort(key=lambda value: (str(value.get("project") or ""),
+                                       str(value.get("sessionId") or value.get("worktree") or "")))
+    counts = {name: len(values) for name, values in classes.items()}
+    total = sum(counts.values())
+    unknown = [] if gc_observed else ["stale-clean-worktree:not-observed"]
+    return {"schemaVersion": 1, "clean": total == 0 and gc_observed,
+            "observationComplete": gc_observed, "unknown": unknown,
+            "total": total, "summary": counts, "classes": classes,
+            "worktreeGcReport": str(Path(os.environ.get("CRAFT_WORKTREE_GC_REPORT",
+                                                         RUNTIME / "worktree-gc/latest.json")).expanduser())}
+
+
 def cmd_report(_: argparse.Namespace) -> int:
     ensure_dirs()
     rows = []
@@ -662,11 +749,12 @@ def cmd_report(_: argparse.Namespace) -> int:
         sharing = value.get("cwdCollisionSessions") or []
         if sharing and value.get("worktree"):
             collisions[str(value["worktree"])] = sharing
-    # A lease exists only while its session is unarchived, so every terminal
-    # preservation-proven lease is archivable housekeeping debt.
-    archivable = sum(1 for value in rows if value.get("state") == "handoff-ready"
-                     and value.get("preservationState") in {"pushed", "merged"})
+    debt = lifecycle_debt(rows)
+    # Compatibility: archivableBacklog remains the preservation-proven class,
+    # but callers must use lifecycleDebt.clean for an exhaustive cleanliness claim.
+    archivable = debt["summary"]["preservation-proven-archivable"]
     print(json.dumps({"summary": summary, "archivableBacklog": archivable,
+                      "lifecycleClean": debt["clean"], "lifecycleDebt": debt,
                       "cwdCollisions": collisions, "leases": rows}, ensure_ascii=False, indent=2))
     return 0
 
@@ -682,7 +770,7 @@ def parser() -> argparse.ArgumentParser:
     c.add_argument("--worktree")
     c.add_argument("--phase", default="spawned")
     c.add_argument("--state", default="starting", choices=["starting", "running"])
-    c.add_argument("--admission-token", help="confirmed v3.4.35/v3.4.36/v3.4.37/v3.4.38 lane-admission token")
+    c.add_argument("--admission-token", help="confirmed v3.4.35–v3.4.39 lane-admission token")
     c.set_defaults(func=cmd_create)
     h = sub.add_parser("heartbeat")
     h.add_argument("--session", required=True)

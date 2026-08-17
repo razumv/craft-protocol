@@ -23,9 +23,9 @@ Normally an increment groups 3–8 coherent stories or roughly 4–16 hours of r
 
 The story graph must be bounded and acyclic. Duplicate IDs, duplicate edges, unknown dependencies and self-dependencies fail closed. Each story declares `deliverableClass`: `product`, `contract`, `acceptance`, or `housekeeping`; omitted legacy values normalize to `product`, but current v3.4.36+ publication requires the explicit field. Every increment must carry at least one `product` story, so enabling work cannot replace the customer outcome. A current null increment is allowed only for an observed resolved direct-owner `planning-only:` product-direction authority. The protocol records the DAG in the existing status; it does not add a scheduler or database.
 
-### v3.4.38 exact completion consumption
+### v3.4.39 exact completion consumption
 
-For a v3.4.38 coordinator, immutable completion bindings are necessary but not sufficient: the integrated handoff supplies exactly one `candidateSha:<40-hex>` marker; acceptance repeats that exact candidate and `verdict:PASS`; the observer readback repeats the candidate and every delivered `merged-main:<mergeSha>`. The existing event key/revision/fingerprint tuple prevents revision substitution, while these markers prevent semantic substitution. A mismatch fails publication. Legacy v3.4.36 records remain readable.
+For a v3.4.39 coordinator, immutable completion bindings are necessary but not sufficient: the integrated handoff supplies exactly one `candidateSha:<40-hex>` marker; acceptance repeats that exact candidate and `verdict:PASS`; the observer readback repeats the candidate and every delivered `merged-main:<mergeSha>`. The existing event key/revision/fingerprint tuple prevents revision substitution, while these markers prevent semantic substitution. A mismatch fails publication. Legacy v3.4.36 records remain readable.
 
 A post-transfer predecessor that remains live is explicit `healthy-with-maintenance-debt` only after all delivery checks are healthy. It is not a completion claim, and it never suppresses context, lease, evidence, HOLD, or product-pressure failures.
 

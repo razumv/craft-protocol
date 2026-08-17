@@ -4,6 +4,15 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.39] — 2026-08-17
+
+### Lifecycle garbage collection
+
+- Added dry-run-first `worktree-gc.py` with durable JSON reporting and bounded, per-candidate-revalidated apply. It protects root checkouts, every non-archived session CWD, authoritative active children, shared paths, process CWD holders, dirty worktrees, and unreachable detached HEADs; it only uses `git worktree remove` for clean preserved registered `.worktrees` entries and never deletes branches or session history.
+- Extended compatible worker lifecycle reporting with six exhaustive debt classes: preservation-proven archivable, terminal unknown, orphaned dead, stale coordinator, archived active child, and stale clean worktree. `archivableBacklog: 0` no longer implies a clean lifecycle; worktree observation must also be complete.
+- `coordinator-registry.py reconcile-activity` now deterministically prunes archived and absent `activeChildren` IDs while retaining every non-archived lane. Coordinator housekeeping is explicitly archive first, guarded process reap second, reviewed bounded worktree GC third; no unproved PID is killed automatically.
+- Added adversarial GC safety, false-zero lifecycle debt, active-child reconciliation, and installer payload regressions.
+
 ### Release closure correction
 
 - Replaced the impossible tagged-tree fleet-adoption self-reference with one authenticated GitHub Release-body receipt. Final non-draft Latest closure now binds schema/version/tag/the exact peeled tag commit, adopted state, owner-facing orchestrator session, adoption timestamp, and a canonical unique project/coordinator roster without changing the tagged commit after rollout.
@@ -502,7 +511,8 @@ Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's 
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.38...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.39...HEAD
+[3.4.39]: https://github.com/razumv/craft-protocol/compare/v3.4.38...v3.4.39
 [3.4.38]: https://github.com/razumv/craft-protocol/compare/v3.4.37...v3.4.38
 [3.4.37]: https://github.com/razumv/craft-protocol/compare/v3.4.36...v3.4.37
 [3.4.36]: https://github.com/razumv/craft-protocol/compare/v3.4.35...v3.4.36

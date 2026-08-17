@@ -1,4 +1,4 @@
-# Craft Agents Multi-Agent Orchestration Protocol v3.4.38 — Complete Standalone Guide
+# Craft Agents Multi-Agent Orchestration Protocol v3.4.39 — Complete Standalone Guide
 
 [![Protocol tests](https://github.com/razumv/craft-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/razumv/craft-protocol/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -94,10 +94,10 @@ Chat claims, silence, status names, and repeated CI polling are not authoritativ
 
 ---
 
-## v3.4.38 operational-stability controls
+## v3.4.39 operational-stability controls
 
 - Rotation pressure is measured against the **current coordinator session** only. A bounded post-claim/transfer grace window prevents inherited counter noise; lower clear thresholds provide hysteresis after a true pressure signal. Request-buffer/context errors bypass both protections and remain concrete recovery evidence.
-- Complete v3.4.38 Product Increments consume an immutable completion-certificate file binding **and** exact candidate, `verdict:PASS`, acceptance event, merge authority, merge SHA, and merged-main readback on one work unit. Missing, cross-work-unit, stale, or byte-mutated certificate evidence refuses completion. A predecessor left live after an otherwise healthy transfer is classified `healthy-with-maintenance-debt`, never silently ignored and never conflated with a context failure.
+- Complete v3.4.39 Product Increments consume an immutable completion-certificate file binding **and** exact candidate, `verdict:PASS`, acceptance event, merge authority, merge SHA, and merged-main readback on one work unit. Missing, cross-work-unit, stale, or byte-mutated certificate evidence refuses completion. A predecessor left live after an otherwise healthy transfer is classified `healthy-with-maintenance-debt`, never silently ignored and never conflated with a context failure.
 - `owner-plan-receipt.py` requires an authenticated configured owner session, exact plan bytes/fingerprint, increment/work-unit scope, explicit safe effects, every dangerous exclusion, bounded expiry, and durable revocation. It cannot authorize credentials, spending, deployment, protected merges, releases, remote access, or irreversible changes.
 - `release-closure.py verify` is read-only and refuses closure without a mode-restricted explicit token file and TLS-authenticated requests to fixed `api.github.com`. It derives only canonical GitHub `origin`, reads remote `main` plus annotated-tag peel directly (never cached `origin/main`), accepts only ASCII-whitespace-wrapped strict base64 Contents payloads, and requires exact Release/Latest/freshness/assets, a remote manifest with the exact locally audited path/digest set (no omissions, extras, duplicates, or unsafe paths), an authenticated final Release-body fleet-adoption receipt, and no-mutation installer proof. It ignores caller-selected CLI/API environment overrides and never tags, pushes, installs, or prints credentials.
 - Transfer acceptance revalidates both discovered and pre-existing `activeChildren`: only live, predecessor/project-bound worker/auditor lanes with unique work-unit/attempt bindings and non-colliding canonical worktrees are adoptable. Archived, foreign, stale, duplicate, or shared-cwd records refuse the handoff.
@@ -182,6 +182,7 @@ scripts/
   observable-job.py
   worker-watchdog.py
   post-archive-reaper.py
+  worktree-gc.py
   controller-harness.py
   recovery-admission.py
   recovery-admission-cron.sh
@@ -765,13 +766,19 @@ Verify:
 
 Use Craft’s `archive_session` tool. If it refuses because the session is still processing, do not guess/kill a PID. Preserve the exact branch/HEAD and retry after the turn exits. Escalate to infrastructure if needed.
 
-### Reap second
+### Reap second, GC third
 
 ```bash
 ~/.craft-agent/scripts/post-archive-reaper.py \
-  --session <id> --apply
+  --session <id> --apply --max-groups 5
+
+# Dry-run is mandatory first; this writes runtime/worktree-gc/latest.json.
+~/.craft-agent/scripts/worktree-gc.py
+# Review the durable JSON, then apply a bounded batch only:
+~/.craft-agent/scripts/worktree-gc.py --apply --max-remove 5
 
 ~/.craft-agent/scripts/worker-lease.py reconcile --apply
+~/.craft-agent/scripts/worker-lease.py report
 ```
 
 The reaper refuses:
@@ -784,7 +791,9 @@ The reaper refuses:
 - non-harness PID;
 - Craft Agents app process.
 
-For archived auditors, a clean lane is sufficient because they are read-only. The reaper removes only exact harness PIDs mapped by cwd and only after all guards pass.
+For archived auditors, a clean lane is sufficient because they are read-only. The reaper removes only exact harness PIDs mapped by cwd and only after all guards pass. Never guess or automatically kill an unproved PID.
+
+`worktree-gc.py` runs only after archival and guarded process reaping. It protects the root checkout, every non-archived session CWD, authoritative `activeChildren`, paths shared by sessions, every observed process CWD, dirty worktrees, and detached HEADs unreachable from a retained ref. Apply mode revalidates each candidate and uses only `git worktree remove`; it never deletes branches or session history. `worker-lease.py report` exposes six debt classes: `preservation-proven-archivable`, `terminal-unknown`, `orphaned-dead`, `stale-coordinator`, `archived-active-child`, and `stale-clean-worktree`. `archivableBacklog: 0` is compatible output, not proof of cleanliness; require `lifecycleDebt.clean: true`.
 
 ---
 
@@ -1011,7 +1020,7 @@ Validate packaged hashes:
 4. Write exactly one `json`-fenced receipt in the authenticated Release body, then publish it as the non-draft Latest Release:
 
    ```json
-   {"schemaVersion":1,"version":"3.4.38","tag":"v3.4.38","commit":"<peeled-tag-commit-sha>","state":"adopted","ownerFacingOrchestratorSessionId":"<owner-facing-session-id>","adoptedAt":"<nonempty-timestamp>","adoptions":[{"project":"<project>","coordinatorSessionId":"<coordinator-session-id>"}]}
+   {"schemaVersion":1,"version":"3.4.39","tag":"v3.4.39","commit":"<peeled-tag-commit-sha>","state":"adopted","ownerFacingOrchestratorSessionId":"<owner-facing-session-id>","adoptedAt":"<nonempty-timestamp>","adoptions":[{"project":"<project>","coordinatorSessionId":"<coordinator-session-id>"}]}
    ```
 
    `adoptions` is a nonempty canonical roster: each entry has only `project` and `coordinatorSessionId`, projects and coordinators are unique, and entries are ascending by `(project, coordinatorSessionId)`. The receipt is deliberately Release metadata, not a tracked file at the tag: committing a file that names its own resulting commit would change that commit.
@@ -1111,8 +1120,11 @@ completion-certificate.py validate --file cert.json
 completion-certificate.py scan
 
 # Cleanup/watchdog
-post-archive-reaper.py --session W --apply
+post-archive-reaper.py --session W --apply --max-groups 5
+worktree-gc.py                         # mandatory dry-run
+worktree-gc.py --apply --max-remove 5 # only after JSON review
 worker-lease.py reconcile --apply
+worker-lease.py report
 worker-watchdog.py --apply
 ```
 

@@ -3,7 +3,7 @@ name: worker-completion-protocol
 description: "Mandatory Product Increment story worker/auditor lifecycle: scoped checks, classified failures, observable long jobs, preserved artifacts, durable handoff, and safe stop."
 ---
 
-# Worker Completion Protocol v3.4.38
+# Worker Completion Protocol v3.4.39
 
 You are a disposable worker or auditor. Your session owns exactly one work-unit attempt in a unique worktree. Silent stops are protocol failures. You run in `permissionMode: allow-all` even when your task is a read-only audit, because reporting/status updates require session tools.
 
@@ -115,7 +115,7 @@ reports, add `--failure-class` when a failure exists: `admission-environment`,
 `irreversible-high-risk`. Admission/environment failure does not spend the product
 correction budget; never mislabel a product defect as infrastructure. Evidence references must be
 non-secret and project/workspace-local. No “should work.” Report evidence only. Never
-downgrade a terminal/blocker report with a later progress report. For v3.4.38 completion, an integrated candidate handoff must include one exact `candidateSha:<40-hex>` marker; an auditor PASS repeats that exact marker with `verdict:PASS`, and a readback watcher repeats it with its exact `merged-main:<mergeSha>` marker. These are machine-consumed bindings, not a narrative.
+downgrade a terminal/blocker report with a later progress report. For v3.4.39 completion, an integrated candidate handoff must include one exact `candidateSha:<40-hex>` marker; an auditor PASS repeats that exact marker with `verdict:PASS`, and a readback watcher repeats it with its exact `merged-main:<mergeSha>` marker. These are machine-consumed bindings, not a narrative.
 
 ## Terminal sequence
 

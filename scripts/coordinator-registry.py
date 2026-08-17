@@ -30,10 +30,10 @@ FALLBACK_TTL = int(os.environ.get("CRAFT_FALLBACK_TTL_SECONDS", "3600"))
 VALID_STATES = {"authoritative", "rotating", "hold", "superseded", "needs-owner"}
 REPORTING_POLICY = RUNTIME / "reporting-policy.json"
 REPORTING_POLICY_TOOL = HERE / "reporting-policy.py"
-CURRENT_VERSION = "3.4.38"
-# Retain already-admitted v3.4.35–v3.4.37 coordinators as readable/adoptable
+CURRENT_VERSION = "3.4.39"
+# Retain already-admitted v3.4.35–v3.4.38 coordinators as readable/adoptable
 # runtime records; new claims and successors use CURRENT_VERSION.
-COMPATIBLE_COORDINATOR_VERSIONS = {"3.4.35", "3.4.36", "3.4.37", CURRENT_VERSION}
+COMPATIBLE_COORDINATOR_VERSIONS = {"3.4.35", "3.4.36", "3.4.37", "3.4.38", CURRENT_VERSION}
 ROTATION_GRACE_MS = int(os.environ.get("CRAFT_ROTATION_GRACE_SECONDS", "900")) * 1000
 ROTATION_MESSAGE_HYSTERESIS = int(os.environ.get("CRAFT_ROTATION_MESSAGE_HYSTERESIS", "450"))
 ROTATION_TOKEN_HYSTERESIS = int(os.environ.get("CRAFT_ROTATION_TOKEN_HYSTERESIS", "180000"))
@@ -103,7 +103,7 @@ def manifest_or_die(sid: str) -> dict[str, Any]:
 def reporting_policy(required: bool = False) -> dict[str, Any]:
     row = common.read_json(REPORTING_POLICY)
     if not common.valid_reporting_policy(row):
-        if required: raise SystemExit("v3.4.38 requires valid configured pull-only reporting policy")
+        if required: raise SystemExit("v3.4.39 requires valid configured pull-only reporting policy")
         return {}
     fingerprint = __import__("hashlib").sha256(json.dumps({"mode": row.get("mode"), "ownerFacingSessionId": row.get("ownerFacingSessionId"), "configuredAt": row.get("configuredAt")}, sort_keys=True).encode()).hexdigest()
     return {"reportingMode": "pull-only", "reportingPolicyRevision": row.get("configuredAt"), "reportingPolicyFingerprint": fingerprint}
@@ -145,7 +145,7 @@ def provider_fields(manifest: dict[str, Any]) -> dict[str, Any]:
 def cmd_claim(args: argparse.Namespace) -> int:
     project = clean_project(args.project)
     manifest = manifest_or_die(args.session)
-    # Claim creates/replaces authority: it is always a current v3.4.38 admission,
+    # Claim creates/replaces authority: it is always a current v3.4.39 admission,
     # never a loophole for malformed legacy successors.
     validate_successor_manifest(manifest, project, {"projectId": args.project_id or manifest.get("projectId")})
     reporting_policy(True)
@@ -277,13 +277,48 @@ def cmd_reconcile_activity(args: argparse.Namespace) -> int:
             if not value or value.get("state") != "authoritative":
                 continue
             session_id = str(value.get("coordinatorSessionId") or "")
+            # activeChildren is authoritative while a lane exists. Reconciliation
+            # may prune only archived/absent IDs (plus malformed/duplicate entries);
+            # it must retain every non-archived lane, including needs-review/done.
+            raw_children = value.get("activeChildren") if isinstance(value.get("activeChildren"), list) else []
+            original_children = [sid for sid in raw_children if isinstance(sid, str) and sid]
+            retained_children: list[str] = []
+            pruned_children: list[dict[str, str]] = [
+                {"sessionId": str(sid), "reason": "invalid"} for sid in raw_children
+                if not isinstance(sid, str) or not sid]
+            seen: set[str] = set()
+            for child_id in sorted(original_children):
+                if child_id in seen:
+                    pruned_children.append({"sessionId": child_id, "reason": "duplicate"})
+                    continue
+                seen.add(child_id)
+                child = common.read_manifest(child_id)
+                if child is None:
+                    pruned_children.append({"sessionId": child_id, "reason": "absent"})
+                elif child.get("isArchived"):
+                    pruned_children.append({"sessionId": child_id, "reason": "archived"})
+                else:
+                    retained_children.append(child_id)
+            children_changed = retained_children != raw_children
+            if children_changed:
+                value["activeChildren"] = retained_children
+                value["activeChildrenReconciledAt"] = now
             manifest = common.read_manifest(session_id)
             if not common.session_live(manifest) or common.role_of(manifest) != "coordinator":
+                row = {"project": value.get("project"), "sessionId": session_id,
+                       "eligible": False, "admissionBlocker": "owner-not-live",
+                       "retainedActiveChildren": retained_children, "prunedActiveChildren": pruned_children}
+                if children_changed:
+                    if args.apply:
+                        save(value)
+                    changed.append(str(value.get("project")))
+                rows.append(row)
                 continue
             violation = reporting_refusal(session_id)
             if violation:
                 row = {"project": value.get("project"), "sessionId": session_id,
-                       "eligible": False, "admissionBlocker": violation.get("admissionBlocker")}
+                       "eligible": False, "admissionBlocker": violation.get("admissionBlocker"),
+                       "retainedActiveChildren": retained_children, "prunedActiveChildren": pruned_children}
                 if args.apply:
                     mark_reporting_violation(value, violation); save(value); changed.append(str(value.get("project")))
                 rows.append(row)
@@ -294,17 +329,20 @@ def cmd_reconcile_activity(args: argparse.Namespace) -> int:
             ttl_ms = stored_ttl if 60_000 <= stored_ttl <= 604_800_000 else int(args.ttl) * 1000
             eligible = activity_at > previous and now - activity_at <= ttl_ms
             row = {"project": value.get("project"), "sessionId": session_id,
-                   "previousHeartbeatAt": previous, "activityAt": activity_at, "eligible": eligible}
+                   "previousHeartbeatAt": previous, "activityAt": activity_at, "eligible": eligible,
+                   "retainedActiveChildren": retained_children, "prunedActiveChildren": pruned_children}
             if eligible:
                 value["lastHeartbeatAt"] = activity_at
                 value["leaseExpiresAt"] = activity_at + ttl_ms
                 value["activityRenewedAt"] = now
                 value["activityEvidenceAt"] = activity_at
+                row["leaseExpiresAt"] = value["leaseExpiresAt"]
+            if eligible or children_changed:
                 if args.apply:
                     save(value)
                 changed.append(str(value.get("project")))
-                row["leaseExpiresAt"] = value["leaseExpiresAt"]
             rows.append(row)
+    changed = sorted(set(changed))
     print(json.dumps({"applied": args.apply, "changed": changed, "rows": rows}, ensure_ascii=False, indent=2))
     return 0
 
@@ -312,7 +350,7 @@ def cmd_reconcile_activity(args: argparse.Namespace) -> int:
 def validate_successor_manifest(manifest: dict[str, Any], project: str, record: dict[str, Any]) -> None:
     raw_labels = manifest.get("labels")
     labels = raw_labels if isinstance(raw_labels, list) and all(isinstance(x, str) for x in raw_labels) else []
-    # Existing v3.4.35/v3.4.36/v3.4.37 coordinators remain admissible during rollout. New v3.4.38
+    # Existing v3.4.35–v3.4.38 coordinators remain admissible during rollout. New v3.4.39
     # coordinators use the current name/label pair; mixed or duplicated identities
     # are never accepted.
     roles = [x for x in labels if x.startswith("agent-role::")]
