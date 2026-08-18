@@ -72,3 +72,20 @@ bun test tests/scheduler.test.ts tests/github-adapter.test.ts tests/craft-adapte
 ```
 
 The focused suites cover the seven v4.1 scheduler invariants; GitHub pagination/field normalization, dependency mapping, same-issue and cross-issue claims, stale claims, exact PR/merge evidence, Gate IDs, and startup reconciliation; plus Craft CLI/runtime identity, Codex-only admission, exact project/model/connection/worktree binding, canonical-label duplicate refusal, 60-second direct-owner acknowledgement, true settlement versus response-less completion, fresh replacement without transcript inheritance, exact gates, deadlines, Project Desk projection, and one in-memory Craft adapter integration smoke.
+
+## Explicit live runner
+
+`src/runner.ts` is the minimal opt-in composition for a single authorized GitHub issue. It adds no scheduler policy: it scopes the existing GitHub adapter, creates one deterministic git worktree with an atomic claim-binding file, injects the existing Craft RPC adapter, and exposes preflight/tick/status/projection/archive operations through `src/cli.ts`.
+
+```bash
+cd v4
+bun run runner /absolute/path/to/live-config.json preflight
+bun run runner /absolute/path/to/live-config.json tick
+bun run runner /absolute/path/to/live-config.json status
+bun run runner /absolute/path/to/live-config.json project
+bun run runner /absolute/path/to/live-config.json archive
+```
+
+A new CLI process reconstructs state from the GitHub ledger, filesystem binding, and canonical Craft run label; it does not create a replacement identity. Live configuration must name exact issue/fence node IDs, Project item/field/option IDs, repository and worktree roots, dedicated Craft project/desk IDs, the configured absolute Craft CLI path, and expected CLI/server identity. The runner fixes `maxAttempts` at one, uses only `chatgpt-plus` with `pi/gpt-5.6-sol`, and fails closed on ambiguous readback.
+
+`config/io.craftprotocol.v4-runner.template.plist` packages the same `watch` command as a disabled, placeholder-only launchd template. Nothing installs or activates it automatically.

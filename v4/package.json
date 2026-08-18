@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "runner": "bun run src/cli.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { FakeWorkspaceAdapter } from "./adapters";
 import type { CraftStartContext } from "./craft-adapter";
 import type { Claim, ProjectStatus, RunIdentity, TrackerIssueSnapshot, WorkflowConfig } from "./domain";
 import { IdentityFactory } from "./identity";
@@ -39,10 +38,14 @@ export interface SchedulerCraftAdapter {
   cancel?(sessionId: string, nowMs: number): Promise<SchedulerCraftSession>;
 }
 
+export interface SchedulerWorkspaceAdapter {
+  ensure(identity: RunIdentity, context?: CraftStartContext): Promise<unknown>;
+}
+
 export interface SchedulerAdapters {
   github: TrackerAdapter;
   craft: SchedulerCraftAdapter;
-  workspaces: FakeWorkspaceAdapter;
+  workspaces: SchedulerWorkspaceAdapter;
 }
 
 export class DeterministicScheduler {
@@ -209,7 +212,11 @@ export class DeterministicScheduler {
       workspacePath: claim.workspacePath,
     };
     try {
-      await this.adapters.workspaces.ensure(identity);
+      await this.adapters.workspaces.ensure(identity, {
+        claim,
+        issue: snapshot.issue,
+        contract: snapshot.contract,
+      });
       this.crashIf("after-workspace", crashAfter);
       await this.adapters.craft.ensure(identity, {
         claim,
