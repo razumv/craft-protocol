@@ -87,6 +87,7 @@ secrets/
 *.log
 *.pid
 *.lock
+!v4/bun.lock
 logs/
 pids/
 runtime/

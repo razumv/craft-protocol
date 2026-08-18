@@ -12,7 +12,7 @@ trap 'rm -f "$TMP"' EXIT
 # Community metadata and CI workflows are repository controls, not installed
 # protocol payload. They are validated separately by CI and secret scans.
 git ls-files --cached --others --exclude-standard -- \
-  README.md CHANGELOG.md LICENSE NOTICE install.sh scripts config skills tests docs tools \
+  README.md WORKFLOW.md CHANGELOG.md LICENSE NOTICE install.sh scripts config skills tests docs tools v4 \
   | LC_ALL=C sort \
   | while IFS= read -r file; do
       [[ "$file" == "manifest.sha256" ]] && continue

@@ -4,6 +4,11 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+### Parallel v4.1 scheduler core
+
+- Added a repository-owned `WORKFLOW.md` contract and a standalone TypeScript/Bun `v4/` package with normalized issues, deterministic lifecycle and WIP=1 scheduling, atomic fake claim fencing, bounded retry/stale reconciliation, stable session/worktree identities, immutable owner directives, risk budgets, structured status, and crash/restart simulation.
+- Added seven focused tests for concurrent exactly-once claims, duplicate identity prevention, restart recovery, bounded stale-run retry, directive immutability, risk policy, and one end-to-end simulator smoke. This increment has fake GitHub/Craft/workspace adapters only and does not alter v3, Fleet, launchd, or production state.
+
 ## [3.4.41] — 2026-08-18
 
 ### Admission RPC scaling and stale-revision safety
