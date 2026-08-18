@@ -120,7 +120,19 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
   }
 
   async activeClaims(): Promise<TrackerIssueSnapshot[]> {
-    const active = await this.fetchIssuesByStates(this.config.workflow.tracker.activeStates);
+    // Active reconciliation is strict: omitting a malformed active item could release WIP and duplicate a run.
+    const wanted = new Set(this.config.workflow.tracker.activeStates);
+    const active = [...(await this.loadAll(true)).values()]
+      .map((entry) => entry.snapshot)
+      .filter((entry) => wanted.has(entry.issue.state));
+    for (const entry of active) {
+      if (entry.issue.state === "retry-wait" && !entry.retry) {
+        throw new Error(`active GitHub issue ${entry.issue.identifier} lacks durable retry metadata`);
+      }
+      if (!["ready", "retry-wait", "done"].includes(entry.issue.state) && !entry.claim) {
+        throw new Error(`active GitHub issue ${entry.issue.identifier} lacks a durable claim binding`);
+      }
+    }
     return active.filter((entry) => entry.claim !== null);
   }
 

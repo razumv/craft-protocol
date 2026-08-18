@@ -61,4 +61,4 @@ bun run typecheck
 bun test
 ```
 
-The fourteen focused tests cover the seven v4.1 scheduler invariants plus GitHub pagination/field normalization, dependency mapping, concurrent and stale claims, restart reconstruction, PR/merge evidence, exact Gate IDs, preservation-unknown behavior, and one injected adapter integration smoke.
+The fifteen focused tests cover the seven v4.1 scheduler invariants plus GitHub pagination/field normalization, dependency mapping, concurrent and stale claims, claimless-active fail-closed behavior, restart reconstruction, PR/merge evidence, exact Gate IDs, preservation-unknown behavior, and one injected adapter integration smoke.

@@ -309,6 +309,13 @@ describe("v4.2 GitHub Issues and Projects adapter", () => {
     await expect(adapter.get("I_1")).rejects.toThrow("does not exactly match GATE-I_1-7");
   });
 
+  test("claimless active projections fail closed instead of releasing scheduler WIP", async () => {
+    const { transport, adapter } = setup();
+    transport.addIssue(1, "running");
+
+    await expect(adapter.activeClaims()).rejects.toThrow("lacks a durable claim binding");
+  });
+
   test("ambiguous filesystem truth transitions a running claim to preservation-unknown", async () => {
     const { transport, truth, adapter } = setup();
     transport.addIssue(1);
