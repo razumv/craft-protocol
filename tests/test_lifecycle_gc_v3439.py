@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Adversarial v3.4.40 lifecycle-debt and worktree-GC regressions."""
+"""Adversarial v3.4.41 lifecycle-debt and worktree-GC regressions."""
 from __future__ import annotations
 
 import json
@@ -171,7 +171,7 @@ class LifecycleDebtTests(Base):
         self.put(self.runtime / "coordinators" / "demo.json", {
             "project": "demo", "state": "authoritative", "coordinatorSessionId": "coord",
             "activeChildren": ["archived-child", "absent-child"]})
-        self.put(self.report, {"schemaVersion": 1, "protocolVersion": "3.4.40", "mode": "dry-run",
+        self.put(self.report, {"schemaVersion": 1, "protocolVersion": "3.4.41", "mode": "dry-run",
                                "observationComplete": True, "worktrees": [{
                                    "classification": "stale-clean-worktree", "state": "candidate",
                                    "repository": "/repo", "worktree": "/repo/.worktrees/old",
@@ -205,9 +205,9 @@ class LifecycleDebtTests(Base):
 class RegistryAndInstallerTests(Base):
     def test_reconcile_activity_prunes_archived_and_absent_children_but_retains_every_non_archived_lane(self):
         coord_cwd = self.root / "repo"; coord_cwd.mkdir()
-        labels = ["coordinators", "project::demo", "protocol-version::3.4.40"]
+        labels = ["coordinators", "project::demo", "protocol-version::3.4.41"]
         self.manifest("coord", "coordinator", coord_cwd, labels=labels,
-                      name="[demo] Coordinator v3.4.40", projectId="native",
+                      name="[demo] Coordinator v3.4.41", projectId="native",
                       llmConnection="chatgpt-plus", model="pi/gpt-5.6-sol", permissionMode="execute")
         self.manifest("live", "worker", status="in_progress")
         self.manifest("needs-review", "auditor", status="needs-review")

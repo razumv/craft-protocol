@@ -7,9 +7,9 @@ class AdmissionV3435(unittest.TestCase):
  def setUp(self):
   self.t=tempfile.TemporaryDirectory();self.r=Path(self.t.name);self.sessions=self.r/'sessions';self.runtime=self.r/'runtime'
   self.env={**os.environ,'CRAFT_WORKSPACE':str(self.r),'CRAFT_SESSIONS':str(self.sessions),'CRAFT_RUNTIME':str(self.runtime)}
-  self.manifest('coord','coordinator',['project::p','coordinators','protocol-version::3.4.40'],name='[p] Coordinator v3.4.40',project_id='native')
+  self.manifest('coord','coordinator',['project::p','coordinators','protocol-version::3.4.41'],name='[p] Coordinator v3.4.41',project_id='native')
   (self.runtime/'coordinators').mkdir(parents=True,exist_ok=True);(self.runtime/'coordinators/p.json').write_text(json.dumps({'project':'p','projectId':'native','state':'authoritative','coordinatorSessionId':'coord','generation':1}))
-  self.manifest('worker','worker',['parent-session::coord','project::p','work-unit::u','attempt::1','protocol-version::3.4.40'],project_id='native')
+  self.manifest('worker','worker',['parent-session::coord','project::p','work-unit::u','attempt::1','protocol-version::3.4.41'],project_id='native')
  def tearDown(self):self.t.cleanup()
  def manifest(self,sid,role,labels=(),name=None,project_id=None):
   wt=self.r/f'wt-{sid}';wt.mkdir(parents=True,exist_ok=True);p=self.sessions/sid;p.mkdir(parents=True,exist_ok=True)
@@ -36,7 +36,7 @@ class AdmissionV3435(unittest.TestCase):
   self.assertNotEqual(result.returncode,0);self.assertIn('admission manifest/registry identity mismatch',result.stderr)
  def test_confirm_still_rejects_live_worktree_collision(self):
   self.reserve_without_worker(cwd=self.r)
-  self.manifest('other','worker',['parent-session::coord','project::p','work-unit::other','attempt::1','protocol-version::3.4.40'],project_id='native')
+  self.manifest('other','worker',['parent-session::coord','project::p','work-unit::other','attempt::1','protocol-version::3.4.41'],project_id='native')
   other=self.sessions/'other'/'session.jsonl';row=json.loads(other.read_text());row['workingDirectory']=str(self.r/'wt-worker');other.write_text(json.dumps(row)+'\n')
   result=self.tool('lane-admission.py','confirm','--token','t','--session','worker',ok=False,cwd=self.r/'wt-worker')
   self.assertNotEqual(result.returncode,0);self.assertIn('live manifest worktree collision',result.stderr)

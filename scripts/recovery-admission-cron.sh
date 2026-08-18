@@ -22,7 +22,7 @@ if [[ ! -r "$CONFIG" ]]; then
   print -r -- '{"error":"persistent controller config missing; refusing admission"}' >> "$LOG"
   exit 2
 fi
-read -r CONTROLLER WORKSPACE_ID EXPECTED_RUNTIME_VERSION EXPECTED_RUNTIME_COMMIT SERVER_URL RPC_CLI < <(
+read -r CONTROLLER WORKSPACE_ID EXPECTED_RUNTIME_VERSION EXPECTED_RUNTIME_COMMIT SERVER_URL RPC_CLI CLI_TIMEOUT SUPERVISOR_TIMEOUT < <(
   "$PYTHON" -c 'import json,sys
 from urllib.parse import urlsplit
 v=json.load(open(sys.argv[1]))
@@ -30,7 +30,11 @@ fields=[v.get("sessionId"),v.get("workspaceId"),v.get("expectedRuntimeVersion"),
 assert all(isinstance(x,str) and x and not any(c in x for c in "\r\n\t") for x in fields)
 url=urlsplit(fields[4]); assert url.scheme=="wss" or (url.scheme=="ws" and url.hostname in {"127.0.0.1","::1","localhost"})
 assert fields[5].startswith("/")
-print("\t".join(fields))' "$CONFIG"
+cli=v.get("cliTimeoutSeconds",110); supervisor=v.get("supervisorTimeoutSeconds",120)
+assert isinstance(cli,int) and not isinstance(cli,bool) and 20 <= cli <= 300
+assert isinstance(supervisor,int) and not isinstance(supervisor,bool) and 30 <= supervisor <= 330
+assert supervisor >= cli + 5
+print("\t".join([*fields,str(cli),str(supervisor)]))' "$CONFIG"
 ) || {
   print -r -- '{"error":"persistent controller direct-delivery config invalid; refusing admission"}' >> "$LOG"
   exit 2
@@ -41,6 +45,8 @@ if [[ ! -x "$RPC_CLI" ]]; then
 fi
 export CRAFT_RPC_CLI="$RPC_CLI"
 export CRAFT_SERVER_URL="$SERVER_URL"
+export CRAFT_ADMISSION_CLI_TIMEOUT_SECONDS="$CLI_TIMEOUT"
+export CRAFT_ADMISSION_SUPERVISOR_TIMEOUT_SECONDS="$SUPERVISOR_TIMEOUT"
 
 # Detection is deterministic and needs no agent, so it must not depend on one.
 # Until v3.4.25 only the controller session ran `detect --apply`; when that lane

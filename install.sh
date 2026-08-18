@@ -1,6 +1,6 @@
 #!/bin/zsh
 # SPDX-License-Identifier: Apache-2.0
-# Safe installer for Craft Agents orchestration protocol v3.4.40.
+# Safe installer for Craft Agents orchestration protocol v3.4.41.
 # Dry-run by default. Use --apply only after reviewing README.md.
 set -eu
 
@@ -23,7 +23,7 @@ SKILLS="$WORKSPACE/skills"
 RUNTIME="$CRAFT/runtime"
 LOGS="$CRAFT/logs"
 STAMP=$(date '+%Y%m%d-%H%M%S')
-BACKUP="$CRAFT/backups/orchestration-v3.4.40-$STAMP"
+BACKUP="$CRAFT/backups/orchestration-v3.4.41-$STAMP"
 PYTHON="${CRAFT_PYTHON:-/opt/homebrew/bin/python3}"
 [[ -x "$PYTHON" ]] || PYTHON=$(command -v python3)
 PLIST_NAME="com.craft-protocol.worker-watchdog.plist"
@@ -100,7 +100,9 @@ install_file "$ROOT/skills/self-healing-controller/SKILL.md" \
   "$SKILLS/self-healing-controller/SKILL.md"
 
 PLIST_DST="$SCRIPTS/$PLIST_NAME"
+ADMISSION_PLIST_DST="$SCRIPTS/$ADMISSION_PLIST_NAME"
 echo "RENDER $ROOT/config/launchd.watchdog.template.plist -> $PLIST_DST"
+echo "RENDER $ROOT/config/launchd.admission.template.plist -> $ADMISSION_PLIST_DST"
 if (( APPLY )); then
   mkdir -p "$SCRIPTS" "$RUNTIME/worker-leases" "$RUNTIME/worker-jobs" \
     "$RUNTIME/coordinators" "$RUNTIME/owner-gates" \
@@ -110,7 +112,6 @@ if (( APPLY )); then
   backup_existing "$PLIST_DST"
   sed "s|__HOME__|$HOME|g; s|__PYTHON__|$PYTHON|g" \
     "$ROOT/config/launchd.watchdog.template.plist" > "$PLIST_DST"
-  ADMISSION_PLIST_DST="$SCRIPTS/$ADMISSION_PLIST_NAME"
   backup_existing "$ADMISSION_PLIST_DST"
   sed "s|__HOME__|$HOME|g" "$ROOT/config/launchd.admission.template.plist" > "$ADMISSION_PLIST_DST"
   chmod 700 "$SCRIPTS"/*.py "$SCRIPTS"/*.sh
@@ -118,7 +119,7 @@ if (( APPLY )); then
   backup_existing "$WORKSPACE/automations.json"
   "$PYTHON" "$SCRIPTS/recovery-admission.py" install-guard \
     --template "$ROOT/config/self-healing.automations.template.json" --apply
-  echo "Capability-v2 recovery and direct coordinator ticks remain disabled until persistent-controller.json explicitly provides sessionId, workspaceId, expectedRuntimeVersion, expectedRuntimeCommit, a trusted serverUrl, and an absolute executable rpcCli."
+  echo "Capability-v2 recovery and direct coordinator ticks remain disabled until persistent-controller.json explicitly provides sessionId, workspaceId, expectedRuntimeVersion, expectedRuntimeCommit, a trusted serverUrl, and an absolute executable rpcCli. Optional cliTimeoutSeconds/supervisorTimeoutSeconds override the installed 110/120-second defaults and must retain at least 5 seconds of ordering grace."
   echo "Provide CRAFT_SERVER_TOKEN in the service environment or an owner-only token file; no token/version defaults are installed."
 fi
 

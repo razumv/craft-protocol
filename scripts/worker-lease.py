@@ -429,10 +429,10 @@ def refuse_role_drift_create(session_id: str, value: dict[str, Any]) -> None:
 
 def validate_existing_admission(session_id: str) -> None:
     manifest = read_manifest(session_id) or {}
-    if not ({"protocol-version::3.4.35", "protocol-version::3.4.36", "protocol-version::3.4.37", "protocol-version::3.4.38", "protocol-version::3.4.39", "protocol-version::3.4.40"} & set(manifest.get("labels") or [])): return
+    if not ({"protocol-version::3.4.35", "protocol-version::3.4.36", "protocol-version::3.4.37", "protocol-version::3.4.38", "protocol-version::3.4.39", "protocol-version::3.4.40", "protocol-version::3.4.41"} & set(manifest.get("labels") or [])): return
     matches = [read_json(p) for p in (RUNTIME / "lane-admissions").glob("*.json")]
     matches = [x for x in matches if x and x.get("state") == "admitted" and x.get("sessionId") == session_id]
-    if len(matches) != 1: raise SystemExit("v3.4.35–v3.4.40 lane has no unique admitted record")
+    if len(matches) != 1: raise SystemExit("v3.4.35–v3.4.41 lane has no unique admitted record")
     spec = importlib.util.spec_from_file_location("lane_admission", Path(__file__).with_name("lane-admission.py"))
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)  # type: ignore
     module.cmd_confirm(argparse.Namespace(token=matches[0]["token"], session=session_id))
@@ -712,7 +712,7 @@ def lifecycle_debt(rows: list[dict[str, Any]]) -> dict[str, Any]:
                     "worktree": expand((manifest or {}).get("workingDirectory") or (manifest or {}).get("sdkCwd"))})
     gc_report = read_json(Path(os.environ.get("CRAFT_WORKTREE_GC_REPORT", RUNTIME / "worktree-gc/latest.json")).expanduser())
     gc_observed = bool(gc_report and gc_report.get("schemaVersion") == 1
-                       and gc_report.get("protocolVersion") == "3.4.40"
+                       and gc_report.get("protocolVersion") == "3.4.41"
                        and gc_report.get("mode") in {"dry-run", "apply"}
                        and not gc_report.get("applyRefusal")
                        and gc_report.get("observationComplete"))
@@ -770,7 +770,7 @@ def parser() -> argparse.ArgumentParser:
     c.add_argument("--worktree")
     c.add_argument("--phase", default="spawned")
     c.add_argument("--state", default="starting", choices=["starting", "running"])
-    c.add_argument("--admission-token", help="confirmed v3.4.35–v3.4.40 lane-admission token")
+    c.add_argument("--admission-token", help="confirmed v3.4.35–v3.4.41 lane-admission token")
     c.set_defaults(func=cmd_create)
     h = sub.add_parser("heartbeat")
     h.add_argument("--session", required=True)

@@ -197,7 +197,7 @@ class TransferAndEvidenceTests(Base):
         return repo, sha
 
     def test_client_server_exact_candidate_handoff_acceptance_merge_and_readback_are_consumed(self):
-        self.manifest("coord", "coordinator", labels=["protocol-version::3.4.40"])
+        self.manifest("coord", "coordinator", labels=["protocol-version::3.4.41"])
         self.put(self.runtime / "coordinators" / "client.json", {"project": "client", "state": "authoritative", "coordinatorSessionId": "coord", "generation": 1})
         repo, merge = self.init_delivery_repo(); candidate = "a" * 40
         criterion = "customer completes checkout"
@@ -224,7 +224,7 @@ class TransferAndEvidenceTests(Base):
             "stories": [{"id": "ship", "title": "Ship", "state": "accepted", "deliverableClass": "product", "workUnit": "ship", "acceptanceRef": "accept", "mergeSha": merge, "mergeAuthorityRef": "merge"}],
             "completionEvidence": {"integratedCandidateRef": bind("candidate"), "acceptanceRef": bind("accept"), "releaseReadbackRef": bind("release"), "demonstrationRef": bind("demo"), "certificateRef": {"certificateId": "ship-candidate", "fingerprint": certificate_fingerprint}}}}
         _, published = self.cli("coordinator-status.py", "publish", "--project", "client", "--session", "coord", "--generation", "1", "--json", json.dumps(payload), "--apply")
-        self.assertEqual(published["record"]["protocolVersion"], "3.4.40")
+        self.assertEqual(published["record"]["protocolVersion"], "3.4.41")
         missing = json.loads(json.dumps(payload)); missing["productIncrement"]["completionEvidence"].pop("certificateRef")
         proc, _ = self.cli("coordinator-status.py", "publish", "--project", "client", "--session", "coord", "--generation", "1", "--json", json.dumps(missing), "--apply", ok=False)
         self.assertIn("requires consumed completion certificate", proc.stderr)
@@ -233,7 +233,7 @@ class TransferAndEvidenceTests(Base):
         self.assertIn("exact candidateSha", proc.stderr)
 
     def test_server_healthy_with_predecessor_archive_debt_is_not_a_context_failure(self):
-        self.manifest("server-new", "coordinator", labels=["protocol-version::3.4.40"])
+        self.manifest("server-new", "coordinator", labels=["protocol-version::3.4.41"])
         self.manifest("server-old", "coordinator", labels=["protocol-version::3.4.36"])
         self.manifest("server-worker", "worker", labels=["parent-session::server-new", "work-unit::ship", "attempt::1"])
         self.put(self.runtime / "coordinators" / "server.json", {"project": "server", "state": "authoritative", "coordinatorSessionId": "server-new", "generation": 2,

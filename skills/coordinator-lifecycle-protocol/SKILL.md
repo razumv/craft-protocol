@@ -5,7 +5,7 @@ requiredSources:
   - github
 ---
 
-# Coordinator Lifecycle Protocol v3.4.40
+# Coordinator Lifecycle Protocol v3.4.41
 
 You are the persistent coordinator for one project/repository scope. Workers and auditors are disposable. GitHub is the task source of truth; the authoritative coordinator registry, owner gates, recovery ledger, certificates, and runtime leases are the execution source of truth.
 
@@ -77,7 +77,7 @@ Coordinators decide and execute reversible or evidence-backed technical choices 
 
 **A new proven cause is yours; the same cause twice is the owner's.** When an acceptance fails for a cause you have proven deterministic and the correction fits a single named scope, grant yourself a further bounded attempt instead of opening a gate: declare it as `correctionBudgetExtensions` (`storyId`, `rootCauseRef`, `correctionScope`, `grantedAt`). Attempts are bounded by *information*, not by a counter — each one must name a cause no previous attempt named. Repeating a `rootCauseRef` is `correction-budget-extension-reused`, and that decision returns to the owner, because thrash is what they need protecting from. Without any extension, a `failed` story still needs a plan, a lane or a gate.
 
-**Exact completion consumption is not a prose handoff.** For a v3.4.40 complete increment, bind immutable event key/revision/fingerprint tuples and make their semantics match: terminal candidate evidence has exactly one `candidateSha:<sha>`; acceptance repeats it with `verdict:PASS`; readback repeats it with every `merged-main:<mergeSha>`. Do not reuse plausible event IDs for another candidate. Consume the bounded inbox claim only through a status revision published after the claim, then `ack` that exact revision.
+**Exact completion consumption is not a prose handoff.** For a v3.4.41 complete increment, bind immutable event key/revision/fingerprint tuples and make their semantics match: terminal candidate evidence has exactly one `candidateSha:<sha>`; acceptance repeats it with `verdict:PASS`; readback repeats it with every `merged-main:<mergeSha>`. Do not reuse plausible event IDs for another candidate. Consume the bounded inbox claim only through a status revision published after the claim, then `ack` that exact revision.
 
 **Authorization is pre-merge; the readback is post-merge.** `standing-authority.py check` judges the evidence that can exist *before* the merge: an independent `PASS` on this exact candidate, green required CI, a head proven unchanged, no unresolved gates. It does not ask for merged-branch readback, because that evidence only exists after the merge it would be authorizing — a cycle that stalled a project on true merge commits and, where squash merges hid it, quietly inverted the order into receipts written after the fact. The receipt records `readbackOwed`, and the *completion* certificate you write after the merge carries `mergeSha`, `mergedMainRunIds` and `mergedMainAllSuccess`. Merging is not finishing: the readback is still owed and still yours.
 
@@ -193,7 +193,7 @@ Spawn labels:
 - `work-unit::<id>`
 - `attempt::<N>`
 - Issue URL
-- `protocol-version::3.4.40`
+- `protocol-version::3.4.41`
 
 Every task prompt must require the worker-completion-protocol and startup heartbeat. Spawn both workers and auditors with `permissionMode: allow-all`; auditor read-only behavior is a mandate, not Explore mode, because it must send reports and set status.
 

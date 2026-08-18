@@ -142,9 +142,13 @@ auto-resumes.
 The installer copies `coordinator-inbox.py`, `coordinator-status.py`, and
 `coordinator-commitment.py` alongside the existing deterministic tools, restores the
 kill switch before any payload mutation, verifies package hashes, and runs the regression
-suite including `test_coordinator_v330.py`. Admission RPC readback uses a bounded 60-second
-timeout (override `CRAFT_ADMISSION_RPC_TIMEOUT_SECONDS`, allowed range 20–120) so a busy
-coordinator queue acknowledgement is not misclassified as an unknown mutation outcome.
+suite including `test_coordinator_v330.py`. Since v3.4.41 admission passes an explicit
+110-second request/connect timeout to `craft-cli` (`CRAFT_ADMISSION_CLI_TIMEOUT_SECONDS`,
+allowed range 20–300) and retains a strictly larger 120-second subprocess deadline
+(`CRAFT_ADMISSION_SUPERVISOR_TIMEOUT_SECONDS`, allowed range 30–330 and at least five
+seconds greater). A busy queue acknowledgement may therefore take its measured 28–110
+seconds without being cut off by the CLI's otherwise-hidden 10-second default, while an
+ambiguous mutation outcome still remains delivery-unknown.
 The new runtime files are additive and versioned; rollback never deletes inbox, status,
 or commitment state.
 

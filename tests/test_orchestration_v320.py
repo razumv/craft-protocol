@@ -14,7 +14,7 @@ class OrchestrationV320Test(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
         self.sessions = self.root / "sessions"; self.runtime = self.root / "runtime"; self.sessions.mkdir()
         self.env = os.environ.copy(); self.env.update({"CRAFT_WORKSPACE": str(self.root), "CRAFT_SESSIONS": str(self.sessions),
-            "CRAFT_RUNTIME": str(self.runtime), "CRAFT_COORDINATOR_TTL_SECONDS": "1", "CRAFT_FALLBACK_TTL_SECONDS": "1"})
+            "CRAFT_RUNTIME": str(self.runtime), "CRAFT_COORDINATOR_TTL_SECONDS": "60", "CRAFT_FALLBACK_TTL_SECONDS": "60"})
         self.runtime.mkdir(exist_ok=True); (self.runtime / "reporting-policy.json").write_text(json.dumps({"schemaVersion":1,"mode":"pull-only","ownerFacingSessionId":"owner","configuredAt":1,"interception":"unavailable","detection":"best-effort-session-transcript"}))
     def tearDown(self): self.temp.cleanup()
     def manifest(self, sid, project="demo", model="pi/gpt-5.6-sol", connection="chatgpt-plus", archived=False,
@@ -262,6 +262,6 @@ class OrchestrationV320Test(unittest.TestCase):
         self.exec_tool("coordinator-registry.py","inspect","--project","demo")
         report=json.loads(self.exec_tool("coordinator-reconcile.py").stdout)
         self.assertTrue(report["healthy"]); self.assertEqual(report["coordinators"][0]["issues"],[])
-        self.assertEqual(report["coordinators"][0]["desiredName"], "[demo] Coordinator v3.4.40")
+        self.assertEqual(report["coordinators"][0]["desiredName"], "[demo] Coordinator v3.4.41")
 
 if __name__ == "__main__": unittest.main()

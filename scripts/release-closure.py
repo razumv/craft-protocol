@@ -65,7 +65,7 @@ def api(token: str, endpoint: str) -> dict[str, Any] | None:
         return None
     request = Request(f"{API_HOST}/{endpoint}", headers={
         "Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}",
-        "User-Agent": "craft-protocol-release-closure/3.4.40",
+        "User-Agent": "craft-protocol-release-closure/3.4.41",
     })
     try:
         with urlopen(request, timeout=20) as response:  # nosec B310: fixed HTTPS host

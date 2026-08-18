@@ -36,7 +36,7 @@ STATE = Path(os.environ.get("CRAFT_ADMISSION_STATE", RUNTIME / "self-healing/adm
 TICK_STATES = Path(os.environ.get("CRAFT_COORDINATOR_TICK_STATES", RUNTIME / "self-healing/coordinator-ticks")).expanduser()
 LOCK = Path(os.environ.get("CRAFT_ADMISSION_LOCK", RUNTIME / "self-healing/admission.lock")).expanduser()
 DISABLED = Path(os.environ.get("CRAFT_SELF_HEALING_DISABLED", RUNTIME / "self-healing.disabled")).expanduser()
-PROTOCOL_VERSION = "v3.4.40"
+PROTOCOL_VERSION = "v3.4.41"
 AUTOMATION_ID = os.environ.get("CRAFT_RECOVERY_NOTIFIER_AUTOMATION_ID", "a322-admission")
 LEGACY_AUTOMATION_IDS = {"a321-notifier", "a31101", "a31102"}
 CONTROLLER_ACTION_ID = "a322-controller-recovery"
@@ -44,9 +44,18 @@ COORDINATOR_ACTION_ID = "a322-coordinator-tick"
 CONTROLLER_HARNESS = Path(os.environ.get("CRAFT_CONTROLLER_HARNESS", Path(__file__).with_name("controller-harness.py"))).expanduser()
 TOKEN_FILE = Path(os.environ.get("CRAFT_SERVER_TOKEN_FILE", HOME / ".config/craft-agent-headless/server-token")).expanduser()
 MAX_INCIDENTS = int(os.environ.get("CRAFT_RECOVERY_ADMISSION_MAX_INCIDENTS", "3"))
-RPC_TIMEOUT_SECONDS = int(os.environ.get("CRAFT_ADMISSION_RPC_TIMEOUT_SECONDS", "60"))
-if RPC_TIMEOUT_SECONDS < 20 or RPC_TIMEOUT_SECONDS > 120:
-    raise ValueError("CRAFT_ADMISSION_RPC_TIMEOUT_SECONDS must be between 20 and 120")
+# craft-cli has its own request/connect deadline (10s by default), so merely
+# giving subprocess.run() more time does not extend the RPC.  Keep the two
+# deadlines explicit and ordered: the CLI owns the RPC deadline; the supervisor
+# gets a small grace period to collect its exit/readback without killing it.
+CLI_TIMEOUT_SECONDS = int(os.environ.get("CRAFT_ADMISSION_CLI_TIMEOUT_SECONDS", "110"))
+SUPERVISOR_TIMEOUT_SECONDS = int(os.environ.get("CRAFT_ADMISSION_SUPERVISOR_TIMEOUT_SECONDS", "120"))
+if CLI_TIMEOUT_SECONDS < 20 or CLI_TIMEOUT_SECONDS > 300:
+    raise ValueError("CRAFT_ADMISSION_CLI_TIMEOUT_SECONDS must be between 20 and 300")
+if SUPERVISOR_TIMEOUT_SECONDS < 30 or SUPERVISOR_TIMEOUT_SECONDS > 330:
+    raise ValueError("CRAFT_ADMISSION_SUPERVISOR_TIMEOUT_SECONDS must be between 30 and 330")
+if SUPERVISOR_TIMEOUT_SECONDS < CLI_TIMEOUT_SECONDS + 5:
+    raise ValueError("CRAFT_ADMISSION_SUPERVISOR_TIMEOUT_SECONDS must be at least 5 seconds greater than CRAFT_ADMISSION_CLI_TIMEOUT_SECONDS")
 RECOVERY_MIN_AGE_SECONDS = int(os.environ.get("CRAFT_ADMISSION_RECOVERY_MIN_AGE_SECONDS", "1800"))
 RECOVERY_MIN_AGE_MS = RECOVERY_MIN_AGE_SECONDS * 1000
 # A consumed wake whose condition persists is re-issued a bounded number of times
@@ -559,7 +568,10 @@ def rpc_command() -> list[str]:
         raise AdmissionError("CRAFT_RPC_CLI is invalid") from exc
     if not command:
         raise AdmissionError("CRAFT_RPC_CLI is invalid")
-    return command + ["--json"]
+    # Global CLI options are parsed independently of command position. Passing
+    # the timeout here fixes every capability/deliver/inspect/recover RPC without
+    # requiring an operator-maintained wrapper around the configured executable.
+    return command + ["--timeout", str(CLI_TIMEOUT_SECONDS * 1000), "--json"]
 
 
 def rpc_env(token: str) -> dict[str, str]:
@@ -572,7 +584,7 @@ def rpc_env(token: str) -> dict[str, str]:
 def rpc_json(args: list[str], token: str, *, mutation: bool = False, expected_type: type = dict) -> Any:
     try:
         cp = subprocess.run(rpc_command()+args, text=True, capture_output=True,
-                            timeout=RPC_TIMEOUT_SECONDS, env=rpc_env(token))
+                            timeout=SUPERVISOR_TIMEOUT_SECONDS, env=rpc_env(token))
     except (OSError, subprocess.TimeoutExpired) as exc:
         if mutation:
             raise DeliveryUnknown("admission mutation outcome unavailable") from exc
@@ -704,7 +716,8 @@ def content_revision(message: str) -> str:
     return hashlib.sha256(message.encode("utf-8")).hexdigest()
 
 
-def validate_receipt(state: dict[str, Any], receipt: Any, *, message_id: str | None = None) -> dict[str, Any]:
+def validate_receipt(state: dict[str, Any], receipt: Any, *, message_id: str | None = None,
+                     allow_stale_revision: bool = False) -> dict[str, Any]:
     if not isinstance(receipt, dict):
         raise AdmissionError("capability-v2 admission receipt missing")
     expected = {"workspaceId": state["workspaceId"], "sessionId": state["targetSessionId"],
@@ -718,9 +731,12 @@ def validate_receipt(state: dict[str, Any], receipt: Any, *, message_id: str | N
         raise AdmissionError("capability-v2 admission receipt message mismatch")
     revision = receipt.get("contentRevision")
     if (not isinstance(revision, str) or len(revision) != 64 or
-            any(ch not in "0123456789abcdef" for ch in revision) or
-            revision != content_revision(str(state["message"]))):
-        raise AdmissionError("capability-v2 admission receipt content revision mismatch")
+            any(ch not in "0123456789abcdef" for ch in revision)):
+        raise AdmissionError("capability-v2 admission receipt content revision invalid")
+    expected_revision = content_revision(str(state["message"]))
+    if revision != expected_revision:
+        if not allow_stale_revision or receipt.get("deliveryState") == "consumed":
+            raise AdmissionError("capability-v2 admission receipt content revision mismatch")
     completion_keys = {"completedContentRevision", "completedProcessingGeneration", "completedMessageId",
                        "completedMessageAt", "consumedAt"}
     if (receipt.get("deliveryState") != "consumed" and any(key in receipt for key in completion_keys)):
@@ -749,35 +765,27 @@ def validate_consumed_receipt(state: dict[str, Any], receipt: Any, *, message_id
     return value
 
 
-def deliver(state: dict[str, Any], token: str) -> dict[str, Any]:
+def deliver(state: dict[str, Any], token: str, *, allow_stale_revision: bool = False) -> dict[str, Any]:
     response = rpc_json(["automation", "deliver", *scope_args(state), *target_identity_args(state), str(state["message"])], token, mutation=True)
     status = response.get("status")
     if status == "busy":
         raise DeliveryUnknown("capability-v2 delivery busy")
     if status == "blocked" or status not in DELIVERY_STATUSES:
         raise AdmissionError("capability-v2 delivery response blocked or invalid")
-    receipt = validate_receipt(state, response.get("receipt"))
+    receipt = validate_receipt(state, response.get("receipt"), allow_stale_revision=allow_stale_revision)
     message_id = response.get("messageId") or receipt.get("messageId")
     if not isinstance(message_id, str) or not message_id or receipt.get("messageId") != message_id:
         raise AdmissionError("capability-v2 delivery message receipt invalid")
     if status != "duplicate" and receipt.get("deliveryState") != status:
         raise AdmissionError("capability-v2 delivery receipt state mismatch")
+    stale = receipt.get("contentRevision") != content_revision(str(state["message"]))
     if receipt.get("deliveryState") == "consumed":
         receipt = validate_consumed_receipt(state, receipt, message_id=message_id)
-    return {"status": status, "messageId": message_id, "receipt": receipt}
+    return {"status": status, "messageId": message_id, "receipt": receipt,
+            "staleContentRevision": stale}
 
 
-def inspect(state: dict[str, Any], token: str) -> dict[str, Any]:
-    response = rpc_json(["automation", "inspect", *scope_args(state)], token)
-    status = response.get("status")
-    if status == "missing" or status == "blocked" or status not in INSPECT_STATUSES:
-        raise AdmissionError("admission inspection outstanding state missing or blocked")
-    receipt = validate_receipt(state, response.get("receipt"), message_id=str(state["messageId"]))
-    if receipt.get("deliveryState") != status:
-        raise AdmissionError("admission inspection receipt state mismatch")
-    if status == "consumed":
-        receipt = validate_consumed_receipt(state, receipt)
-    session = response.get("session")
+def validate_session_inspection(session: Any) -> dict[str, Any]:
     if not isinstance(session, dict) or not isinstance(session.get("isProcessing"), bool):
         raise AdmissionError("admission inspection processing state invalid")
     generation = session.get("processingGeneration")
@@ -803,7 +811,124 @@ def inspect(state: dict[str, Any], token: str) -> dict[str, Any]:
                 (message_id is not None and (not isinstance(message_id, str) or not message_id)) or
                 (message_at is not None and (not isinstance(message_at, int) or isinstance(message_at, bool) or message_at <= 0))):
             raise AdmissionError(f"admission inspection invalid session.{id_key}/{at_key}")
-    return {"status": status, "receipt": receipt, "session": session}
+    return session
+
+
+def inspect(state: dict[str, Any], token: str, *,
+            allow_stale_revision: bool = False) -> dict[str, Any]:
+    response = rpc_json(["automation", "inspect", *scope_args(state)], token)
+    status = response.get("status")
+    session = validate_session_inspection(response.get("session"))
+    if status == "missing" or status == "blocked" or status not in INSPECT_STATUSES:
+        raise AdmissionError("admission inspection outstanding state missing or blocked")
+    expected_message_id = str(state["messageId"]) if state.get("messageId") else None
+    receipt = validate_receipt(state, response.get("receipt"), message_id=expected_message_id,
+                               allow_stale_revision=allow_stale_revision)
+    if receipt.get("deliveryState") != status:
+        raise AdmissionError("admission inspection receipt state mismatch")
+    stale = receipt.get("contentRevision") != content_revision(str(state["message"]))
+    if status == "consumed":
+        receipt = validate_consumed_receipt(state, receipt)
+    return {"status": status, "receipt": receipt, "session": session,
+            "staleContentRevision": stale}
+
+
+def confirm_revision_reconciliation(path: Path, state: dict[str, Any],
+                                    inspection: dict[str, Any]) -> dict[str, Any]:
+    marker = state.get("revisionReconciliation")
+    receipt = inspection.get("receipt")
+    if (not isinstance(marker, dict) or marker.get("state") == "readback-confirmed" or
+            inspection.get("staleContentRevision") or not isinstance(receipt, dict)):
+        return inspection
+    expected = content_revision(str(state["message"]))
+    if (marker.get("expectedContentRevision") != expected or
+            receipt.get("contentRevision") != expected or
+            marker.get("workspaceId") != state.get("workspaceId") or
+            marker.get("targetSessionId") != state.get("targetSessionId") or
+            str(marker.get("targetGeneration")) != str(state.get("targetGeneration")) or
+            marker.get("messageId") != state.get("messageId")):
+        raise AdmissionError("stale content revision reconciliation readback fence mismatch")
+    marker.update(state="readback-confirmed", confirmedAt=NOW_MS(),
+                  readbackContentRevision=receipt["contentRevision"])
+    state["receipt"] = receipt
+    atomic_json(path, state)
+    return inspection
+
+
+def reconcile_stale_content_revision(path: Path, state: dict[str, Any],
+                                     inspection: dict[str, Any], token: str) -> dict[str, Any]:
+    """Repair one stale receipt without treating an unrelated final as consumption.
+
+    The mutation is permitted once, under the original immutable message ID and
+    scope, only after exact inspection proves the target is idle and an unrelated
+    legitimate turn completed after the stale delivery.  The durable marker is
+    written before the RPC so an unknown outcome is inspected, never repeated.
+    """
+    if not inspection.get("staleContentRevision"):
+        return inspection
+    receipt = inspection["receipt"]
+    session = inspection["session"]
+    observed_revision = str(receipt["contentRevision"])
+    expected_revision = content_revision(str(state["message"]))
+    if receipt.get("deliveryState") == "consumed":
+        raise AdmissionError("stale consumed content revision cannot be reconciled")
+    if session.get("isProcessing"):
+        raise AdmissionError("stale content revision reconciliation refused while target is active")
+    if session.get("queueDepth") != 0:
+        raise AdmissionError("stale content revision reconciliation refused while target queue is nonempty")
+    final_id, final_at = session.get("lastFinalMessageId"), session.get("lastFinalMessageAt")
+    delivered_at = receipt.get("deliveredAt")
+    if (not isinstance(final_id, str) or not final_id or final_id == state.get("messageId") or
+            not isinstance(final_at, int) or isinstance(final_at, bool) or
+            not isinstance(delivered_at, int) or final_at <= delivered_at):
+        raise AdmissionError("stale content revision lacks a later unrelated completed target turn")
+    generation = session.get("processingGeneration")
+    accepted_generation = receipt.get("acceptedProcessingGeneration")
+    if (not isinstance(generation, int) or isinstance(generation, bool) or
+            not isinstance(accepted_generation, int) or isinstance(accepted_generation, bool) or
+            generation < accepted_generation):
+        raise AdmissionError("stale content revision processing generation fence invalid")
+    if state.get("revisionReconciliation") is not None:
+        raise AdmissionError("stale content revision reconciliation already attempted; refusing duplicate mutation")
+
+    reason = "idle-after-later-unrelated-final-with-stale-content-revision"
+    marker = {
+        "schemaVersion": 1,
+        "state": "mutation-attempted",
+        "reason": reason,
+        "attemptedAt": NOW_MS(),
+        "workspaceId": state["workspaceId"],
+        "targetSessionId": state["targetSessionId"],
+        "targetGeneration": state["targetGeneration"],
+        "messageId": state["messageId"],
+        "observedContentRevision": observed_revision,
+        "expectedContentRevision": expected_revision,
+        "observedProcessingGeneration": generation,
+        "observedAcceptedProcessingGeneration": accepted_generation,
+        "observedFinalMessageId": final_id,
+        "observedFinalMessageAt": final_at,
+    }
+    state["revisionReconciliation"] = marker
+    atomic_json(path, state)
+
+    repaired = deliver(state, token)
+    if repaired["messageId"] != state.get("messageId"):
+        raise AdmissionError("stale content revision reconciliation changed outstanding message ID")
+    marker.update(state="mutation-acknowledged",
+                  acknowledgedAt=NOW_MS(),
+                  receiptContentRevision=repaired["receipt"]["contentRevision"])
+    state.update(receipt=repaired["receipt"], deliveryStatus=repaired["status"],
+                 phase="pending-consumption")
+    atomic_json(path, state)
+
+    readback = inspect(state, token, allow_stale_revision=True)
+    if readback.get("staleContentRevision"):
+        raise AdmissionError("stale content revision reconciliation readback remained stale")
+    marker.update(state="readback-confirmed", confirmedAt=NOW_MS(),
+                  readbackContentRevision=readback["receipt"]["contentRevision"])
+    state["receipt"] = readback["receipt"]
+    atomic_json(path, state)
+    return readback
 
 
 def recover(state: dict[str, Any], inspection: dict[str, Any], token: str, args: argparse.Namespace) -> dict[str, Any]:
@@ -996,7 +1121,7 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
         return 0, state
     if state["phase"] == "prepared":
         atomic_json(path, state)
-        receipt = deliver(state, token)
+        receipt = deliver(state, token, allow_stale_revision=True)
         state.update(messageId=receipt["messageId"], deliveredAt=receipt["receipt"]["deliveredAt"], receipt=receipt["receipt"])
         receipt_state = receipt["receipt"]["deliveryState"]
         state["phase"] = "consumed" if receipt_state == "consumed" else (
@@ -1006,13 +1131,24 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
         if state["phase"] == "consumed":
             state["consumedAt"] = receipt["receipt"]["consumedAt"]
         atomic_json(path, state)
+        if receipt.get("staleContentRevision"):
+            stale_inspection = inspect(state, token, allow_stale_revision=True)
+            stale_inspection = confirm_revision_reconciliation(path, state, stale_inspection)
+            inspection = reconcile_stale_content_revision(path, state, stale_inspection, token)
+            if inspection["status"] == "consumed":
+                state.update(phase="consumed", consumedAt=inspection["receipt"]["consumedAt"],
+                             receipt=inspection["receipt"])
+                atomic_json(path, state)
+                return 0, state
         # A duplicate proves an earlier attempt may already have been pending
         # for a long time. Inspect immediately against the original receipt
         # timestamp instead of postponing its deadline to this retry.
-        if receipt["status"] != "duplicate" and now <= int(state["deliveredAt"]):
+        elif receipt["status"] != "duplicate" and now <= int(state["deliveredAt"]):
             return 0, state
 
-    inspection = inspect(state, token)
+    inspection = inspect(state, token, allow_stale_revision=True)
+    inspection = confirm_revision_reconciliation(path, state, inspection)
+    inspection = reconcile_stale_content_revision(path, state, inspection, token)
     outstanding_status = inspection["status"]
     session_inspection = inspection["session"]
     state["lastInspectedAt"] = now
@@ -1028,7 +1164,7 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
 
     state, changed = coalesce_cycle(state, batch)
     if changed:
-        receipt = deliver(state, token)
+        receipt = deliver(state, token, allow_stale_revision=True)
         if receipt["messageId"] != state.get("messageId") or receipt["receipt"]["deliveryState"] == "consumed":
             if receipt["messageId"] != state.get("messageId"):
                 raise AdmissionError("coalesced admission changed outstanding message ID")
@@ -1044,7 +1180,9 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
         # to declare the refreshed envelope idle at its historical deadline.
         # Re-inspect the exact receipt after delivery before any deadline or
         # recovery decision.
-        inspection = inspect(state, token)
+        inspection = inspect(state, token, allow_stale_revision=True)
+        inspection = confirm_revision_reconciliation(path, state, inspection)
+        inspection = reconcile_stale_content_revision(path, state, inspection, token)
         outstanding_status = inspection["status"]
         session_inspection = inspection["session"]
         state["lastInspectedAt"] = NOW_MS()
@@ -1061,22 +1199,11 @@ def process_cycle(path: Path, batch: dict[str, Any], workspace: str, token: str,
     started = session_inspection.get("processingStartedAt")
     stuck = session_inspection.get("isProcessing") and isinstance(started, int) and now-started >= RECOVERY_MIN_AGE_MS
     delivered_at = int(state.get("deliveredAt") or state.get("preparedAt") or now)
-    last_final_at = session_inspection.get("lastFinalMessageAt")
-    completed_turn_after_delivery = (isinstance(last_final_at, int) and not isinstance(last_final_at, bool)
-                                     and last_final_at > delivered_at)
     idle_expired = (not session_inspection.get("isProcessing") and now-delivered_at >= RECOVERY_MIN_AGE_MS)
-    if idle_expired and completed_turn_after_delivery:
-        # The runtime never attributed consumption, yet the target completed at
-        # least one full turn after this delivery: ordered message processing means
-        # the injected wake reached the session. Busy-session attribution gaps and
-        # stale duplicate receipts from a recurring incident fingerprint both land
-        # here; hard-blocking would sever the wake lane of a demonstrably live
-        # target, so record deterministic liveness-proven consumption instead.
-        state.update(phase="consumed", consumedAt=last_final_at,
-                     consumedVia="completed-turn-liveness")
-        atomic_json(path, state)
-        return 0, state
     if idle_expired:
+        # A later unrelated final proves liveness, not consumption of this exact
+        # revision. Only a server consumed receipt may close the cycle. Stale
+        # revision repair happens above under its own one-mutation audit fence.
         state = hard_block(state, now, "pending-admission-not-processing-at-deadline")
         atomic_json(path, state)
         return 2, state
@@ -1187,7 +1314,12 @@ def tick(args: argparse.Namespace) -> int:
         token = server_token()
         try:
             verify_capabilities(args, token)
-            verify_workspace_binding(workspace, token)
+            # verify-runtime performs the one explicit workspace enumeration and
+            # root-binding activation check. Periodic ticks already have an exact
+            # local manifest/root fence and every target RPC is workspace-,
+            # session-, generation-, scope-, and receipt-bound, so repeating a
+            # broad workspaces:get scan only makes admission latency scale with
+            # unrelated workspace count.
         except TransientRpcError as exc:
             results = []
             for path, batch in by_path.items():

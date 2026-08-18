@@ -4,6 +4,15 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 ## [Unreleased]
 
+## [3.4.41] — 2026-08-18
+
+### Admission RPC scaling and stale-revision safety
+
+- Admission now passes the measured-production-safe 110-second deadline to `craft-cli` itself and retains a validated, strictly larger 120-second supervisor deadline. Source, persistent-controller validation, installer guidance, and LaunchAgent defaults agree, so the fix no longer depends on a handwritten wrapper; invalid/equal/inverted settings fail before RPC, while ambiguous mutations retain delivery-unknown/EX_TEMPFAIL semantics.
+- Periodic ticks no longer enumerate every workspace before exact target work. The explicit `verify-runtime` activation gate retains workspace-ID/root discovery, while live cycles rely on exact manifest root, authoritative target generation, admission scope, and receipt workspace/session/content fences.
+- Removed completed-turn consumption inference. One stale exact-identity content revision may be reconciled under the same immutable message ID and idempotency scope only when the target is idle, its queue is empty, and exact inspection observes a later unrelated legitimate final. The supervisor durably records both revisions, target/generation, processing/final evidence, attempt, and reason; it refuses active work, queued work, same/old finals, fence mismatch, consumed stale receipts, ambiguous repeat, or duplicate mutation.
+- Added focused slow-RPC, timeout ordering/config, large-discovery, targeted-inspection, stale mismatch, active/queued refusal, duplicate-prevention, delivery-unknown, and installed-parity regressions.
+
 ## [3.4.40] — 2026-08-17
 
 ### Strict lane admission child-CWD hotfix
@@ -518,7 +527,8 @@ Observed live on 2026-08-14: Tailscale logged out at ~19:02, the Craft server's 
 - unscoped gates no longer block unrelated explicit work units;
 - dirty/unpushed/shared-cwd/non-harness cleanup fails closed.
 
-[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.40...HEAD
+[Unreleased]: https://github.com/razumv/craft-protocol/compare/v3.4.41...HEAD
+[3.4.41]: https://github.com/razumv/craft-protocol/compare/v3.4.40...v3.4.41
 [3.4.40]: https://github.com/razumv/craft-protocol/compare/v3.4.39...v3.4.40
 [3.4.39]: https://github.com/razumv/craft-protocol/compare/v3.4.38...v3.4.39
 [3.4.38]: https://github.com/razumv/craft-protocol/compare/v3.4.37...v3.4.38

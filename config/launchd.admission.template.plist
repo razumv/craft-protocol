@@ -13,6 +13,13 @@
   <integer>300</integer>
   <key>RunAtLoad</key>
   <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CRAFT_ADMISSION_CLI_TIMEOUT_SECONDS</key>
+    <string>110</string>
+    <key>CRAFT_ADMISSION_SUPERVISOR_TIMEOUT_SECONDS</key>
+    <string>120</string>
+  </dict>
   <key>StandardOutPath</key>
   <string>__HOME__/.craft-agent/logs/recovery-admission.stdout.log</string>
   <key>StandardErrorPath</key>

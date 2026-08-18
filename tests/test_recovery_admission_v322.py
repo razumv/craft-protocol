@@ -18,13 +18,20 @@ RUNTIME_COMMIT = "87951ae640df64d00534a54dce9b5e8b5922d27c"
 WIRE_FIXTURE = json.loads((ROOT / "tests/fixtures/admission-v2-wire.json").read_text())
 
 FAKE_CLI = r'''#!/usr/bin/env python3
-import hashlib, json, os, sys
+import hashlib, json, os, sys, time
 from pathlib import Path
 state_path = Path(sys.argv[1]); raw = sys.argv[2:]
 state = json.loads(state_path.read_text())
-state["allJson"] = state.get("allJson", True) and raw[:1] == ["--json"]
-args = raw[1:] if raw[:1] == ["--json"] else raw
+args=[]; i=0; json_seen=False; timeout_seen=None
+while i < len(raw):
+    if raw[i] == "--timeout" and i+1 < len(raw): timeout_seen=raw[i+1]; i+=2
+    elif raw[i] == "--json": json_seen=True; i+=1
+    else: args.append(raw[i]); i+=1
+state["allJson"] = state.get("allJson", True) and json_seen
+state.setdefault("cliTimeouts", []).append(timeout_seen)
 state.setdefault("records", []).append(args)
+delay=(state.get("delayCommands") or {}).get(" ".join(args))
+if delay: time.sleep(float(delay))
 state["tokenMatched"] = state.get("tokenMatched", True) and os.environ.get("CRAFT_SERVER_TOKEN") == state["expectedToken"]
 def save(): state_path.write_text(json.dumps(state))
 def output(v): save(); print(json.dumps(v)); raise SystemExit(0)
@@ -64,11 +71,14 @@ if args == ["workspaces"]: output(state["workspaces"])
 if args[:2] == ["automation","deliver"]:
     f=fields(); require_flags("deliver",f); message=args[-1]; scope,receipt=receipt_for(f,message)
     state.setdefault("deliveryScopes",[]).append(scope)
+    delivery_number=len(state["deliveryScopes"])
     if state.get("busyOnce") and not state.get("busySeen"):
         state["busySeen"]=True; output({"status":"busy","reason":"busy"})
     if state.get("blockedDeliver"): output({"status":"blocked","reason":"blocked"})
     duplicate=receipt["message"] != message or state["deliveryScopes"].count(scope)>1
-    receipt.update(message=message,contentRevision=revision(message))
+    stale_once=bool(state.get("staleRevisionOnce") and duplicate and not state.get("staleRevisionSeen"))
+    if stale_once: state["staleRevisionSeen"]=True
+    else: receipt.update(message=message,contentRevision=revision(message))
     if state.get("nullAcceptedGeneration"): receipt["acceptedProcessingGeneration"]=None
     for key in ("completedContentRevision","completedProcessingGeneration","completedMessageId","completedMessageAt","consumedAt"):
         receipt.pop(key,None)
@@ -83,7 +93,8 @@ if args[:2] == ["automation","deliver"]:
             receipt["acceptedProcessingGeneration"]=generation
     status="consumed" if receipt["deliveryState"]=="consumed" else "pending-consumption"
     result={"status":status,"messageId":receipt["messageId"],"receipt":receipt}
-    if state.get("crashAfterReceipt") and not state.get("crashed"):
+    if ((state.get("crashAfterReceipt") and not state.get("crashed")) or
+            (state.get("crashOnDeliveryNumber")==delivery_number and not state.get("crashed"))):
         state["crashed"]=True; save(); raise SystemExit(9)
     output(result)
 if args[:2] == ["automation","inspect"]:
@@ -214,11 +225,33 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
     def controller_state(self): return json.loads((self.runtime/"self-healing/admission.json").read_text())
     def records(self,command): return [r for r in self.fake().get("records",[]) if r[:2]==["automation",command]]
 
-    def test_rpc_timeout_is_bounded_and_long_enough_for_wss_mutation_readback(self):
+    def test_rpc_timeouts_are_explicit_ordered_and_passed_to_cli(self):
         source=TOOL.read_text()
-        self.assertIn('CRAFT_ADMISSION_RPC_TIMEOUT_SECONDS", "60"',source)
-        self.assertIn('RPC_TIMEOUT_SECONDS < 20 or RPC_TIMEOUT_SECONDS > 120',source)
-        self.assertIn('timeout=RPC_TIMEOUT_SECONDS',source)
+        self.assertIn('CRAFT_ADMISSION_CLI_TIMEOUT_SECONDS", "110"',source)
+        self.assertIn('CRAFT_ADMISSION_SUPERVISOR_TIMEOUT_SECONDS", "120"',source)
+        self.assertIn('SUPERVISOR_TIMEOUT_SECONDS < CLI_TIMEOUT_SECONDS + 5',source)
+        self.assertIn('"--timeout", str(CLI_TIMEOUT_SECONDS * 1000)',source)
+        self.assertIn('timeout=SUPERVISOR_TIMEOUT_SECONDS',source)
+        self.cli("verify-runtime")
+        self.assertEqual(set(self.fake()["cliTimeouts"]), {"110000"})
+
+    def test_slow_rpc_beyond_cli_default_succeeds_with_explicit_deadline(self):
+        # craft-cli defaults to 10s internally. This 10.2s capability response
+        # would fail even though subprocess.run waited 120s unless --timeout was
+        # passed to the CLI itself.
+        self.mutate_fake(delayCommands={"automation capabilities":10.2})
+        _, verified = self.cli("verify-runtime")
+        self.assertTrue(verified["verified"])
+        self.assertEqual(set(self.fake()["cliTimeouts"]), {"110000"})
+
+    def test_invalid_or_inverted_rpc_deadlines_fail_before_any_rpc(self):
+        for cli_timeout, supervisor_timeout in ((19,120),(110,114),(301,330),(110,331)):
+            with self.subTest(cli=cli_timeout, supervisor=supervisor_timeout):
+                env={**self.env,"CRAFT_ADMISSION_CLI_TIMEOUT_SECONDS":str(cli_timeout),
+                     "CRAFT_ADMISSION_SUPERVISOR_TIMEOUT_SECONDS":str(supervisor_timeout)}
+                cp=subprocess.run([sys.executable,str(TOOL),"verify-runtime"],env=env,text=True,capture_output=True)
+                self.assertNotEqual(cp.returncode,0)
+                self.assertEqual(self.fake().get("records"),None)
 
     def test_corrected_wire_fixture_and_cli_round_trip_matrix(self):
         wire=WIRE_FIXTURE
@@ -569,6 +602,80 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         self.assertEqual(len(self.records("deliver")),2)
         self.assertEqual(len(self.records("inspect")),2)
 
+    def test_idle_stale_revision_after_unrelated_final_reconciles_once(self):
+        self.incident(); self.apply(); first=self.controller_state()
+        self.incident("i2",kind="job-exit-unreported",session="worker")
+        fake=self.fake(); fake.update(staleRevisionOnce=True)
+        fake["session"].update(lastFinalMessageId="unrelated-final",lastFinalMessageAt=NOW+5_000)
+        self.put(self.fake_state,fake)
+        later={**self.env,"CRAFT_TEST_NOW_MS":str(NOW+10_000)}
+        self.apply(env=later)
+        state=self.controller_state(); marker=state["revisionReconciliation"]
+        self.assertEqual(state["phase"],"pending-consumption")
+        self.assertEqual(marker["state"],"readback-confirmed")
+        self.assertEqual(marker["reason"],"idle-after-later-unrelated-final-with-stale-content-revision")
+        self.assertEqual(marker["messageId"],first["messageId"])
+        self.assertNotEqual(marker["observedContentRevision"],marker["expectedContentRevision"])
+        self.assertEqual(state["receipt"]["contentRevision"],marker["expectedContentRevision"])
+        self.assertEqual(len(self.records("deliver")),3)
+        self.assertEqual(len(self.fake()["receipts"]),1)
+        self.assertNotIn("consumedVia",state)
+
+    def test_stale_revision_reconciliation_refuses_active_target(self):
+        self.incident(); self.apply(); self.incident("i2",kind="job-exit-unreported",session="worker")
+        fake=self.fake(); fake.update(staleRevisionOnce=True)
+        fake["session"].update(isProcessing=True,processingStartedAt=NOW+1_000,processingAgeMs=1_000,
+                               lastFinalMessageId="unrelated-final",lastFinalMessageAt=NOW+500)
+        self.put(self.fake_state,fake)
+        later={**self.env,"CRAFT_TEST_NOW_MS":str(NOW+2_000)}
+        cp,_=self.apply(ok=False,env=later); self.assertEqual(cp.returncode,2)
+        self.assertIn("refused while target is active",self.controller_state()["reason"])
+        self.assertEqual(len(self.records("deliver")),2)
+
+    def test_stale_revision_reconciliation_refuses_nonempty_queue(self):
+        self.incident(); self.apply(); self.incident("i2",kind="job-exit-unreported",session="worker")
+        fake=self.fake(); fake.update(staleRevisionOnce=True)
+        fake["session"].update(queueDepth=1,lastFinalMessageId="unrelated-final",lastFinalMessageAt=NOW+5_000)
+        self.put(self.fake_state,fake)
+        cp,_=self.apply(ok=False,env={**self.env,"CRAFT_TEST_NOW_MS":str(NOW+10_000)})
+        self.assertEqual(cp.returncode,2)
+        self.assertIn("queue is nonempty",self.controller_state()["reason"])
+        self.assertEqual(len(self.records("deliver")),2)
+
+    def test_unknown_stale_revision_repair_adopts_exact_readback_without_second_mutation(self):
+        self.incident(); self.apply(); self.incident("i2",kind="job-exit-unreported",session="worker")
+        fake=self.fake(); fake.update(staleRevisionOnce=True,crashOnDeliveryNumber=3)
+        fake["session"].update(lastFinalMessageId="unrelated-final",lastFinalMessageAt=NOW+5_000)
+        self.put(self.fake_state,fake)
+        later={**self.env,"CRAFT_TEST_NOW_MS":str(NOW+10_000)}
+        cp,_=self.apply(ok=False,env=later); self.assertEqual(cp.returncode,75)
+        self.assertEqual(len(self.records("deliver")),3)
+        self.apply(env=later)
+        marker=self.controller_state()["revisionReconciliation"]
+        self.assertEqual(marker["state"],"readback-confirmed")
+        self.assertEqual(marker["readbackContentRevision"],marker["expectedContentRevision"])
+        self.assertEqual(len(self.records("deliver")),3)
+
+    def test_unknown_stale_revision_repair_is_not_mutated_twice(self):
+        self.incident(); self.apply(); self.incident("i2",kind="job-exit-unreported",session="worker")
+        fake=self.fake(); fake.update(staleRevisionOnce=True,crashOnDeliveryNumber=3)
+        fake["session"].update(lastFinalMessageId="unrelated-final",lastFinalMessageAt=NOW+5_000)
+        self.put(self.fake_state,fake)
+        later={**self.env,"CRAFT_TEST_NOW_MS":str(NOW+10_000)}
+        cp,_=self.apply(ok=False,env=later); self.assertEqual(cp.returncode,75)
+        state=self.controller_state(); marker=state["revisionReconciliation"]
+        self.assertEqual(marker["state"],"mutation-attempted")
+        self.assertEqual(len(self.records("deliver")),3)
+        # Force the exact inspection to remain stale: an unknown mutation may
+        # have succeeded elsewhere, so the supervisor must hard-refuse rather
+        # than issue a second reconciliation mutation.
+        fake=self.fake(); scope=next(iter(fake["receipts"])); receipt=fake["receipts"][scope]
+        receipt["contentRevision"]=marker["observedContentRevision"]
+        self.put(self.fake_state,fake)
+        cp,_=self.apply(ok=False,env=later); self.assertEqual(cp.returncode,2)
+        self.assertIn("already attempted",self.controller_state()["reason"])
+        self.assertEqual(len(self.records("deliver")),3)
+
     def test_consumed_receipt_ends_cycle_without_redelivery(self):
         self.incident(); self.apply(); self.mutate_fake(consume=True)
         self.apply(); consumed=self.controller_state(); self.assertEqual(consumed["phase"],"consumed")
@@ -602,39 +709,29 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
         cp,_=self.apply(ok=False,env=later); self.assertEqual(cp.returncode,2)
         self.assertEqual(self.controller_state()["reason"],"pending-admission-not-processing-at-deadline")
 
-    def test_completed_turn_after_delivery_is_liveness_consumed_not_blocked(self):
-        # The runtime failed to attribute consumption on a busy target, but the
-        # session completed a full turn after delivery: the wake demonstrably
-        # reached it. Deadline must record liveness consumption, never block.
+    def test_unrelated_completed_turn_never_infers_consumption(self):
         self.incident(); self.apply()
-        fake=self.fake(); fake["session"]["lastFinalMessageAt"]=NOW+5_000
+        fake=self.fake(); fake["session"].update(lastFinalMessageId="unrelated-final",lastFinalMessageAt=NOW+5_000)
         self.put(self.fake_state,fake)
         later=dict(self.env); later["CRAFT_TEST_NOW_MS"]=str(NOW+61_000)
-        cp,row=self.apply(env=later); self.assertEqual(cp.returncode,0)
+        cp,_=self.apply(ok=False,env=later); self.assertEqual(cp.returncode,2)
         state=self.controller_state()
-        self.assertEqual(state["phase"],"consumed")
-        self.assertEqual(state["consumedVia"],"completed-turn-liveness")
-        self.assertEqual(state["consumedAt"],NOW+5_000)
-        # Unchanged incident set never redelivers a liveness-consumed cycle.
-        again,_=self.apply(env=later); self.assertEqual(again.returncode,0)
-        self.assertEqual(len(self.records("deliver")),1)
-        self.assertEqual(self.controller_state()["phase"],"consumed")
+        self.assertEqual(state["phase"],"blocked")
+        self.assertEqual(state["reason"],"pending-admission-not-processing-at-deadline")
+        self.assertNotIn("consumedVia",state)
 
-    def test_stale_duplicate_receipt_with_later_turn_is_liveness_consumed(self):
-        # A recurring incident fingerprint makes the runtime return the original
-        # delivery receipt, so the deadline is instantly exceeded. A final turn
-        # newer than that stale deliveredAt proves the target is live.
+    def test_duplicate_receipt_age_and_unrelated_final_never_infer_consumption(self):
         self.incident(); self.mutate_fake(crashAfterReceipt=True)
         cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,75)
         fake=self.fake(); fake["crashAfterReceipt"]=False
-        fake["session"]["lastFinalMessageAt"]=NOW+5_000
+        fake["session"].update(lastFinalMessageId="unrelated-final",lastFinalMessageAt=NOW+5_000)
         self.put(self.fake_state,fake)
         later=dict(self.env); later["CRAFT_TEST_NOW_MS"]=str(NOW+61_000)
-        cp,_=self.apply(env=later); self.assertEqual(cp.returncode,0)
+        cp,_=self.apply(ok=False,env=later); self.assertEqual(cp.returncode,2)
         state=self.controller_state()
         self.assertEqual(state["deliveredAt"],NOW)
-        self.assertEqual(state["phase"],"consumed")
-        self.assertEqual(state["consumedVia"],"completed-turn-liveness")
+        self.assertEqual(state["phase"],"blocked")
+        self.assertNotIn("consumedVia",state)
         self.assertEqual(len(self.fake()["receipts"]),1)
 
     def test_final_turn_before_delivery_still_blocks_at_deadline(self):
@@ -777,9 +874,22 @@ class RecoveryAdmissionV322Test(unittest.TestCase):
                 mutation(cap); self.put(self.fake_state,fake)
                 cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2); self.assertEqual(self.controller_state()["phase"],"blocked")
 
-    def test_workspace_root_mismatch_fails_closed(self):
-        self.incident(); self.mutate_fake(workspaces=[{"id":"workspace-7","rootPath":str(self.root/"other")}])
-        cp,_=self.apply(ok=False); self.assertEqual(cp.returncode,2); self.assertEqual(self.records("deliver"),[])
+    def test_verify_runtime_workspace_root_mismatch_fails_closed(self):
+        self.mutate_fake(workspaces=[{"id":"workspace-7","rootPath":str(self.root/"other")}])
+        cp,_=self.cli("verify-runtime",ok=False); self.assertEqual(cp.returncode,2)
+        self.assertEqual(self.records("deliver"),[])
+
+    def test_periodic_tick_avoids_broad_workspace_discovery(self):
+        workspaces=[{"id":f"noise-{i}","rootPath":str(self.root/f"noise-{i}")} for i in range(5000)]
+        workspaces.append({"id":"workspace-7","rootPath":str(self.workspace)})
+        self.incident(); self.mutate_fake(workspaces=workspaces)
+        self.apply(); self.apply()
+        self.assertEqual([r for r in self.fake()["records"] if r==["workspaces"]],[])
+        self.assertEqual(len(self.records("deliver")),1)
+        self.assertEqual(len(self.records("inspect")),1)
+        exact=self.records("inspect")[0]
+        self.assertEqual(exact[exact.index("--workspace")+1],"workspace-7")
+        self.assertEqual(exact[exact.index("--session")+1],"controller")
 
     def test_transient_discovery_retries_prepared_scope(self):
         self.incident(); self.mutate_fake(rejectCapabilitiesOnce=True)
@@ -835,16 +945,37 @@ class RecoveryAdmissionCronV322Test(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory(); self.root=Path(self.tmp.name); self.craft=self.root/".craft-agent"
         scripts=self.craft/"scripts"; scripts.mkdir(parents=True); (self.craft/"runtime/self-healing").mkdir(parents=True)
         self.capture=self.root/"capture.json"; self.rpc=self.root/"craft-cli"; self.rpc.write_text("#!/bin/sh\nexit 0\n"); self.rpc.chmod(0o700)
-        (scripts/"recovery-admission.py").write_text("import json,os,sys\nopen(os.environ['CRAFT_TEST_CAPTURE'],'w').write(json.dumps({'rpc':os.environ.get('CRAFT_RPC_CLI'),'args':sys.argv[1:]}))\n")
+        (scripts/"recovery-admission.py").write_text("import json,os,sys\nopen(os.environ['CRAFT_TEST_CAPTURE'],'w').write(json.dumps({'rpc':os.environ.get('CRAFT_RPC_CLI'),'cliTimeout':os.environ.get('CRAFT_ADMISSION_CLI_TIMEOUT_SECONDS'),'supervisorTimeout':os.environ.get('CRAFT_ADMISSION_SUPERVISOR_TIMEOUT_SECONDS'),'args':sys.argv[1:]}))\n")
         self.config=self.craft/"runtime/self-healing/persistent-controller.json"
         self.config.write_text(json.dumps({"sessionId":"controller","workspaceId":"workspace-7","expectedRuntimeVersion":RUNTIME_VERSION,
-            "expectedRuntimeCommit":RUNTIME_COMMIT,"serverUrl":"wss://craft.example.test:9100","rpcCli":str(self.rpc)}))
+            "expectedRuntimeCommit":RUNTIME_COMMIT,"serverUrl":"wss://craft.example.test:9100","rpcCli":str(self.rpc),
+            "cliTimeoutSeconds":110,"supervisorTimeoutSeconds":120}))
         self.env={**os.environ,"HOME":str(self.root),"CRAFT_HOME":str(self.craft),"CRAFT_PYTHON":sys.executable,"CRAFT_TEST_CAPTURE":str(self.capture)}
     def tearDown(self): self.tmp.cleanup()
-    def test_launcher_pins_runtime_identity_and_cli(self):
+    def test_launcher_pins_runtime_identity_cli_and_deadlines(self):
         cp=subprocess.run(["/bin/zsh",str(ROOT/"scripts/recovery-admission-cron.sh")],env=self.env,text=True,capture_output=True)
         self.assertEqual(cp.returncode,0,cp.stdout+cp.stderr); row=json.loads(self.capture.read_text())
         self.assertEqual(row["rpc"],str(self.rpc)); self.assertIn("--apply",row["args"]); self.assertIn("--expected-runtime-commit",row["args"])
+        self.assertEqual(row["cliTimeout"],"110"); self.assertEqual(row["supervisorTimeout"],"120")
+
+    def test_launcher_rejects_invalid_timeout_config_before_tick(self):
+        row=json.loads(self.config.read_text()); row.update(cliTimeoutSeconds=120,supervisorTimeoutSeconds=120)
+        self.config.write_text(json.dumps(row))
+        cp=subprocess.run(["/bin/zsh",str(ROOT/"scripts/recovery-admission-cron.sh")],env=self.env,text=True,capture_output=True)
+        self.assertEqual(cp.returncode,2,cp.stdout+cp.stderr)
+        self.assertFalse(self.capture.exists())
+
+    def test_launchagent_installer_and_source_timeout_defaults_match(self):
+        plist=(ROOT/"config/launchd.admission.template.plist").read_text()
+        installer=(ROOT/"install.sh").read_text(); source=(ROOT/"scripts/recovery-admission.py").read_text()
+        for value in ("110","120"):
+            self.assertIn(f"<string>{value}</string>",plist)
+        self.assertIn('CRAFT_ADMISSION_CLI_TIMEOUT_SECONDS", "110"',source)
+        self.assertIn('CRAFT_ADMISSION_SUPERVISOR_TIMEOUT_SECONDS", "120"',source)
+        self.assertIn("cliTimeoutSeconds",installer)
+        self.assertIn("supervisorTimeoutSeconds",installer)
+        self.assertIn('echo "RENDER $ROOT/config/launchd.admission.template.plist -> $ADMISSION_PLIST_DST"',installer)
+        self.assertIn("recovery-admission.py",installer); self.assertIn("recovery-admission-cron.sh",installer)
 
 
 if __name__ == "__main__": unittest.main()
