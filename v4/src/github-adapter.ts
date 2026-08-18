@@ -544,10 +544,16 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
     }
     const matchingPrs = pullRequests.filter((pr) => pr.headRefName === contract.requiredBranch && pr.baseRefName === contract.baseBranch);
     if (matchingPrs.length > 1) throw new Error("multiple pull requests match the exact required branch/base");
-    const providerEvidence: MaterialEvidence = branch ? { branchUrl: branch.url, branchSha: branch.oid } : {};
     const matchingPr = matchingPrs[0];
+    const durableHeadSha = branch?.oid
+      ?? (matchingPr?.state === "MERGED" ? snapshot.evidence.branchSha : undefined);
+    const providerEvidence: MaterialEvidence = branch
+      ? { branchUrl: branch.url, branchSha: branch.oid }
+      : durableHeadSha
+        ? { branchUrl: snapshot.evidence.branchUrl, branchSha: durableHeadSha }
+        : {};
     const claimedBaseSha = snapshot.claim?.baseSha ?? baseSha;
-    if (matchingPr && branch && matchingPr.headRefOid === branch.oid && matchingPr.baseRefOid === claimedBaseSha) {
+    if (matchingPr && durableHeadSha && matchingPr.headRefOid === durableHeadSha && matchingPr.baseRefOid === claimedBaseSha) {
       Object.assign(providerEvidence, prEvidence(matchingPr));
     }
     snapshot.evidence = { ...snapshot.evidence, ...providerEvidence };

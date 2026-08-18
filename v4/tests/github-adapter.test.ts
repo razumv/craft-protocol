@@ -394,6 +394,7 @@ describe("v4.2 GitHub Issues and Projects adapter", () => {
     expect((await adapter.get("I_1")).issue.state).toBe("pr-open");
 
     attachPr(transport, "I_1", true);
+    transport.branches.delete("v4/acme-repo-1");
     expect((await adapter.reconcileStartup(1_300))[0]).toMatchObject({ action: "advanced", reason: "merge evidence" });
     const merged = await adapter.get("I_1");
     expect(merged.issue.state).toBe("merged");

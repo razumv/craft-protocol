@@ -207,12 +207,10 @@ export class GhCliTransport implements GitHubTransport {
   }
 
   private async graphql<T = unknown>(query: string, variables: Record<string, unknown>): Promise<T> {
-    const args = ["api", "graphql", "-f", `query=${query}`];
-    for (const [name, value] of Object.entries(variables)) {
-      if (value === null) continue;
-      args.push("-F", `${name}=${typeof value === "string" ? value : JSON.stringify(value)}`);
-    }
-    const output = await this.run(args);
+    const output = await this.run(
+      ["api", "graphql", "--input", "-"],
+      JSON.stringify({ query, variables }),
+    );
     const parsed = JSON.parse(output) as { data?: T; errors?: { message: string }[] };
     if (parsed.errors?.length) throw new Error(`GitHub GraphQL failed: ${parsed.errors.map((entry) => entry.message).join("; ")}`);
     if (!parsed.data) throw new Error("GitHub GraphQL returned no data");
