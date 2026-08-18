@@ -79,7 +79,7 @@ export interface WorkflowConfig {
     branchPrefix: string;
   };
   tracker: {
-    kind: "fake-github";
+    kind: "fake-github" | "github";
     activeStates: LifecycleState[];
     terminalStates: LifecycleState[];
   };
@@ -142,7 +142,10 @@ export interface RetryMetadata {
 
 export interface MaterialEvidence {
   branchUrl?: string;
+  branchSha?: string;
   prUrl?: string;
+  mergeCommitSha?: string;
+  mergedAt?: string;
   deploymentUrl?: string;
   blocker?: string;
   ownerGateId?: string;

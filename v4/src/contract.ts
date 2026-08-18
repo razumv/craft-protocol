@@ -158,7 +158,7 @@ export function parseIssueContract(
     requiredBranch: nullableString(raw.requiredBranch ?? raw.required_branch)
       ?? `${workflow.project.branchPrefix}/${branchSegment(issueIdentifier)}`,
     baseBranch: nullableString(raw.baseBranch ?? raw.base_branch) ?? workflow.project.baseBranch,
-    dependencies: optionalStrings(raw.dependencies, "contract.dependencies"),
+    dependencies: optionalStrings(raw.dependencies ?? raw.requires, "contract.dependencies"),
     ownerDirectiveRefs: optionalStrings(
       raw.ownerDirectiveRefs ?? raw.owner_directive_refs,
       "contract.ownerDirectiveRefs",

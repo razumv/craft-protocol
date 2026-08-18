@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import {
-  FakeCraftAdapter,
-  FakeGitHubAdapter,
-  FakeWorkspaceAdapter,
-} from "./adapters";
+import { FakeCraftAdapter, FakeWorkspaceAdapter } from "./adapters";
 import type { Claim, ProjectStatus, RunIdentity, TrackerIssueSnapshot, WorkflowConfig } from "./domain";
 import { IdentityFactory } from "./identity";
 import { ModelPolicy, RiskPolicy } from "./policy";
 import { projectStatus } from "./status";
+import type { TrackerAdapter } from "./tracker";
 
 export interface Clock {
   nowMs(): number;
@@ -31,7 +28,7 @@ export class SimulatedCrash extends Error {
 }
 
 export interface SchedulerAdapters {
-  github: FakeGitHubAdapter;
+  github: TrackerAdapter;
   craft: FakeCraftAdapter;
   workspaces: FakeWorkspaceAdapter;
 }
@@ -40,6 +37,7 @@ export class DeterministicScheduler {
   readonly #identity: IdentityFactory;
   readonly #models: ModelPolicy;
   readonly #risk: RiskPolicy;
+  #startupReconciled = false;
 
   constructor(
     readonly config: WorkflowConfig,
@@ -53,8 +51,12 @@ export class DeterministicScheduler {
   }
 
   async tick(crashAfter?: CrashPoint): Promise<void> {
+    if (!this.#startupReconciled) {
+      await this.adapters.github.reconcileStartup?.(this.clock.nowMs());
+      this.#startupReconciled = true;
+    }
     await this.reconcile(crashAfter);
-    if (this.adapters.github.activeClaims().length >= this.config.scheduler.wipLimit) return;
+    if ((await this.adapters.github.activeClaims()).length >= this.config.scheduler.wipLimit) return;
 
     const candidates = await this.adapters.github.fetchIssuesByStates(["ready", "retry-wait"]);
     for (const candidate of candidates.sort(compareForDispatch)) {
@@ -71,7 +73,7 @@ export class DeterministicScheduler {
         this.clock.nowMs(),
         this.config.scheduler.claimTtlMs,
       );
-      const claimed = this.adapters.github.tryClaim(
+      const claimed = await this.adapters.github.tryClaim(
         candidate.issue.id,
         candidate.version,
         claim,
@@ -84,16 +86,17 @@ export class DeterministicScheduler {
     }
   }
 
-  status(issueId: string): ProjectStatus {
-    return projectStatus(this.adapters.github.get(issueId));
+  async status(issueId: string): Promise<ProjectStatus> {
+    return projectStatus(await this.adapters.github.get(issueId));
   }
 
   private async reconcile(crashAfter?: CrashPoint): Promise<void> {
     const now = this.clock.nowMs();
-    for (const snapshot of this.adapters.github.activeClaims().sort((a, b) => a.issue.id.localeCompare(b.issue.id))) {
+    const activeClaims = await this.adapters.github.activeClaims();
+    for (const snapshot of activeClaims.sort((a, b) => a.issue.id.localeCompare(b.issue.id))) {
       const claim = snapshot.claim!;
       if (!this.identityMatches(snapshot, claim)) {
-        this.adapters.github.transition(snapshot.issue.id, "preservation-unknown", now, {
+        await this.adapters.github.transition(snapshot.issue.id, "preservation-unknown", now, {
           fence: claim.fence,
           message: "claim identity no longer matches deterministic workspace/session identity",
         });
@@ -102,14 +105,14 @@ export class DeterministicScheduler {
       try {
         this.#models.assertAllowed(claim.modelProfile);
       } catch (error) {
-        this.adapters.github.failClaim(claim.fence, "policy", String(error), now, this.config.scheduler);
+        await this.adapters.github.failClaim(claim.fence, "policy", String(error), now, this.config.scheduler);
         continue;
       }
 
       if (snapshot.issue.state === "claimed") {
         const session = this.adapters.craft.get(claim.sessionId);
         if (now >= claim.expiresAtMs && !session) {
-          this.adapters.github.failClaim(
+          await this.adapters.github.failClaim(
             claim.fence,
             "runtime",
             "claim expired before its Craft session was durable",
@@ -122,7 +125,7 @@ export class DeterministicScheduler {
         continue;
       }
       if (snapshot.issue.state !== "running") {
-        this.adapters.github.heartbeat(claim.fence, now, this.config.scheduler.claimTtlMs);
+        await this.adapters.github.heartbeat(claim.fence, now, this.config.scheduler.claimTtlMs);
         continue;
       }
 
@@ -130,7 +133,7 @@ export class DeterministicScheduler {
       const stale = now - claim.heartbeatAtMs >= this.config.scheduler.staleRunMs || now >= claim.expiresAtMs;
       if (!session || session.status === "failed") {
         if (stale) {
-          this.adapters.github.failClaim(
+          await this.adapters.github.failClaim(
             claim.fence,
             "runtime",
             session ? "stale Craft run failed" : "stale Craft run is missing",
@@ -141,9 +144,9 @@ export class DeterministicScheduler {
         continue;
       }
       if (session.status === "running") {
-        this.adapters.github.heartbeat(claim.fence, now, this.config.scheduler.claimTtlMs);
+        await this.adapters.github.heartbeat(claim.fence, now, this.config.scheduler.claimTtlMs);
       } else if (stale) {
-        this.adapters.github.failClaim(
+        await this.adapters.github.failClaim(
           claim.fence,
           "runtime",
           "agent ended without tracker handoff evidence",
@@ -171,10 +174,10 @@ export class DeterministicScheduler {
       this.crashIf("after-workspace", crashAfter);
       await this.adapters.craft.ensure(identity);
       this.crashIf("after-session", crashAfter);
-      this.adapters.github.markRunning(claim.fence, this.clock.nowMs());
+      await this.adapters.github.markRunning(claim.fence, this.clock.nowMs());
     } catch (error) {
       if (error instanceof SimulatedCrash) throw error;
-      this.adapters.github.failClaim(
+      await this.adapters.github.failClaim(
         claim.fence,
         "runtime",
         error instanceof Error ? error.message : String(error),
