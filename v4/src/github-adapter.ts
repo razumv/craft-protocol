@@ -30,8 +30,10 @@ import type { StartupReconciliation, TrackerAdapter, TrackerTransitionOptions } 
 import { claimBindingsEqual, type WorkspaceTruthReader } from "./workspace-truth";
 
 const eventPrefix = "<!-- craft-protocol-v4:event\n";
+const fencePrefix = "<!-- craft-protocol-v4:wip-fence\n";
 const eventSuffix = "\n-->";
 const ledgerSchema = "craft-protocol/v4/github-event@1";
+const fenceSchema = "craft-protocol/v4/wip-fence@1";
 
 export interface GitHubStateProjection {
   label: string;
@@ -41,6 +43,7 @@ export interface GitHubStateProjection {
 export interface GitHubAdapterConfig {
   repository: string;
   projectId: string;
+  claimFenceIssueId: string;
   statusFieldId: string;
   gateFieldId: string;
   requiredLabels: string[];
@@ -65,8 +68,23 @@ interface LedgerEvent {
   message: string;
 }
 
+interface SharedFenceEvent {
+  schema: typeof fenceSchema;
+  operation: "acquire" | "heartbeat" | "release";
+  issueId: string;
+  fence: string;
+  atMs: number;
+  expiresAtMs: number;
+}
+
+interface SharedFenceState {
+  lease: SharedFenceEvent | null;
+  acceptedCommentIds: Set<number>;
+}
+
 interface Hydrated {
   snapshot: TrackerIssueSnapshot;
+  providerEvidence: MaterialEvidence;
   record: GitHubIssueRecord;
   item: GitHubProjectItem;
   labels: string[];
@@ -90,6 +108,7 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
     if (config.repository !== config.workflow.project.repository) {
       throw new Error("GitHub adapter repository must match workflow project repository");
     }
+    if (!config.claimFenceIssueId.trim()) throw new Error("GitHub adapter requires a shared claim-fence issue ID");
     const labels = lifecycleStates.map((state) => normalizeLabel(config.states[state]?.label));
     if (labels.some((label) => !label) || new Set(labels).size !== lifecycleStates.length) {
       throw new Error("every lifecycle state requires a unique non-empty GitHub label");
@@ -148,21 +167,27 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
     proposed: Claim,
     nowMs: number,
   ): Promise<TrackerIssueSnapshot | null> {
-    const active = await this.activeClaims();
-    if (active.some((entry) => entry.issue.id !== issueId)) return null;
     const current = await this.detailed(issueId);
     if (current.snapshot.version !== expectedVersion || current.snapshot.claim !== null) return null;
     if (current.snapshot.issue.state !== "ready" && current.snapshot.issue.state !== "retry-wait") return null;
     if (current.snapshot.issue.state === "retry-wait" && (!current.snapshot.retry || current.snapshot.retry.dueAtMs > nowMs)) return null;
     if (proposed.issueId !== issueId || proposed.issueIdentifier !== current.snapshot.issue.identifier) return null;
     if (proposed.attempt !== (current.snapshot.retry?.attempt ?? 1)) return null;
-    const event = nextEvent(current.snapshot, "claim", "claimed", nowMs, proposed.fence, {
-      claim: proposed,
-      retry: null,
-      evidence: current.snapshot.evidence,
-      message: `attempt ${proposed.attempt} atomically claimed`,
-    });
-    return this.commit(current, event, true);
+    if (!await this.acquireSharedFence(proposed, nowMs)) return null;
+    try {
+      const event = nextEvent(current.snapshot, "claim", "claimed", nowMs, proposed.fence, {
+        claim: proposed,
+        retry: null,
+        evidence: current.snapshot.evidence,
+        message: `attempt ${proposed.attempt} atomically claimed`,
+      });
+      const claimed = await this.commit(current, event, true);
+      if (!claimed) await this.releaseSharedFence(proposed, nowMs);
+      return claimed;
+    } catch (error) {
+      await this.releaseSharedFence(proposed, nowMs);
+      throw error;
+    }
   }
 
   async markRunning(fence: string, nowMs: number): Promise<TrackerIssueSnapshot> {
@@ -188,7 +213,8 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
       evidence: current.snapshot.evidence,
       message: `attempt ${claim.attempt} heartbeat`,
     });
-    await this.requiredCommit(current, event);
+    const updated = await this.requiredCommit(current, event);
+    await this.heartbeatSharedFence(updated.claim!, nowMs);
   }
 
   async failClaim(
@@ -215,7 +241,9 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
       evidence: current.snapshot.evidence,
       message: retryable ? `retry scheduled: ${reason}` : `attempt failed: ${reason}`,
     });
-    return this.requiredCommit(current, event);
+    const failed = await this.requiredCommit(current, event);
+    await this.releaseSharedFence(claim, nowMs);
+    return failed;
   }
 
   async transition(
@@ -225,16 +253,32 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
     options: TrackerTransitionOptions = {},
   ): Promise<TrackerIssueSnapshot> {
     const current = await this.detailed(issueId);
-    if (current.snapshot.claim && options.fence !== current.snapshot.claim.fence) throw new Error("claim fence mismatch");
-    const evidence = { ...current.snapshot.evidence, ...structuredClone(options.evidence ?? {}) };
+    const priorClaim = current.snapshot.claim;
+    if (priorClaim && options.fence !== priorClaim.fence) throw new Error("claim fence mismatch");
+    const callerEvidence = structuredClone(options.evidence ?? {});
+    delete callerEvidence.branchUrl;
+    delete callerEvidence.branchSha;
+    delete callerEvidence.prUrl;
+    delete callerEvidence.mergedAt;
+    delete callerEvidence.mergeCommitSha;
+    let evidence = { ...current.snapshot.evidence, ...callerEvidence, ...current.providerEvidence };
+    if (to === "pr-open" || to === "merged") {
+      if (!current.providerEvidence.prUrl) throw new Error(`${to} requires exact provider PR evidence`);
+      if (to === "merged" && (!current.providerEvidence.mergedAt || !current.providerEvidence.mergeCommitSha)) {
+        throw new Error("merged requires exact provider merge evidence");
+      }
+      evidence = { ...evidence, ...current.providerEvidence };
+    }
     validateTransitionEvidence(current.snapshot, to, evidence);
     const event = nextEvent(current.snapshot, "transition", to, nowMs, options.fence ?? null, {
-      claim: isTerminalState(to) || to === "blocked" ? null : current.snapshot.claim,
+      claim: isTerminalState(to) || to === "blocked" ? null : priorClaim,
       retry: current.snapshot.retry,
       evidence,
       message: options.message ?? `transitioned to ${to}`,
     });
-    return this.requiredCommit(current, event);
+    const transitioned = await this.requiredCommit(current, event);
+    if (priorClaim && !transitioned.claim) await this.releaseSharedFence(priorClaim, nowMs);
+    return transitioned;
   }
 
   async reconcileStartup(nowMs: number): Promise<readonly StartupReconciliation[]> {
@@ -316,6 +360,56 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
     }
   }
 
+  private async acquireSharedFence(claim: Claim, nowMs: number): Promise<boolean> {
+    const event: SharedFenceEvent = {
+      schema: fenceSchema,
+      operation: "acquire",
+      issueId: claim.issueId,
+      fence: claim.fence,
+      atMs: nowMs,
+      expiresAtMs: claim.expiresAtMs,
+    };
+    const comment = await this.transport.appendComment(this.config.claimFenceIssueId, serializeFenceEvent(event));
+    const state = await this.sharedFenceState();
+    return state.acceptedCommentIds.has(comment.databaseId)
+      && state.lease?.issueId === claim.issueId
+      && state.lease.fence === claim.fence;
+  }
+
+  private async heartbeatSharedFence(claim: Claim, nowMs: number): Promise<void> {
+    const event: SharedFenceEvent = {
+      schema: fenceSchema,
+      operation: "heartbeat",
+      issueId: claim.issueId,
+      fence: claim.fence,
+      atMs: nowMs,
+      expiresAtMs: claim.expiresAtMs,
+    };
+    const comment = await this.transport.appendComment(this.config.claimFenceIssueId, serializeFenceEvent(event));
+    const state = await this.sharedFenceState();
+    if (!state.acceptedCommentIds.has(comment.databaseId) || state.lease?.fence !== claim.fence) {
+      throw new Error("shared GitHub WIP fence is stale or owned by another issue");
+    }
+  }
+
+  private async releaseSharedFence(claim: Claim, nowMs: number): Promise<void> {
+    const event: SharedFenceEvent = {
+      schema: fenceSchema,
+      operation: "release",
+      issueId: claim.issueId,
+      fence: claim.fence,
+      atMs: nowMs,
+      expiresAtMs: Math.max(claim.expiresAtMs, nowMs),
+    };
+    await this.transport.appendComment(this.config.claimFenceIssueId, serializeFenceEvent(event));
+    await this.sharedFenceState();
+  }
+
+  private async sharedFenceState(): Promise<SharedFenceState> {
+    const comments = await collectPages((cursor) => this.transport.listComments(this.config.claimFenceIssueId, cursor));
+    return reduceSharedFence(comments, this.config.eventAuthorLogin);
+  }
+
   private async byFence(fence: string): Promise<Hydrated> {
     const all = await this.loadAll(true);
     const found = [...all.values()].find((entry) => entry.snapshot.claim?.fence === fence);
@@ -334,6 +428,7 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
     const records = await collectPages((cursor) => this.transport.listIssues(this.config.repository, cursor));
     const cores = new Map<string, CoreHydrated>();
     for (const record of records) {
+      if (record.id === this.config.claimFenceIssueId) continue;
       try {
         cores.set(record.id, await this.hydrateCore(record));
       } catch (error) {
@@ -445,8 +540,14 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
     }
     const matchingPrs = pullRequests.filter((pr) => pr.headRefName === contract.requiredBranch && pr.baseRefName === contract.baseBranch);
     if (matchingPrs.length > 1) throw new Error("multiple pull requests match the exact required branch/base");
-    if (matchingPrs[0]) snapshot.evidence = { ...snapshot.evidence, ...prEvidence(matchingPrs[0]) };
-    return { snapshot, record, item, labels, acceptedCommentIds, projectionDrift, contract, nativeBlockers };
+    const providerEvidence: MaterialEvidence = branch ? { branchUrl: branch.url, branchSha: branch.oid } : {};
+    const matchingPr = matchingPrs[0];
+    const claimedBaseSha = snapshot.claim?.baseSha ?? baseSha;
+    if (matchingPr && branch && matchingPr.headRefOid === branch.oid && matchingPr.baseRefOid === claimedBaseSha) {
+      Object.assign(providerEvidence, prEvidence(matchingPr));
+    }
+    snapshot.evidence = { ...snapshot.evidence, ...providerEvidence };
+    return { snapshot, providerEvidence, record, item, labels, acceptedCommentIds, projectionDrift, contract, nativeBlockers };
   }
 }
 
@@ -570,6 +671,59 @@ function validateLedgerShape(value: unknown): LedgerEvent {
 
 function serializeEvent(event: LedgerEvent): string {
   return `${eventPrefix}${JSON.stringify(event)}${eventSuffix}`;
+}
+
+function serializeFenceEvent(event: SharedFenceEvent): string {
+  return `${fencePrefix}${JSON.stringify(event)}${eventSuffix}`;
+}
+
+function reduceSharedFence(comments: GitHubComment[], author?: string): SharedFenceState {
+  let lease: SharedFenceEvent | null = null;
+  const acceptedCommentIds = new Set<number>();
+  const sorted = [...comments].sort((a, b) => a.databaseId - b.databaseId);
+  const seen = new Set<number>();
+  for (const comment of sorted) {
+    if (!comment.body.startsWith(fencePrefix)) continue;
+    if (seen.has(comment.databaseId) || !Number.isSafeInteger(comment.databaseId) || comment.databaseId < 1) {
+      throw new Error("ambiguous shared-fence comment ordering");
+    }
+    seen.add(comment.databaseId);
+    if (comment.createdAt !== comment.updatedAt) throw new Error("shared-fence comment was edited");
+    if (author && comment.authorLogin !== author) throw new Error("shared-fence author is not allowed");
+    if (!comment.body.endsWith(eventSuffix)) throw new Error("malformed shared-fence marker");
+    let raw: unknown;
+    try {
+      raw = JSON.parse(comment.body.slice(fencePrefix.length, -eventSuffix.length));
+    } catch (error) {
+      throw new Error(`malformed shared-fence JSON: ${errorMessage(error)}`);
+    }
+    const event = validateFenceShape(raw);
+    if (event.operation === "acquire") {
+      if (lease && event.atMs < lease.expiresAtMs) continue;
+      lease = event;
+      acceptedCommentIds.add(comment.databaseId);
+    } else if (lease?.issueId === event.issueId && lease.fence === event.fence) {
+      acceptedCommentIds.add(comment.databaseId);
+      lease = event.operation === "release" ? null : event;
+    }
+  }
+  return { lease, acceptedCommentIds };
+}
+
+function validateFenceShape(value: unknown): SharedFenceEvent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("shared-fence event must be an object");
+  const raw = value as Record<string, unknown>;
+  if (raw.schema !== fenceSchema || !["acquire", "heartbeat", "release"].includes(String(raw.operation))) {
+    throw new Error("shared-fence schema or operation is invalid");
+  }
+  if (typeof raw.issueId !== "string" || !raw.issueId || typeof raw.fence !== "string" || !raw.fence) {
+    throw new Error("shared-fence binding is invalid");
+  }
+  if (typeof raw.atMs !== "number" || typeof raw.expiresAtMs !== "number"
+    || !Number.isFinite(raw.atMs) || !Number.isFinite(raw.expiresAtMs) || raw.atMs < 0 || raw.expiresAtMs < raw.atMs) {
+    throw new Error("shared-fence lease timestamps are invalid");
+  }
+  return raw as unknown as SharedFenceEvent;
 }
 
 async function collectPages<T>(load: (cursor: string | null) => Promise<Page<T>>): Promise<T[]> {

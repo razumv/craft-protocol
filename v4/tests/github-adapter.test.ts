@@ -176,6 +176,7 @@ function config(): GitHubAdapterConfig {
   return {
     repository: "acme/repo",
     projectId: "PROJECT",
+    claimFenceIssueId: "FENCE",
     statusFieldId: "STATUS",
     gateFieldId: "GATE",
     requiredLabels: [" V4 "],
@@ -192,6 +193,7 @@ function config(): GitHubAdapterConfig {
 function setup(): { transport: MemoryGitHubTransport; truth: MemoryWorkspaceTruth; adapter: GitHubIssuesProjectsAdapter } {
   const transport = new MemoryGitHubTransport();
   transport.branches.set("main", { name: "main", url: "https://github.test/acme/repo/tree/main", oid: "b".repeat(40) });
+  transport.comments.set("FENCE", []);
   const truth = new MemoryWorkspaceTruth();
   return { transport, truth, adapter: new GitHubIssuesProjectsAdapter(config(), transport, truth) };
 }
@@ -215,7 +217,9 @@ function attachPr(transport: MemoryGitHubTransport, issueId: string, merged = fa
     url: "https://github.test/acme/repo/pull/1",
     state: merged ? "MERGED" : "OPEN",
     headRefName: "v4/acme-repo-1",
+    headRefOid: "d".repeat(40),
     baseRefName: "main",
+    baseRefOid: "b".repeat(40),
     mergedAt: merged ? "2026-08-18T19:20:00Z" : null,
     mergeCommitSha: merged ? "c".repeat(40) : null,
   }]);
@@ -258,7 +262,30 @@ describe("v4.2 GitHub Issues and Projects adapter", () => {
 
     expect(results.filter(Boolean)).toHaveLength(1);
     expect((await adapter.get("I_1")).claim).toEqual(claim);
-    expect(transport.comments.get("I_1")).toHaveLength(2);
+    expect(transport.comments.get("FENCE")).toHaveLength(2);
+    expect(transport.comments.get("I_1")).toHaveLength(1);
+  });
+
+  test("shared provider fence enforces WIP=1 across concurrent different issues and schedulers", async () => {
+    const { transport, truth, adapter } = setup();
+    transport.addIssue(1);
+    transport.addIssue(2);
+    const competitor = new GitHubIssuesProjectsAdapter(config(), transport, truth);
+    const [first, second] = await Promise.all([adapter.get("I_1"), competitor.get("I_2")]);
+    const [firstClaim, secondClaim] = await Promise.all([
+      proposedClaim(adapter, "I_1"),
+      proposedClaim(competitor, "I_2"),
+    ]);
+
+    const results = await Promise.all([
+      adapter.tryClaim("I_1", first.version, firstClaim, 1_000),
+      competitor.tryClaim("I_2", second.version, secondClaim, 1_000),
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const claimedIssues = [await adapter.get("I_1"), await adapter.get("I_2")].filter((entry) => entry.claim);
+    expect(claimedIssues).toHaveLength(1);
+    expect(transport.comments.get("FENCE")).toHaveLength(2);
   });
 
   test("stale fence cannot mutate a durable claim and restart reconstructs the exact binding", async () => {
@@ -273,6 +300,41 @@ describe("v4.2 GitHub Issues and Projects adapter", () => {
     const recovered = await restarted.get("I_1");
     expect(recovered.claim).toEqual(claim);
     expect(recovered.version).toBe(2);
+  });
+
+  test("caller-supplied PR evidence is rejected unless exact provider head/base evidence matches", async () => {
+    const { transport, adapter } = setup();
+    transport.addIssue(1);
+    const before = await adapter.get("I_1");
+    const claim = await proposedClaim(adapter, "I_1");
+    await adapter.tryClaim("I_1", before.version, claim, 1_000);
+    await adapter.markRunning(claim.fence, 1_100);
+
+    await expect(adapter.transition("I_1", "pr-open", 1_200, {
+      fence: claim.fence,
+      evidence: { prUrl: "https://attacker.test/pull/false" },
+    })).rejects.toThrow("exact provider PR evidence");
+
+    attachPr(transport, "I_1");
+    transport.prs.get("I_1")![0]!.headRefOid = "e".repeat(40);
+    await expect(adapter.transition("I_1", "pr-open", 1_300, {
+      fence: claim.fence,
+      evidence: { prUrl: "https://attacker.test/pull/false" },
+    })).rejects.toThrow("exact provider PR evidence");
+
+    attachPr(transport, "I_1");
+    const opened = await adapter.transition("I_1", "pr-open", 1_400, {
+      fence: claim.fence,
+      evidence: {
+        prUrl: "https://attacker.test/pull/false",
+        mergedAt: "2026-08-18T00:00:00Z",
+        mergeCommitSha: "f".repeat(40),
+      },
+    });
+    expect(opened.evidence.prUrl).toBe("https://github.test/acme/repo/pull/1");
+    expect(opened.evidence.branchSha).toBe("d".repeat(40));
+    expect(opened.evidence.mergedAt).toBeUndefined();
+    expect(opened.evidence.mergeCommitSha).toBeUndefined();
   });
 
   test("startup reconciliation maps exact PR and merge evidence to lifecycle state", async () => {
@@ -350,6 +412,6 @@ describe("v4.2 GitHub Issues and Projects adapter", () => {
     expect(done.issue.state).toBe("done");
     expect(done.claim).toBeNull();
     expect(done.evidence.prUrl).toBe("https://github.test/acme/repo/pull/1");
-    expect(transport.calls.get("append-comment")).toBe(6);
+    expect(transport.comments.get("I_1")).toHaveLength(6);
   });
 });

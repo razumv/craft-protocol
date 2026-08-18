@@ -50,7 +50,9 @@ export interface GitHubPullRequestEvidence {
   url: string;
   state: "OPEN" | "CLOSED" | "MERGED";
   headRefName: string;
+  headRefOid: string;
   baseRefName: string;
+  baseRefOid: string;
   mergedAt: string | null;
   mergeCommitSha: string | null;
 }
@@ -154,13 +156,14 @@ export class GhCliTransport implements GitHubTransport {
   }
 
   async listClosingPullRequests(issueId: string, cursor: string | null): Promise<Page<GitHubPullRequestEvidence>> {
-    const data = await this.graphql<{ node: { closedByPullRequestsReferences: GraphPage<Record<string, unknown>> } | null }>(`query PullRequests($id:ID!,$cursor:String){node(id:$id){... on Issue{closedByPullRequestsReferences(first:100,after:$cursor,includeClosedPrs:true){nodes{id url state headRefName baseRefName mergedAt mergeCommit{oid}}pageInfo{hasNextPage endCursor}}}}}`, { id: issueId, cursor });
+    const data = await this.graphql<{ node: { closedByPullRequestsReferences: GraphPage<Record<string, unknown>> } | null }>(`query PullRequests($id:ID!,$cursor:String){node(id:$id){... on Issue{closedByPullRequestsReferences(first:100,after:$cursor,includeClosedPrs:true){nodes{id url state headRefName headRefOid baseRefName baseRefOid mergedAt mergeCommit{oid}}pageInfo{hasNextPage endCursor}}}}}`, { id: issueId, cursor });
     if (!data.node) throw new Error(`GitHub issue node ${issueId} is missing`);
     const result = page(data.node.closedByPullRequestsReferences);
     return {
       nodes: result.nodes.map((raw) => ({
         id: String(raw.id), url: String(raw.url), state: raw.state as GitHubPullRequestEvidence["state"],
-        headRefName: String(raw.headRefName), baseRefName: String(raw.baseRefName),
+        headRefName: String(raw.headRefName), headRefOid: String(raw.headRefOid),
+        baseRefName: String(raw.baseRefName), baseRefOid: String(raw.baseRefOid),
         mergedAt: typeof raw.mergedAt === "string" ? raw.mergedAt : null,
         mergeCommitSha: raw.mergeCommit && typeof raw.mergeCommit === "object" && "oid" in raw.mergeCommit ? String(raw.mergeCommit.oid) : null,
       })),

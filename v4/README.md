@@ -26,9 +26,9 @@ graph LR
 
 - `WORKFLOW.md` plus `workflow.schema.json` define the versioned repository policy. The parser enforces WIP=1, bounded retry values, an explicit fake or GitHub tracker, and allowlisted Codex/Pi profiles.
 - The issue parser normalizes the Symphony issue shape and merges the fenced issue work contract with repository defaults. Missing goals, acceptance, non-goals, risk, authority, model, or verification budget fail closed before a claim.
-- `TrackerAdapter.tryClaim` is the compare-and-set boundary. The fake performs an in-process CAS; the GitHub adapter elects the first valid append-only event comment by immutable comment database ID and treats labels/Project fields as projections.
+- `TrackerAdapter.tryClaim` is the compare-and-set boundary. The fake performs an in-process CAS; the GitHub adapter first elects one project-wide lease on a shared provider comment ledger, then commits the per-issue event. Labels/Project fields remain projections.
 - A durable GitHub claim binds issue, attempt, fence, exact session/worktree identity, base SHA, model, timestamps, and expiry. Stale fences and concurrent losing comments cannot advance state.
-- Project items and field values are fully paginated and normalized by exact node/field/option IDs. Native blockers plus exact contract dependencies, Gate IDs, branch refs, linked PRs, and merge commits fail closed when missing or ambiguous.
+- Project items and field values are fully paginated and normalized by exact node/field/option IDs. Native blockers, contract dependencies, Gate IDs, and provider PR/merge evidence require exact branch names and head/base OIDs; missing or ambiguous truth fails closed.
 - Startup reconciliation combines the reconstructed GitHub ledger with a root-confined filesystem claim-binding reader. Missing running workspaces, mismatched bindings, edited/gapped ledgers, duplicate fields, or unprovable preservation state become `preservation-unknown`.
 - Session and worktree identities are derived from stable issue/attempt inputs. Adapters implement idempotent `ensure`, so a crash can resume the same identity but cannot create a second identity for one attempt.
 - Retry and stale decisions use only state, timestamps, failure class, and configured numeric bounds. Only `transient` and `runtime` failures retry.
@@ -61,4 +61,4 @@ bun run typecheck
 bun test
 ```
 
-The fifteen focused tests cover the seven v4.1 scheduler invariants plus GitHub pagination/field normalization, dependency mapping, concurrent and stale claims, claimless-active fail-closed behavior, restart reconstruction, PR/merge evidence, exact Gate IDs, preservation-unknown behavior, and one injected adapter integration smoke.
+The seventeen focused tests cover the seven v4.1 scheduler invariants plus GitHub pagination/field normalization, dependency mapping, same-issue and cross-issue concurrent claims, stale claims, forged PR evidence rejection, exact PR/merge evidence, claimless-active fail-closed behavior, restart reconstruction, exact Gate IDs, preservation-unknown behavior, and one injected adapter integration smoke.
