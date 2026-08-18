@@ -10,6 +10,7 @@ import type {
 } from "./domain";
 import { OwnerDirectiveLedger, parseOwnerGateDecision, type OwnerDirective, type OwnerGateDecision } from "./ledger";
 import { ModelPolicy } from "./policy";
+import { compactRunSummary } from "./status";
 import { assertRuntimeIdentity, type CraftRpcTransport, type CraftRuntimeIdentity } from "./craft-transport";
 
 export const craftSessionStatuses = [
@@ -687,15 +688,9 @@ export function compactProjectDeskProjection(projection: ProjectDeskProjection):
   const { status, activeRun, latestAcknowledgement } = projection;
   const lines = [
     "# Project Desk — Craft Protocol v4",
-    `Issue: ${status.issueIdentifier}`,
+    compactRunSummary(status),
     `Objective: ${status.objective}`,
-    `State: ${status.state}`,
-    `Next: ${status.nextCompletionPoint}`,
-    `Branch: ${status.branchUrl ?? "—"}`,
-    `PR: ${status.prUrl ?? "—"}`,
     `Deploy: ${status.deploymentUrl ?? "—"}`,
-    `Blocker: ${status.blocker ?? "—"}`,
-    `Gate: ${status.ownerGate?.command ?? "—"}`,
     `Run: ${activeRun ? `${activeRun.sessionId} / ${activeRun.rpcSessionId} / ${activeRun.status}` : "—"}`,
     `Context: ${activeRun ? activeRun.contextTokens : 0}`,
     `Acknowledgement: ${latestAcknowledgement?.acknowledgementId ?? "—"}`,

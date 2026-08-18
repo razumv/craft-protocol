@@ -38,3 +38,18 @@ export function projectStatus(snapshot: TrackerIssueSnapshot): ProjectStatus {
     ownerGate: ownerGateId ? { id: ownerGateId, command: `APPROVE ${ownerGateId}` } : null,
   };
 }
+
+/** Compact, deterministic mobile projection of durable lifecycle evidence only. */
+export function compactRunSummary(status: ProjectStatus): string {
+  const event = status.lastMaterialEvent;
+  return [
+    "## Run summary",
+    `Issue: ${status.issueIdentifier}`,
+    `State: ${status.state}`,
+    `Branch / PR: ${status.branchUrl ?? "—"} / ${status.prUrl ?? "—"}`,
+    `Last material event: ${event ? `#${event.sequence} @ ${event.atMs} [${event.state}] ${event.message}` : "—"}`,
+    `Blocker: ${status.blocker ?? "—"}`,
+    `Owner gate: ${status.ownerGate?.command ?? "—"}`,
+    `Next completion point: ${status.nextCompletionPoint}`,
+  ].join("\n");
+}

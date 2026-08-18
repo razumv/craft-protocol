@@ -454,14 +454,17 @@ describe("v4.3 Craft mobile control-plane adapter", () => {
     const { adapter, transport } = adapterFixture();
     const run = identity();
     const started = await adapter.ensure(run, startContext(run));
-    transport.finish(started.rpcSessionId, "PR opened with focused tests green.");
+    transport.finish(started.rpcSessionId, "Worker transcript\nTool: bash focused-tests");
     const settled = await adapter.get(run.sessionId);
     expect(settled?.status).toBe("settled");
 
     const body = await adapter.projectToDesk({ status: deskStatus, activeRun: settled, latestAcknowledgement: null });
     expect(body).toBe(compactProjectDeskProjection({ status: deskStatus, activeRun: settled, latestAcknowledgement: null }));
+    expect(body).toContain("## Run summary");
+    expect(body).toContain("Last material event: —");
     expect(body).toContain(`Run: ${run.sessionId} / ${started.rpcSessionId} / settled`);
-    expect(body).not.toContain("PR opened with focused tests green.");
+    expect(body).not.toContain("Worker transcript");
+    expect(body).not.toContain("Tool: bash focused-tests");
     expect(transport.notes).toBe(body);
   });
 });
