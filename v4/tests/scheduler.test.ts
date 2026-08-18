@@ -148,6 +148,30 @@ describe("v4.1 deterministic scheduler core", () => {
     expect(simulator.workspaces.count()).toBe(workflow.config.scheduler.maxAttempts);
   });
 
+  test("failed bounded cancellation preserves the claim instead of starting a replacement", async () => {
+    const simulator = new CrashRestartSimulator(workflow);
+    simulator.seed(issue(), contract());
+    await simulator.scheduler.tick();
+
+    const scheduler = new DeterministicScheduler(
+      workflow.config,
+      {
+        github: simulator.github,
+        workspaces: simulator.workspaces,
+        craft: {
+          ensure: (identity) => simulator.craft.ensure(identity),
+          get: async () => ({ status: "turn-deadline" }),
+          cancel: async () => ({ status: "cancel-deadline" }),
+        },
+      },
+      simulator.clock,
+    );
+    await scheduler.tick();
+
+    expect(simulator.github.get("issue-45").issue.state).toBe("preservation-unknown");
+    expect(simulator.github.claimSuccessCount).toBe(1);
+  });
+
   test("owner directives are immutable and gates require exact IDs", () => {
     const ledger = new OwnerDirectiveLedger();
     const entry = ledger.append({

@@ -1,6 +1,6 @@
-# Craft Protocol v4.2 Scheduler and GitHub Adapter
+# Craft Protocol v4.3 Scheduler, GitHub, and Craft Adapters
 
-This directory is a **parallel v4 package**. It does not wrap or modify the v3 runtime, Fleet, launchd, live Craft Agents, or production state. GitHub access is isolated behind an injected transport; tests use an in-memory transport and never mutate live GitHub.
+This directory is a **parallel v4 package**. It does not wrap or modify the v3 runtime, Fleet, launchd, live Craft Agents, or production state. GitHub and Craft access are isolated behind injected transports; tests use in-memory transports and never mutate live GitHub or Craft.
 
 ## Architecture
 
@@ -15,13 +15,16 @@ graph LR
     S --> C[Atomic claim fence]
     C --> I[Deterministic run identity]
     I --> T[Fake isolated worktree]
-    I --> A[Fake Craft session]
+    I --> A[Injected Craft RPC adapter]
+    A --> X[Fresh project-bound Codex session]
+    A --> D[Project Desk notes projection]
     G --> R[Restart and stale-run reconciliation]
     T --> R
     A --> R
     R --> S
     G --> O[Structured status projection]
-    D[Immutable owner directive ledger] --> O
+    Q[Immutable owner directive ledger] --> O
+    Q --> D
 ```
 
 - `WORKFLOW.md` plus `workflow.schema.json` define the versioned repository policy. The parser enforces WIP=1, bounded retry values, an explicit fake or GitHub tracker, and allowlisted Codex/Pi profiles.
@@ -33,6 +36,13 @@ graph LR
 - Session and worktree identities are derived from stable issue/attempt inputs. Adapters implement idempotent `ensure`, so a crash can resume the same identity but cannot create a second identity for one attempt.
 - Retry and stale decisions use only state, timestamps, failure class, and configured numeric bounds. Only `transient` and `runtime` failures retry.
 - Agent success or silence never completes an issue. Durable lifecycle/evidence transitions drive the compact status projection.
+- The Craft adapter admits only exact `chatgpt-plus` plus allowlisted `pi/gpt-*` profiles. It creates unbranched project-bound sessions with exact worktree/model/connection readback and canonical valued issue/run labels.
+- A configured CLI transport requires an explicit absolute executable path and exact CLI path/version plus server ID/version. It never assumes a packaged `current/bin/craft-cli` path and fails closed before mutation when identity is absent or ambiguous.
+- Restart discovery uses the exact canonical run label. One exact matching session is idempotently resumed; duplicate or cross-issue bindings are refused.
+- A settled turn requires the persisted execution prompt, stopped processing, and Craft's authoritative non-empty final assistant message after that prompt. Low-level `agent_end`/`complete` without a response is a failure outcome, not settlement.
+- Turn, context-token, RPC, and cancellation deadlines are numeric and bounded. Replacement attempts are fresh sessions; they receive only the issue contract, immutable owner directives, repository instructions, and a bounded compact status handoff—never a prior transcript.
+- Direct owner directives must match one exact user message in the configured project-bound owner desk. Their immutable acknowledgement evidence is projected to desk notes within 60 seconds. Gate commands retain exact immutable-ID parsing.
+- Project Desk projection is compact metadata only: objective, lifecycle, material links, blocker/next point, exact gate command, active run, context usage, and latest acknowledgement. It contains no execution transcript.
 
 ## Lifecycle
 
@@ -48,9 +58,9 @@ Transitions are an explicit table in `src/domain.ts`; the scheduler and adapters
 
 ## Safety boundary
 
-The package still creates no real worktrees or Craft sessions. `GhCliTransport` is an inert authenticated boundary until explicitly invoked; all adapter tests inject a memory transport. GitHub event comments are the authoritative append-only CAS log, while lifecycle labels, Project Status, and Gate fields are deterministic projections. Filesystem reconciliation is read-only and never cleans or repairs ambiguous workspaces.
+The package creates no real worktrees or Craft sessions unless an application explicitly injects and validates live transports. `GhCliTransport` and `CraftCliRpcTransport` are inert boundaries until explicitly invoked; all adapter tests inject memory transports. GitHub event comments are the authoritative append-only CAS log, while lifecycle labels, Project Status, Gate fields, and Craft Project Desk notes are deterministic projections. Filesystem reconciliation is read-only and never cleans or repairs ambiguous workspaces.
 
-Owner directives are append-only, stored verbatim, and include acknowledgement timing. Risk policy permits no independent reviewer for low risk and caps medium/high review and correction counts to prevent audit loops.
+Owner directives are append-only, stored verbatim, bound to exact direct-owner messages, and include acknowledgement timing/evidence. Risk policy permits no independent reviewer for low risk and caps medium/high review and correction counts to prevent audit loops.
 
 ## Focused verification
 
@@ -58,7 +68,7 @@ Owner directives are append-only, stored verbatim, and include acknowledgement t
 cd v4
 bun install --frozen-lockfile
 bun run typecheck
-bun test
+bun test tests/scheduler.test.ts tests/github-adapter.test.ts tests/craft-adapter.test.ts
 ```
 
-The seventeen focused tests cover the seven v4.1 scheduler invariants plus GitHub pagination/field normalization, dependency mapping, same-issue and cross-issue concurrent claims, stale claims, forged PR evidence rejection, exact PR/merge evidence, claimless-active fail-closed behavior, restart reconstruction, exact Gate IDs, preservation-unknown behavior, and one injected adapter integration smoke.
+The focused suites cover the seven v4.1 scheduler invariants; GitHub pagination/field normalization, dependency mapping, same-issue and cross-issue claims, stale claims, exact PR/merge evidence, Gate IDs, and startup reconciliation; plus Craft CLI/runtime identity, Codex-only admission, exact project/model/connection/worktree binding, canonical-label duplicate refusal, 60-second direct-owner acknowledgement, true settlement versus response-less completion, fresh replacement without transcript inheritance, exact gates, deadlines, Project Desk projection, and one in-memory Craft adapter integration smoke.
