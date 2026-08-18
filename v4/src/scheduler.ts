@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { FakeCraftAdapter, FakeWorkspaceAdapter } from "./adapters";
+import { FakeWorkspaceAdapter } from "./adapters";
+import type { CraftStartContext } from "./craft-adapter";
 import type { Claim, ProjectStatus, RunIdentity, TrackerIssueSnapshot, WorkflowConfig } from "./domain";
 import { IdentityFactory } from "./identity";
 import { ModelPolicy, RiskPolicy } from "./policy";
@@ -27,9 +28,20 @@ export class SimulatedCrash extends Error {
   }
 }
 
+export interface SchedulerCraftSession {
+  status: string;
+}
+
+/** Provider-independent Craft seam; the simulator and RPC adapter both implement it. */
+export interface SchedulerCraftAdapter {
+  ensure(identity: RunIdentity, context?: CraftStartContext): Promise<SchedulerCraftSession>;
+  get(sessionId: string, nowMs?: number): SchedulerCraftSession | null | Promise<SchedulerCraftSession | null>;
+  cancel?(sessionId: string, nowMs: number): Promise<SchedulerCraftSession>;
+}
+
 export interface SchedulerAdapters {
   github: TrackerAdapter;
-  craft: FakeCraftAdapter;
+  craft: SchedulerCraftAdapter;
   workspaces: FakeWorkspaceAdapter;
 }
 
@@ -110,7 +122,7 @@ export class DeterministicScheduler {
       }
 
       if (snapshot.issue.state === "claimed") {
-        const session = this.adapters.craft.get(claim.sessionId);
+        const session = await this.adapters.craft.get(claim.sessionId, now);
         if (now >= claim.expiresAtMs && !session) {
           await this.adapters.github.failClaim(
             claim.fence,
@@ -129,14 +141,41 @@ export class DeterministicScheduler {
         continue;
       }
 
-      const session = this.adapters.craft.get(claim.sessionId);
+      const session = await this.adapters.craft.get(claim.sessionId, now);
       const stale = now - claim.heartbeatAtMs >= this.config.scheduler.staleRunMs || now >= claim.expiresAtMs;
-      if (!session || session.status === "failed") {
-        if (stale) {
+      const deadlineFailure = session && [
+        "ended-without-response",
+        "turn-deadline",
+        "context-deadline",
+        "cancel-deadline",
+      ].includes(session.status);
+      if (!session || session.status === "failed" || deadlineFailure) {
+        if (deadlineFailure) {
+          if (!this.adapters.craft.cancel) {
+            await this.adapters.github.transition(snapshot.issue.id, "preservation-unknown", now, {
+              fence: claim.fence,
+              message: "Craft deadline reached without a cancellation/readback capability",
+            });
+            continue;
+          }
+          const cancelled = await this.adapters.craft.cancel(claim.sessionId, now);
+          if (cancelled.status === "cancel-deadline") {
+            await this.adapters.github.transition(snapshot.issue.id, "preservation-unknown", now, {
+              fence: claim.fence,
+              message: "Craft cancellation deadline expired before exact stopped readback",
+            });
+            continue;
+          }
+        }
+        if (stale || deadlineFailure) {
           await this.adapters.github.failClaim(
             claim.fence,
             "runtime",
-            session ? "stale Craft run failed" : "stale Craft run is missing",
+            !session
+              ? "stale Craft run is missing"
+              : session.status === "ended-without-response"
+                ? "Craft turn ended without a final response"
+                : `Craft run stopped at ${session.status}`,
             now,
             this.config.scheduler,
           );
@@ -149,7 +188,7 @@ export class DeterministicScheduler {
         await this.adapters.github.failClaim(
           claim.fence,
           "runtime",
-          "agent ended without tracker handoff evidence",
+          "agent settled without tracker handoff evidence",
           now,
           this.config.scheduler,
         );
@@ -172,7 +211,11 @@ export class DeterministicScheduler {
     try {
       await this.adapters.workspaces.ensure(identity);
       this.crashIf("after-workspace", crashAfter);
-      await this.adapters.craft.ensure(identity);
+      await this.adapters.craft.ensure(identity, {
+        claim,
+        issue: snapshot.issue,
+        contract: snapshot.contract,
+      });
       this.crashIf("after-session", crashAfter);
       await this.adapters.github.markRunning(claim.fence, this.clock.nowMs());
     } catch (error) {
