@@ -89,8 +89,9 @@ export function parseWorkflow(content: string, workflowPath = resolve("WORKFLOW.
 
   const repository = string(project.repository, "project.repository");
   if (!/^[^/]+\/[^/]+$/.test(repository)) throw new Error("project.repository must be owner/name");
-  if (string(tracker.kind, "tracker.kind") !== "fake-github") {
-    throw new Error("increment 1 supports only the fake-github tracker");
+  const trackerKind = string(tracker.kind, "tracker.kind");
+  if (trackerKind !== "fake-github" && trackerKind !== "github") {
+    throw new Error("tracker.kind must be fake-github or github");
   }
   if (scheduler.wip_limit !== 1) throw new Error("scheduler.wip_limit must be exactly 1");
 
@@ -117,7 +118,7 @@ export function parseWorkflow(content: string, workflowPath = resolve("WORKFLOW.
       branchPrefix: string(project.branch_prefix, "project.branch_prefix").replace(/\/+$/, ""),
     },
     tracker: {
-      kind: "fake-github",
+      kind: trackerKind,
       activeStates: stateArray(tracker.active_states, "tracker.active_states"),
       terminalStates: stateArray(tracker.terminal_states, "tracker.terminal_states"),
     },

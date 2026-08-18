@@ -1,0 +1,671 @@
+// SPDX-License-Identifier: Apache-2.0
+
+import {
+  assertLifecycleTransition,
+  isRetryableFailure,
+  isTerminalState,
+  lifecycleStates,
+  type Claim,
+  type FailureClass,
+  type IssueContract,
+  type LifecycleState,
+  type MaterialEvidence,
+  type NormalizedIssue,
+  type RetryMetadata,
+  type TrackerIssueSnapshot,
+  type WorkflowConfig,
+} from "./domain";
+import { parseIssueContract } from "./contract";
+import type {
+  GitHubComment,
+  GitHubIssueLink,
+  GitHubIssueRecord,
+  GitHubProjectFieldValue,
+  GitHubProjectItem,
+  GitHubPullRequestEvidence,
+  GitHubTransport,
+  Page,
+} from "./github-transport";
+import type { StartupReconciliation, TrackerAdapter, TrackerTransitionOptions } from "./tracker";
+import { claimBindingsEqual, type WorkspaceTruthReader } from "./workspace-truth";
+
+const eventPrefix = "<!-- craft-protocol-v4:event\n";
+const eventSuffix = "\n-->";
+const ledgerSchema = "craft-protocol/v4/github-event@1";
+
+export interface GitHubStateProjection {
+  label: string;
+  projectStatusOptionId: string;
+}
+
+export interface GitHubAdapterConfig {
+  repository: string;
+  projectId: string;
+  statusFieldId: string;
+  gateFieldId: string;
+  requiredLabels: string[];
+  states: Record<LifecycleState, GitHubStateProjection>;
+  workflow: WorkflowConfig;
+  eventAuthorLogin?: string;
+  onDiagnostic?: (message: string) => void;
+}
+
+interface LedgerEvent {
+  schema: typeof ledgerSchema;
+  issueId: string;
+  expectedVersion: number;
+  operation: "claim" | "running" | "heartbeat" | "failure" | "transition";
+  from: LifecycleState;
+  to: LifecycleState;
+  atMs: number;
+  fence: string | null;
+  claim: Claim | null;
+  retry: RetryMetadata | null;
+  evidence: MaterialEvidence;
+  message: string;
+}
+
+interface Hydrated {
+  snapshot: TrackerIssueSnapshot;
+  record: GitHubIssueRecord;
+  item: GitHubProjectItem;
+  labels: string[];
+  acceptedCommentIds: Set<number>;
+  projectionDrift: boolean;
+}
+
+interface CoreHydrated extends Hydrated {
+  contract: IssueContract;
+  nativeBlockers: GitHubIssueLink[];
+}
+
+export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
+  readonly #managedLabels: Set<string>;
+
+  constructor(
+    readonly config: GitHubAdapterConfig,
+    readonly transport: GitHubTransport,
+    readonly workspaceTruth: WorkspaceTruthReader,
+  ) {
+    if (config.repository !== config.workflow.project.repository) {
+      throw new Error("GitHub adapter repository must match workflow project repository");
+    }
+    const labels = lifecycleStates.map((state) => normalizeLabel(config.states[state]?.label));
+    if (labels.some((label) => !label) || new Set(labels).size !== lifecycleStates.length) {
+      throw new Error("every lifecycle state requires a unique non-empty GitHub label");
+    }
+    if (lifecycleStates.some((state) => !config.states[state]?.projectStatusOptionId.trim())) {
+      throw new Error("every lifecycle state requires an exact Project status option ID");
+    }
+    this.#managedLabels = new Set(labels);
+  }
+
+  async fetchIssuesByStates(states: readonly LifecycleState[]): Promise<TrackerIssueSnapshot[]> {
+    if (states.length === 0) return [];
+    const wanted = new Set(states);
+    const hydrated = await this.loadAll(false);
+    return [...hydrated.values()].map((entry) => entry.snapshot).filter((entry) => wanted.has(entry.issue.state));
+  }
+
+  async fetchIssuesByIds(ids: readonly string[]): Promise<TrackerIssueSnapshot[]> {
+    if (ids.length === 0) return [];
+    const unique = [...new Set(ids)];
+    const hydrated = await this.loadAll(true, new Set(unique));
+    const snapshots = unique.flatMap((id) => {
+      const entry = hydrated.get(id);
+      return entry ? [entry.snapshot] : [];
+    });
+    if (snapshots.length !== unique.length) throw new Error("GitHub ID refresh omitted a requested issue");
+    return snapshots;
+  }
+
+  async activeClaims(): Promise<TrackerIssueSnapshot[]> {
+    const active = await this.fetchIssuesByStates(this.config.workflow.tracker.activeStates);
+    return active.filter((entry) => entry.claim !== null);
+  }
+
+  async get(issueId: string): Promise<TrackerIssueSnapshot> {
+    const [snapshot] = await this.fetchIssuesByIds([issueId]);
+    if (!snapshot) throw new Error(`unknown GitHub issue ${issueId}`);
+    return snapshot;
+  }
+
+  async tryClaim(
+    issueId: string,
+    expectedVersion: number,
+    proposed: Claim,
+    nowMs: number,
+  ): Promise<TrackerIssueSnapshot | null> {
+    const active = await this.activeClaims();
+    if (active.some((entry) => entry.issue.id !== issueId)) return null;
+    const current = await this.detailed(issueId);
+    if (current.snapshot.version !== expectedVersion || current.snapshot.claim !== null) return null;
+    if (current.snapshot.issue.state !== "ready" && current.snapshot.issue.state !== "retry-wait") return null;
+    if (current.snapshot.issue.state === "retry-wait" && (!current.snapshot.retry || current.snapshot.retry.dueAtMs > nowMs)) return null;
+    if (proposed.issueId !== issueId || proposed.issueIdentifier !== current.snapshot.issue.identifier) return null;
+    if (proposed.attempt !== (current.snapshot.retry?.attempt ?? 1)) return null;
+    const event = nextEvent(current.snapshot, "claim", "claimed", nowMs, proposed.fence, {
+      claim: proposed,
+      retry: null,
+      evidence: current.snapshot.evidence,
+      message: `attempt ${proposed.attempt} atomically claimed`,
+    });
+    return this.commit(current, event, true);
+  }
+
+  async markRunning(fence: string, nowMs: number): Promise<TrackerIssueSnapshot> {
+    const current = await this.byFence(fence);
+    if (current.snapshot.issue.state !== "claimed" || !current.snapshot.claim) throw new Error("claim is not startable");
+    const claim = { ...current.snapshot.claim, heartbeatAtMs: nowMs };
+    const event = nextEvent(current.snapshot, "running", "running", nowMs, fence, {
+      claim,
+      retry: null,
+      evidence: current.snapshot.evidence,
+      message: `attempt ${claim.attempt} running`,
+    });
+    return this.requiredCommit(current, event);
+  }
+
+  async heartbeat(fence: string, nowMs: number, ttlMs: number): Promise<void> {
+    const current = await this.byFence(fence);
+    const claim = current.snapshot.claim;
+    if (!claim) throw new Error("claim fence is stale or unknown");
+    const event = nextEvent(current.snapshot, "heartbeat", current.snapshot.issue.state, nowMs, fence, {
+      claim: { ...claim, heartbeatAtMs: nowMs, expiresAtMs: nowMs + ttlMs },
+      retry: current.snapshot.retry,
+      evidence: current.snapshot.evidence,
+      message: `attempt ${claim.attempt} heartbeat`,
+    });
+    await this.requiredCommit(current, event);
+  }
+
+  async failClaim(
+    fence: string,
+    failureClass: FailureClass,
+    reason: string,
+    nowMs: number,
+    scheduler: WorkflowConfig["scheduler"],
+  ): Promise<TrackerIssueSnapshot> {
+    const current = await this.byFence(fence);
+    const claim = current.snapshot.claim!;
+    const retryable = isRetryableFailure(failureClass) && claim.attempt < scheduler.maxAttempts;
+    const to: LifecycleState = retryable ? "retry-wait" : "failed";
+    const delay = Math.min(scheduler.retryBaseMs * 2 ** (claim.attempt - 1), scheduler.retryMaxMs);
+    const retry: RetryMetadata | null = retryable ? {
+      attempt: claim.attempt + 1,
+      dueAtMs: nowMs + delay,
+      failureClass,
+      reason,
+    } : null;
+    const event = nextEvent(current.snapshot, "failure", to, nowMs, fence, {
+      claim: null,
+      retry,
+      evidence: current.snapshot.evidence,
+      message: retryable ? `retry scheduled: ${reason}` : `attempt failed: ${reason}`,
+    });
+    return this.requiredCommit(current, event);
+  }
+
+  async transition(
+    issueId: string,
+    to: LifecycleState,
+    nowMs: number,
+    options: TrackerTransitionOptions = {},
+  ): Promise<TrackerIssueSnapshot> {
+    const current = await this.detailed(issueId);
+    if (current.snapshot.claim && options.fence !== current.snapshot.claim.fence) throw new Error("claim fence mismatch");
+    const evidence = { ...current.snapshot.evidence, ...structuredClone(options.evidence ?? {}) };
+    validateTransitionEvidence(current.snapshot, to, evidence);
+    const event = nextEvent(current.snapshot, "transition", to, nowMs, options.fence ?? null, {
+      claim: isTerminalState(to) || to === "blocked" ? null : current.snapshot.claim,
+      retry: current.snapshot.retry,
+      evidence,
+      message: options.message ?? `transitioned to ${to}`,
+    });
+    return this.requiredCommit(current, event);
+  }
+
+  async reconcileStartup(nowMs: number): Promise<readonly StartupReconciliation[]> {
+    const results: StartupReconciliation[] = [];
+    const active = await this.activeClaims();
+    for (const snapshot of active.sort((a, b) => a.issue.id.localeCompare(b.issue.id))) {
+      const claim = snapshot.claim!;
+      const truth = await this.workspaceTruth.inspect(claim);
+      if (truth.kind === "ambiguous" || (truth.kind === "bound" && !claimBindingsEqual(claim, truth.binding))) {
+        const reason = truth.kind === "ambiguous" ? truth.reason : "filesystem claim binding does not match GitHub claim";
+        await this.transition(snapshot.issue.id, "preservation-unknown", nowMs, { fence: claim.fence, message: reason });
+        results.push({ issueId: snapshot.issue.id, action: "preservation-unknown", reason });
+        continue;
+      }
+      if (truth.kind === "absent" && snapshot.issue.state !== "claimed") {
+        const reason = `${snapshot.issue.state} claim has no durable workspace`;
+        await this.transition(snapshot.issue.id, "preservation-unknown", nowMs, { fence: claim.fence, message: reason });
+        results.push({ issueId: snapshot.issue.id, action: "preservation-unknown", reason });
+        continue;
+      }
+      if (snapshot.issue.state === "running" && snapshot.evidence.prUrl) {
+        await this.transition(snapshot.issue.id, "pr-open", nowMs, {
+          fence: claim.fence,
+          message: "startup reconciliation observed pull request evidence",
+          evidence: snapshot.evidence,
+        });
+        results.push({ issueId: snapshot.issue.id, action: "advanced", reason: "pull request evidence" });
+        continue;
+      }
+      if (["pr-open", "review", "owner-gate"].includes(snapshot.issue.state) && snapshot.evidence.mergedAt) {
+        await this.transition(snapshot.issue.id, "merged", nowMs, {
+          fence: claim.fence,
+          message: "startup reconciliation observed merge evidence",
+          evidence: snapshot.evidence,
+        });
+        results.push({ issueId: snapshot.issue.id, action: "advanced", reason: "merge evidence" });
+        continue;
+      }
+      results.push({ issueId: snapshot.issue.id, action: "resume", reason: truth.kind === "absent" ? "claimed workspace not created yet" : "claim binding matches" });
+    }
+    return results;
+  }
+
+  private async requiredCommit(current: Hydrated, event: LedgerEvent): Promise<TrackerIssueSnapshot> {
+    const result = await this.commit(current, event, false);
+    if (!result) throw new Error("GitHub compare-and-set conflict");
+    return result;
+  }
+
+  private async commit(current: Hydrated, event: LedgerEvent, conflictReturnsNull: boolean): Promise<TrackerIssueSnapshot | null> {
+    const comment = await this.transport.appendComment(event.issueId, serializeEvent(event));
+    const refreshed = await this.detailed(event.issueId);
+    if (!refreshed.acceptedCommentIds.has(comment.databaseId)) {
+      if (conflictReturnsNull) return null;
+      throw new Error("GitHub compare-and-set conflict");
+    }
+    try {
+      await this.project(refreshed);
+    } catch (error) {
+      throw new Error(`GitHub ledger committed but projection failed: ${errorMessage(error)}`);
+    }
+    return (await this.detailed(event.issueId)).snapshot;
+  }
+
+  private async project(entry: Hydrated): Promise<void> {
+    const state = entry.snapshot.issue.state;
+    const unmanaged = entry.labels.filter((label) => !this.#managedLabels.has(normalizeLabel(label)));
+    await this.transport.replaceLabels(this.config.repository, entry.record.number, [...unmanaged, this.config.states[state].label]);
+    await this.transport.updateProjectSingleSelect(
+      this.config.projectId,
+      entry.item.id,
+      this.config.statusFieldId,
+      this.config.states[state].projectStatusOptionId,
+    );
+    if (state === "owner-gate") {
+      const gateId = entry.snapshot.evidence.ownerGateId;
+      if (!gateId) throw new Error("owner-gate projection lacks exact gate ID");
+      await this.transport.updateProjectText(this.config.projectId, entry.item.id, this.config.gateFieldId, gateId);
+    }
+  }
+
+  private async byFence(fence: string): Promise<Hydrated> {
+    const all = await this.loadAll(true);
+    const found = [...all.values()].find((entry) => entry.snapshot.claim?.fence === fence);
+    if (!found) throw new Error("claim fence is stale or unknown");
+    return found;
+  }
+
+  private async detailed(issueId: string): Promise<Hydrated> {
+    const all = await this.loadAll(true, new Set([issueId]));
+    const found = all.get(issueId);
+    if (!found) throw new Error(`unknown GitHub issue ${issueId}`);
+    return found;
+  }
+
+  private async loadAll(strict: boolean, requested = new Set<string>()): Promise<Map<string, Hydrated>> {
+    const records = await collectPages((cursor) => this.transport.listIssues(this.config.repository, cursor));
+    const cores = new Map<string, CoreHydrated>();
+    for (const record of records) {
+      try {
+        cores.set(record.id, await this.hydrateCore(record));
+      } catch (error) {
+        if (strict && (requested.size === 0 || requested.has(record.id))) throw error;
+        this.config.onDiagnostic?.(`omitting malformed GitHub issue ${record.id}: ${errorMessage(error)}`);
+      }
+    }
+    const byContract = indexUnique(cores, (entry) => entry.contract.id);
+    const byIdentifier = indexUnique(cores, (entry) => entry.snapshot.issue.identifier);
+    const output = new Map<string, Hydrated>();
+    for (const [id, core] of cores) {
+      try {
+        const dependencies = core.contract.dependencies.map((dependency) => resolveDependency(dependency, byContract, byIdentifier));
+        const native = core.nativeBlockers.map((blocker) => {
+          const target = cores.get(blocker.id);
+          return {
+            id: blocker.id,
+            identifier: `${this.config.repository}#${blocker.number}`,
+            state: target?.snapshot.issue.state ?? (blocker.state === "CLOSED" ? "done" : "unknown"),
+          };
+        });
+        core.snapshot.issue.blockedBy = dedupeBlockers([...native, ...dependencies]);
+        core.snapshot.issue.dispatchable = core.snapshot.issue.dispatchable
+          && !core.snapshot.issue.blockedBy.some((blocker) => blocker.state !== "done");
+        output.set(id, core);
+      } catch (error) {
+        if (strict && (requested.size === 0 || requested.has(id))) throw error;
+        this.config.onDiagnostic?.(`omitting GitHub issue ${id} with ambiguous dependencies: ${errorMessage(error)}`);
+      }
+    }
+    return output;
+  }
+
+  private async hydrateCore(record: GitHubIssueRecord): Promise<CoreHydrated> {
+    validateIssueRecord(record);
+    const contract = parseIssueContract(record.body, `${this.config.repository}#${record.number}`, this.config.workflow);
+    const [labels, nativeBlockers, projectItems, comments, pullRequests, branch, baseSha] = await Promise.all([
+      collectPages((cursor) => this.transport.listLabels(record.id, cursor)),
+      collectPages((cursor) => this.transport.listBlockedBy(record.id, cursor)),
+      collectPages((cursor) => this.transport.listProjectItems(record.id, cursor)),
+      collectPages((cursor) => this.transport.listComments(record.id, cursor)),
+      collectPages((cursor) => this.transport.listClosingPullRequests(record.id, cursor)),
+      this.transport.getBranch(this.config.repository, contract.requiredBranch),
+      this.transport.getBaseSha(this.config.repository, contract.baseBranch),
+    ]);
+    const matchingItems = projectItems.filter((item) => item.projectId === this.config.projectId);
+    if (matchingItems.length !== 1) throw new Error(`issue must have exactly one item in Project ${this.config.projectId}`);
+    const item = matchingItems[0]!;
+    const fields = await collectPages((cursor) => this.transport.listProjectFieldValues(item.id, cursor));
+    const managedStates = labels.map(normalizeLabel).filter((label) => this.#managedLabels.has(label));
+    if (managedStates.length !== 1) throw new Error("issue must have exactly one lifecycle label");
+    const projectedState = lifecycleStates.find((state) => normalizeLabel(this.config.states[state].label) === managedStates[0]);
+    if (!projectedState) throw new Error("lifecycle label has no configured state");
+    const status = exactField(fields, this.config.statusFieldId);
+    if (status.kind !== "single-select" || status.optionId !== this.config.states[projectedState].projectStatusOptionId) {
+      throw new Error("Project status and lifecycle label disagree");
+    }
+    const gate = optionalExactStringField(fields, this.config.gateFieldId);
+    const parsedEvents = parseLedgerComments(comments, record.id, this.config.eventAuthorLogin);
+    if (parsedEvents.length > 0 && parsedEvents[0]!.event.expectedVersion !== 1) {
+      throw new Error("ledger does not begin at baseline version 1");
+    }
+    const ledgerBaselineState = parsedEvents[0]?.event.from ?? projectedState;
+    const issue: NormalizedIssue = {
+      id: record.id,
+      nativeRef: { repository: this.config.repository, number: record.number, projectItemId: item.id },
+      identifier: `${this.config.repository}#${record.number}`,
+      title: record.title,
+      description: record.body,
+      priority: null,
+      state: ledgerBaselineState,
+      branchName: branch?.name ?? null,
+      url: record.url,
+      assigneeId: record.assigneeId,
+      labels: [...new Set(labels.map(normalizeLabel).filter(Boolean))],
+      blockedBy: [],
+      dispatchable: record.state === "OPEN" && this.config.requiredLabels.every((required) => issueHasLabel(labels, required)),
+      createdAt: isoTimestamp(record.createdAt),
+      updatedAt: isoTimestamp(record.updatedAt),
+    };
+    let snapshot: TrackerIssueSnapshot = {
+      issue,
+      contract,
+      version: 1,
+      baseSha,
+      claim: null,
+      retry: null,
+      evidence: branch ? { branchUrl: branch.url, branchSha: branch.oid } : {},
+      events: [{ sequence: 0, atMs: Date.parse(record.createdAt), state: ledgerBaselineState, message: "GitHub baseline" }],
+    };
+    if (ledgerBaselineState === "owner-gate") {
+      if (!gate) throw new Error("owner-gate baseline lacks an exact Gate field value");
+      snapshot.evidence.ownerGateId = gate;
+    }
+    const acceptedCommentIds = new Set<number>();
+    for (const parsed of parsedEvents) {
+      const reduced = reduceLedgerEvent(snapshot, parsed.event, parsed.comment.databaseId);
+      if (!reduced) continue;
+      snapshot = reduced;
+      acceptedCommentIds.add(parsed.comment.databaseId);
+    }
+    const projectionDrift = projectedState !== snapshot.issue.state
+      || status.optionId !== this.config.states[snapshot.issue.state].projectStatusOptionId;
+    if (snapshot.issue.state === "owner-gate") {
+      const expected = snapshot.evidence.ownerGateId;
+      if (!expected) throw new Error("owner-gate ledger event lacks immutable gate ID");
+      if (gate && gate !== expected) throw new Error(`Project Gate value does not exactly match ${expected}`);
+      if (!gate && !projectionDrift) throw new Error("owner-gate Project Gate field is empty");
+    }
+    const matchingPrs = pullRequests.filter((pr) => pr.headRefName === contract.requiredBranch && pr.baseRefName === contract.baseBranch);
+    if (matchingPrs.length > 1) throw new Error("multiple pull requests match the exact required branch/base");
+    if (matchingPrs[0]) snapshot.evidence = { ...snapshot.evidence, ...prEvidence(matchingPrs[0]) };
+    return { snapshot, record, item, labels, acceptedCommentIds, projectionDrift, contract, nativeBlockers };
+  }
+}
+
+function nextEvent(
+  snapshot: TrackerIssueSnapshot,
+  operation: LedgerEvent["operation"],
+  to: LifecycleState,
+  atMs: number,
+  fence: string | null,
+  next: Pick<LedgerEvent, "claim" | "retry" | "evidence" | "message">,
+): LedgerEvent {
+  return {
+    schema: ledgerSchema,
+    issueId: snapshot.issue.id,
+    expectedVersion: snapshot.version,
+    operation,
+    from: snapshot.issue.state,
+    to,
+    atMs,
+    fence,
+    claim: structuredClone(next.claim),
+    retry: structuredClone(next.retry),
+    evidence: structuredClone(next.evidence),
+    message: next.message,
+  };
+}
+
+function reduceLedgerEvent(snapshot: TrackerIssueSnapshot, event: LedgerEvent, sequence: number): TrackerIssueSnapshot | null {
+  if (event.issueId !== snapshot.issue.id) throw new Error("ledger event issue binding mismatch");
+  if (event.expectedVersion < snapshot.version) return null;
+  if (event.expectedVersion > snapshot.version) throw new Error("ledger version gap or deleted event detected");
+  if (event.from !== snapshot.issue.state) throw new Error("ledger compare-and-set source state mismatch");
+  if (!Number.isFinite(event.atMs) || event.atMs < 0) throw new Error("ledger timestamp is invalid");
+  const claim = snapshot.claim;
+  switch (event.operation) {
+    case "claim":
+      if (claim || (snapshot.issue.state !== "ready" && snapshot.issue.state !== "retry-wait") || event.to !== "claimed" || !event.claim) {
+        throw new Error("invalid claim ledger event");
+      }
+      if (event.claim.issueId !== snapshot.issue.id || event.claim.issueIdentifier !== snapshot.issue.identifier) throw new Error("claim binding mismatch");
+      if (event.claim.attempt !== (snapshot.retry?.attempt ?? 1) || event.fence !== event.claim.fence) throw new Error("claim attempt or fence mismatch");
+      break;
+    case "running":
+      if (!claim || snapshot.issue.state !== "claimed" || event.to !== "running" || event.fence !== claim.fence || !event.claim) throw new Error("invalid running ledger event");
+      break;
+    case "heartbeat":
+      if (!claim || event.to !== snapshot.issue.state || event.fence !== claim.fence || !event.claim) throw new Error("invalid heartbeat ledger event");
+      if (!claimBindingsStable(claim, event.claim)) throw new Error("heartbeat changed durable claim identity");
+      break;
+    case "failure":
+      if (!claim || event.fence !== claim.fence || event.claim !== null || (event.to !== "retry-wait" && event.to !== "failed")) throw new Error("invalid failure ledger event");
+      assertLifecycleTransition(snapshot.issue.state, event.to);
+      break;
+    case "transition":
+      if (claim && event.fence !== claim.fence) throw new Error("transition claim fence mismatch");
+      assertLifecycleTransition(snapshot.issue.state, event.to);
+      validateTransitionEvidence(snapshot, event.to, event.evidence);
+      break;
+  }
+  if (event.operation !== "heartbeat" && event.operation !== "running" && event.operation !== "failure" && event.operation !== "transition" && event.operation !== "claim") {
+    throw new Error("unsupported ledger operation");
+  }
+  return {
+    ...snapshot,
+    issue: { ...snapshot.issue, state: event.to },
+    version: snapshot.version + 1,
+    claim: structuredClone(event.claim),
+    retry: structuredClone(event.retry),
+    evidence: structuredClone(event.evidence),
+    events: [...snapshot.events, { sequence, atMs: event.atMs, state: event.to, message: event.message }],
+  };
+}
+
+function validateTransitionEvidence(snapshot: TrackerIssueSnapshot, to: LifecycleState, evidence: MaterialEvidence): void {
+  assertLifecycleTransition(snapshot.issue.state, to);
+  if (to === "pr-open" && !evidence.prUrl) throw new Error("pr-open requires PR evidence");
+  if (to === "owner-gate" && !evidence.ownerGateId) throw new Error("owner-gate requires an immutable gate ID");
+  if (snapshot.evidence.ownerGateId && evidence.ownerGateId !== snapshot.evidence.ownerGateId) throw new Error("owner gate ID is immutable");
+  if (to === "merged" && snapshot.contract.risk === "high" && snapshot.issue.state !== "owner-gate") throw new Error("high-risk merge requires owner-gate state");
+  if (to === "merged" && (!evidence.mergedAt || !evidence.mergeCommitSha)) throw new Error("merged requires exact GitHub merge evidence");
+  if (to === "deployed" && !evidence.deploymentUrl) throw new Error("deployed requires deployment evidence");
+  if (to === "done" && snapshot.contract.deployAuthority !== "none" && snapshot.issue.state !== "deployed") {
+    throw new Error(`${snapshot.contract.deployAuthority} work requires deployed state before done`);
+  }
+}
+
+function parseLedgerComments(comments: GitHubComment[], issueId: string, author?: string): { comment: GitHubComment; event: LedgerEvent }[] {
+  const sorted = [...comments].sort((a, b) => a.databaseId - b.databaseId);
+  const seen = new Set<number>();
+  return sorted.flatMap((comment) => {
+    if (!comment.body.startsWith(eventPrefix)) return [];
+    if (seen.has(comment.databaseId) || !Number.isSafeInteger(comment.databaseId) || comment.databaseId < 1) throw new Error("ambiguous GitHub comment ordering");
+    seen.add(comment.databaseId);
+    if (comment.createdAt !== comment.updatedAt) throw new Error("ledger event comment was edited");
+    if (author && comment.authorLogin !== author) throw new Error("ledger event author is not allowed");
+    if (!comment.body.endsWith(eventSuffix)) throw new Error("malformed ledger event marker");
+    let raw: unknown;
+    try {
+      raw = JSON.parse(comment.body.slice(eventPrefix.length, -eventSuffix.length));
+    } catch (error) {
+      throw new Error(`malformed ledger event JSON: ${errorMessage(error)}`);
+    }
+    const event = validateLedgerShape(raw);
+    if (event.issueId !== issueId) throw new Error("ledger event belongs to another issue");
+    return [{ comment, event }];
+  });
+}
+
+function validateLedgerShape(value: unknown): LedgerEvent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("ledger event must be an object");
+  const raw = value as Record<string, unknown>;
+  if (raw.schema !== ledgerSchema) throw new Error("unsupported ledger event schema");
+  if (typeof raw.issueId !== "string" || !raw.issueId || !Number.isInteger(raw.expectedVersion)) throw new Error("ledger binding/version is invalid");
+  if (!["claim", "running", "heartbeat", "failure", "transition"].includes(String(raw.operation))) throw new Error("ledger operation is invalid");
+  if (!lifecycleStates.includes(raw.from as LifecycleState) || !lifecycleStates.includes(raw.to as LifecycleState)) throw new Error("ledger lifecycle state is invalid");
+  if (typeof raw.atMs !== "number" || typeof raw.message !== "string" || !raw.message) throw new Error("ledger event metadata is invalid");
+  if (raw.fence !== null && typeof raw.fence !== "string") throw new Error("ledger fence is invalid");
+  if (!raw.evidence || typeof raw.evidence !== "object" || Array.isArray(raw.evidence)) throw new Error("ledger evidence is invalid");
+  return raw as unknown as LedgerEvent;
+}
+
+function serializeEvent(event: LedgerEvent): string {
+  return `${eventPrefix}${JSON.stringify(event)}${eventSuffix}`;
+}
+
+async function collectPages<T>(load: (cursor: string | null) => Promise<Page<T>>): Promise<T[]> {
+  const output: T[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = null;
+  do {
+    const result = await load(cursor);
+    output.push(...result.nodes);
+    if (result.nextCursor !== null) {
+      if (!result.nextCursor || seen.has(result.nextCursor)) throw new Error("GitHub pagination cursor is empty or repeated");
+      seen.add(result.nextCursor);
+    }
+    cursor = result.nextCursor;
+  } while (cursor !== null);
+  return output;
+}
+
+function exactField(values: GitHubProjectFieldValue[], fieldId: string): GitHubProjectFieldValue {
+  const matches = values.filter((value) => value.fieldId === fieldId);
+  if (matches.length !== 1) throw new Error(`Project field ${fieldId} must have exactly one value`);
+  return matches[0]!;
+}
+
+function optionalExactStringField(values: GitHubProjectFieldValue[], fieldId: string): string | null {
+  const matches = values.filter((value) => value.fieldId === fieldId);
+  if (matches.length > 1) throw new Error(`Project field ${fieldId} has ambiguous duplicate values`);
+  const match = matches[0];
+  if (!match) return null;
+  if (match.kind !== "text" && match.kind !== "single-select") throw new Error(`Project field ${fieldId} is not text-like`);
+  return match.value === null || match.value === "" ? null : match.value;
+}
+
+function indexUnique(values: Map<string, CoreHydrated>, key: (value: CoreHydrated) => string): Map<string, CoreHydrated | null> {
+  const output = new Map<string, CoreHydrated | null>();
+  for (const value of values.values()) {
+    const index = key(value);
+    output.set(index, output.has(index) ? null : value);
+  }
+  return output;
+}
+
+function resolveDependency(
+  dependency: string,
+  byContract: Map<string, CoreHydrated | null>,
+  byIdentifier: Map<string, CoreHydrated | null>,
+) {
+  const value = byContract.get(dependency) ?? byIdentifier.get(dependency);
+  if (value === null) throw new Error(`dependency ${dependency} is ambiguous`);
+  if (!value) return { id: null, identifier: dependency, state: "unknown" };
+  return { id: value.snapshot.issue.id, identifier: value.snapshot.issue.identifier, state: value.snapshot.issue.state };
+}
+
+function dedupeBlockers<T extends { id: string | null; identifier: string | null; state: string | null }>(values: T[]): T[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = `${value.id ?? ""}\n${value.identifier ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function prEvidence(pr: GitHubPullRequestEvidence): MaterialEvidence {
+  return {
+    prUrl: pr.url,
+    ...(pr.mergedAt ? { mergedAt: pr.mergedAt } : {}),
+    ...(pr.mergeCommitSha ? { mergeCommitSha: pr.mergeCommitSha } : {}),
+  };
+}
+
+function validateIssueRecord(record: GitHubIssueRecord): void {
+  if (!record.id || !Number.isInteger(record.number) || record.number < 1 || !record.title || typeof record.body !== "string") {
+    throw new Error("GitHub issue record is malformed");
+  }
+  isoTimestamp(record.createdAt);
+  isoTimestamp(record.updatedAt);
+}
+
+function isoTimestamp(value: string): string {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) throw new Error(`invalid GitHub timestamp ${value}`);
+  return new Date(value).toISOString();
+}
+
+function normalizeLabel(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function issueHasLabel(labels: string[], required: string): boolean {
+  const wanted = normalizeLabel(required);
+  return labels.some((label) => normalizeLabel(label) === wanted);
+}
+
+function claimBindingsStable(left: Claim, right: Claim): boolean {
+  return left.issueId === right.issueId
+    && left.issueIdentifier === right.issueIdentifier
+    && left.attempt === right.attempt
+    && left.fence === right.fence
+    && left.sessionId === right.sessionId
+    && left.workspaceId === right.workspaceId
+    && left.workspaceKey === right.workspaceKey
+    && left.workspacePath === right.workspacePath
+    && left.baseSha === right.baseSha
+    && left.modelConnection === right.modelConnection
+    && left.modelProfile === right.modelProfile
+    && left.claimedAtMs === right.claimedAtMs;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

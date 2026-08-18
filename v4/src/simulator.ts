@@ -52,7 +52,7 @@ export class CrashRestartSimulator {
     this.github.transition(issueId, "merged", this.clock.nowMs(), { fence, message: "candidate merged" });
     this.github.transition(issueId, "done", this.clock.nowMs(), { fence, message: "workflow outcome complete" });
     snapshot = this.github.get(issueId);
-    return this.scheduler.status(snapshot.issue.id);
+    return await this.scheduler.status(snapshot.issue.id);
   }
 
   private newScheduler(): DeterministicScheduler {

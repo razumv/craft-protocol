@@ -21,7 +21,7 @@
       "type": "object",
       "required": ["kind", "active_states", "terminal_states"],
       "properties": {
-        "kind": { "const": "fake-github" },
+        "kind": { "enum": ["fake-github", "github"] },
         "active_states": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
         "terminal_states": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 }
       },

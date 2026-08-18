@@ -1,13 +1,16 @@
-# Craft Protocol v4.1 Scheduler Core
+# Craft Protocol v4.2 Scheduler and GitHub Adapter
 
-This directory is a **parallel, simulator-only v4 package**. It does not wrap or modify the v3 runtime, Fleet, launchd, live GitHub, live Craft Agents, or production state.
+This directory is a **parallel v4 package**. It does not wrap or modify the v3 runtime, Fleet, launchd, live Craft Agents, or production state. GitHub access is isolated behind an injected transport; tests use an in-memory transport and never mutate live GitHub.
 
 ## Architecture
 
 ```mermaid
 graph LR
     W[Repository WORKFLOW.md] --> P[Workflow and issue parsers]
-    G[Fake GitHub durable state] --> S[Deterministic WIP=1 scheduler]
+    G[Tracker adapter contract] --> S[Deterministic WIP=1 scheduler]
+    GH[GitHub Issues and Projects v2] --> L[Append-only CAS ledger]
+    L --> G
+    FS[Filesystem claim binding] --> R
     P --> S
     S --> C[Atomic claim fence]
     C --> I[Deterministic run identity]
@@ -21,9 +24,12 @@ graph LR
     D[Immutable owner directive ledger] --> O
 ```
 
-- `WORKFLOW.md` plus `workflow.schema.json` define the versioned repository policy. The parser enforces WIP=1, bounded retry values, a fake tracker, and allowlisted Codex/Pi profiles.
+- `WORKFLOW.md` plus `workflow.schema.json` define the versioned repository policy. The parser enforces WIP=1, bounded retry values, an explicit fake or GitHub tracker, and allowlisted Codex/Pi profiles.
 - The issue parser normalizes the Symphony issue shape and merges the fenced issue work contract with repository defaults. Missing goals, acceptance, non-goals, risk, authority, model, or verification budget fail closed before a claim.
-- `FakeGitHubAdapter.tryClaim` is the single atomic compare-and-set boundary. A claim binds issue, attempt, fence, exact session/worktree identity, base SHA, model, timestamps, and expiry.
+- `TrackerAdapter.tryClaim` is the compare-and-set boundary. The fake performs an in-process CAS; the GitHub adapter elects the first valid append-only event comment by immutable comment database ID and treats labels/Project fields as projections.
+- A durable GitHub claim binds issue, attempt, fence, exact session/worktree identity, base SHA, model, timestamps, and expiry. Stale fences and concurrent losing comments cannot advance state.
+- Project items and field values are fully paginated and normalized by exact node/field/option IDs. Native blockers plus exact contract dependencies, Gate IDs, branch refs, linked PRs, and merge commits fail closed when missing or ambiguous.
+- Startup reconciliation combines the reconstructed GitHub ledger with a root-confined filesystem claim-binding reader. Missing running workspaces, mismatched bindings, edited/gapped ledgers, duplicate fields, or unprovable preservation state become `preservation-unknown`.
 - Session and worktree identities are derived from stable issue/attempt inputs. Adapters implement idempotent `ensure`, so a crash can resume the same identity but cannot create a second identity for one attempt.
 - Retry and stale decisions use only state, timestamps, failure class, and configured numeric bounds. Only `transient` and `runtime` failures retry.
 - Agent success or silence never completes an issue. Durable lifecycle/evidence transitions drive the compact status projection.
@@ -42,7 +48,7 @@ Transitions are an explicit table in `src/domain.ts`; the scheduler and adapters
 
 ## Safety boundary
 
-This increment intentionally uses fakes. It creates no real worktrees or Craft sessions and performs no GitHub writes. The workspace abstraction validates that derived paths remain below the configured root but does not yet inspect dirty, shared, or unpushed real repositories. The fake CAS is atomic within one JavaScript process; a future GitHub adapter must provide an equivalent provider-backed compare-and-set fence.
+The package still creates no real worktrees or Craft sessions. `GhCliTransport` is an inert authenticated boundary until explicitly invoked; all adapter tests inject a memory transport. GitHub event comments are the authoritative append-only CAS log, while lifecycle labels, Project Status, and Gate fields are deterministic projections. Filesystem reconciliation is read-only and never cleans or repairs ambiguous workspaces.
 
 Owner directives are append-only, stored verbatim, and include acknowledgement timing. Risk policy permits no independent reviewer for low risk and caps medium/high review and correction counts to prevent audit loops.
 
@@ -55,4 +61,4 @@ bun run typecheck
 bun test
 ```
 
-The seven tests cover exactly-once concurrent claims, duplicate identity prevention, restart recovery, stale-run bounded retry, directive immutability and exact gates, risk budgets, and one crash/restart simulator smoke.
+The fourteen focused tests cover the seven v4.1 scheduler invariants plus GitHub pagination/field normalization, dependency mapping, concurrent and stale claims, restart reconstruction, PR/merge evidence, exact Gate IDs, preservation-unknown behavior, and one injected adapter integration smoke.
