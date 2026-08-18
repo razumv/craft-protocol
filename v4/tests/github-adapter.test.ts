@@ -198,6 +198,18 @@ function setup(): { transport: MemoryGitHubTransport; truth: MemoryWorkspaceTrut
   return { transport, truth, adapter: new GitHubIssuesProjectsAdapter(config(), transport, truth) };
 }
 
+function compactConfig(): GitHubAdapterConfig {
+  const base = config();
+  const active = new Set<LifecycleState>(["claimed", "running", "pr-open", "review", "owner-gate", "merged", "deployed", "blocked"]);
+  const states = Object.fromEntries(lifecycleStates.map((state) => {
+    if (state === "ready") return [state, { label: "agent-ready", projectStatusOptionId: "todo" }];
+    if (state === "retry-wait") return [state, { label: "agent-running", projectStatusOptionId: "todo" }];
+    if (active.has(state)) return [state, { label: "agent-running", projectStatusOptionId: "in-progress" }];
+    return [state, { label: "agent-done", projectStatusOptionId: "done" }];
+  })) as GitHubAdapterConfig["states"];
+  return { ...base, states };
+}
+
 async function proposedClaim(adapter: GitHubIssuesProjectsAdapter, issueId: string, nowMs = 1_000): Promise<Claim> {
   const snapshot = await adapter.get(issueId);
   return new IdentityFactory(workflow.config.workspace.root).claimFor(
@@ -286,6 +298,37 @@ describe("v4.2 GitHub Issues and Projects adapter", () => {
     const claimedIssues = [await adapter.get("I_1"), await adapter.get("I_2")].filter((entry) => entry.claim);
     expect(claimedIssues).toHaveLength(1);
     expect(transport.comments.get("FENCE")).toHaveLength(2);
+  });
+
+  test("compact provider labels and statuses reconstruct distinct ledger states after restart", async () => {
+    const { transport, truth } = setup();
+    transport.addIssue(1);
+    transport.labels.set("I_1", ["v4", "agent-ready"]);
+    transport.fields.set("ITEM_1", [
+      { kind: "single-select", fieldId: "STATUS", fieldName: "Status", optionId: "todo", value: "Todo" },
+      { kind: "text", fieldId: "GATE", fieldName: "Gate", value: null },
+    ]);
+    const adapter = new GitHubIssuesProjectsAdapter(compactConfig(), transport, truth);
+    const ready = await adapter.get("I_1");
+    const claim = new IdentityFactory(workflow.config.workspace.root).claimFor(
+      ready.issue,
+      1,
+      ready.version,
+      ready.baseSha,
+      { ...workflow.config.model, defaultProfile: ready.contract.modelProfile },
+      1_000,
+      workflow.config.scheduler.claimTtlMs,
+    );
+
+    await adapter.tryClaim("I_1", ready.version, claim, 1_000);
+    await adapter.markRunning(claim.fence, 1_100);
+    expect(transport.labels.get("I_1")).toEqual(["v4", "agent-running"]);
+    expect((transport.fields.get("ITEM_1")![0] as { optionId: string | null }).optionId).toBe("in-progress");
+
+    const restarted = new GitHubIssuesProjectsAdapter(compactConfig(), transport, truth);
+    const reconstructed = await restarted.get("I_1");
+    expect(reconstructed.issue.state).toBe("running");
+    expect(reconstructed.claim?.sessionId).toBe(claim.sessionId);
   });
 
   test("stale fence cannot mutate a durable claim and restart reconstructs the exact binding", async () => {

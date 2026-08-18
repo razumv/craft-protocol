@@ -111,6 +111,7 @@ export class CraftCliRpcTransport implements CraftRpcTransport {
       "invoke", channel,
       ...args.map((arg) => JSON.stringify(arg)),
     ], deadlineMs, true);
+    if (output.trim() === "") return undefined as T;
     try {
       return JSON.parse(output) as T;
     } catch {

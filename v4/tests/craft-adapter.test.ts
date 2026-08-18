@@ -208,6 +208,7 @@ function config(transport: MemoryCraftTransport, overrides: Partial<CraftAdapter
   return {
     workspaceId: "general",
     projectId: "craft-protocol-v4",
+    projectWorkingDirectory: "/repo",
     ownerSessionId: "owner-desk",
     repositoryInstructions: "Follow WORKFLOW.md. Run focused v4 tests only.",
     issueLabelId: "v4-issue",
@@ -424,7 +425,7 @@ describe("v4.3 Craft mobile control-plane adapter", () => {
     expect((await adapter.get(run.sessionId, transport.now + 120_000))?.status).toBe("turn-deadline");
 
     const rpc = transport.byId(started.rpcSessionId);
-    rpc.tokenUsage = { inputTokens: 100_000 };
+    rpc.tokenUsage = { contextTokens: 0, inputTokens: 100_000 };
     transport.finish(started.rpcSessionId, "Response cannot override context exhaustion.");
     expect((await adapter.get(run.sessionId, transport.now))?.status).toBe("context-deadline");
 

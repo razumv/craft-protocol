@@ -110,8 +110,8 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
     }
     if (!config.claimFenceIssueId.trim()) throw new Error("GitHub adapter requires a shared claim-fence issue ID");
     const labels = lifecycleStates.map((state) => normalizeLabel(config.states[state]?.label));
-    if (labels.some((label) => !label) || new Set(labels).size !== lifecycleStates.length) {
-      throw new Error("every lifecycle state requires a unique non-empty GitHub label");
+    if (labels.some((label) => !label)) {
+      throw new Error("every lifecycle state requires a non-empty GitHub label");
     }
     if (lifecycleStates.some((state) => !config.states[state]?.projectStatusOptionId.trim())) {
       throw new Error("every lifecycle state requires an exact Project status option ID");
@@ -478,20 +478,24 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
     if (matchingItems.length !== 1) throw new Error(`issue must have exactly one item in Project ${this.config.projectId}`);
     const item = matchingItems[0]!;
     const fields = await collectPages((cursor) => this.transport.listProjectFieldValues(item.id, cursor));
-    const managedStates = labels.map(normalizeLabel).filter((label) => this.#managedLabels.has(label));
-    if (managedStates.length !== 1) throw new Error("issue must have exactly one lifecycle label");
-    const projectedState = lifecycleStates.find((state) => normalizeLabel(this.config.states[state].label) === managedStates[0]);
-    if (!projectedState) throw new Error("lifecycle label has no configured state");
+    const managedLabels = labels.map(normalizeLabel).filter((label) => this.#managedLabels.has(label));
+    if (managedLabels.length !== 1) throw new Error("issue must have exactly one lifecycle label");
     const status = exactField(fields, this.config.statusFieldId);
-    if (status.kind !== "single-select" || status.optionId !== this.config.states[projectedState].projectStatusOptionId) {
-      throw new Error("Project status and lifecycle label disagree");
-    }
+    if (status.kind !== "single-select") throw new Error("Project status field is not single-select");
     const gate = optionalExactStringField(fields, this.config.gateFieldId);
     const parsedEvents = parseLedgerComments(comments, record.id, this.config.eventAuthorLogin);
     if (parsedEvents.length > 0 && parsedEvents[0]!.event.expectedVersion !== 1) {
       throw new Error("ledger does not begin at baseline version 1");
     }
-    const ledgerBaselineState = parsedEvents[0]?.event.from ?? projectedState;
+    const projectedCandidates = lifecycleStates.filter((state) => (
+      normalizeLabel(this.config.states[state].label) === managedLabels[0]
+      && this.config.states[state].projectStatusOptionId === status.optionId
+    ));
+    const ledgerBaselineState = parsedEvents[0]?.event.from;
+    if (!ledgerBaselineState && projectedCandidates.length !== 1) {
+      throw new Error("baseline lifecycle projection is absent or ambiguous without a ledger");
+    }
+    const baselineState = ledgerBaselineState ?? projectedCandidates[0]!;
     const issue: NormalizedIssue = {
       id: record.id,
       nativeRef: { repository: this.config.repository, number: record.number, projectItemId: item.id },
@@ -499,7 +503,7 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
       title: record.title,
       description: record.body,
       priority: null,
-      state: ledgerBaselineState,
+      state: baselineState,
       branchName: branch?.name ?? null,
       url: record.url,
       assigneeId: record.assigneeId,
@@ -517,9 +521,9 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
       claim: null,
       retry: null,
       evidence: branch ? { branchUrl: branch.url, branchSha: branch.oid } : {},
-      events: [{ sequence: 0, atMs: Date.parse(record.createdAt), state: ledgerBaselineState, message: "GitHub baseline" }],
+      events: [{ sequence: 0, atMs: Date.parse(record.createdAt), state: baselineState, message: "GitHub baseline" }],
     };
-    if (ledgerBaselineState === "owner-gate") {
+    if (baselineState === "owner-gate") {
       if (!gate) throw new Error("owner-gate baseline lacks an exact Gate field value");
       snapshot.evidence.ownerGateId = gate;
     }
@@ -530,7 +534,7 @@ export class GitHubIssuesProjectsAdapter implements TrackerAdapter {
       snapshot = reduced;
       acceptedCommentIds.add(parsed.comment.databaseId);
     }
-    const projectionDrift = projectedState !== snapshot.issue.state
+    const projectionDrift = managedLabels[0] !== normalizeLabel(this.config.states[snapshot.issue.state].label)
       || status.optionId !== this.config.states[snapshot.issue.state].projectStatusOptionId;
     if (snapshot.issue.state === "owner-gate") {
       const expected = snapshot.evidence.ownerGateId;

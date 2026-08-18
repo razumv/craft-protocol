@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>io.craftprotocol.v4-runner</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__ABSOLUTE_BUN_PATH__</string>
+    <string>run</string>
+    <string>__ABSOLUTE_REPOSITORY_PATH__/v4/src/cli.ts</string>
+    <string>__ABSOLUTE_CONFIG_PATH__</string>
+    <string>watch</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__ABSOLUTE_REPOSITORY_PATH__/v4</string>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__ABSOLUTE_LOG_PATH__</string>
+  <key>StandardErrorPath</key>
+  <string>__ABSOLUTE_ERROR_LOG_PATH__</string>
+</dict>
+</plist>

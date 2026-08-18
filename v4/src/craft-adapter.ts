@@ -46,6 +46,7 @@ export interface CraftRpcSession {
   model?: string;
   llmConnection?: string;
   projectId?: string;
+  isArchived?: boolean;
   createdAt?: number;
   tokenUsage?: { inputTokens?: number; contextTokens?: number; contextWindow?: number };
   lastFinalMessageId?: string;
@@ -93,6 +94,7 @@ export interface CraftControlAdapter {
 export interface CraftAdapterConfig {
   workspaceId: string;
   projectId: string;
+  projectWorkingDirectory: string;
   ownerSessionId: string;
   repositoryInstructions: string;
   issueLabelId: string;
@@ -180,9 +182,9 @@ function directiveRecords(notes: string): { entry: OwnerDirective; block: string
 }
 
 function contextTokens(session: CraftRpcSession): number {
-  const usage = session.tokenUsage;
-  const value = usage?.contextTokens ?? usage?.inputTokens ?? 0;
-  return Number.isFinite(value) && value >= 0 ? value : 0;
+  const values = [session.tokenUsage?.contextTokens, session.tokenUsage?.inputTokens]
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0);
+  return values.length ? Math.max(...values) : 0;
 }
 
 function messages(session: CraftRpcSession): CraftMessage[] {
@@ -203,6 +205,7 @@ export class CraftMobileControlPlaneAdapter implements CraftControlAdapter {
     for (const [field, value] of Object.entries({
       workspaceId: config.workspaceId,
       projectId: config.projectId,
+      projectWorkingDirectory: config.projectWorkingDirectory,
       ownerSessionId: config.ownerSessionId,
       repositoryInstructions: config.repositoryInstructions,
       issueLabelId: config.issueLabelId,
@@ -471,8 +474,12 @@ export class CraftMobileControlPlaneAdapter implements CraftControlAdapter {
       [this.config.workspaceId, this.config.projectId],
       this.config.deadlines.rpcMs,
     );
-    if (!project || project.config?.id !== this.config.projectId || project.workspaceId !== this.config.workspaceId) {
-      throw new Error("Craft project binding is absent or ambiguous");
+    if (
+      !project
+      || project.config?.id !== this.config.projectId
+      || project.config?.workingDirectory !== this.config.projectWorkingDirectory
+    ) {
+      throw new Error("Craft project binding is absent, ambiguous, or points at another repository");
     }
   }
 
